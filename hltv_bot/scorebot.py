@@ -66,41 +66,99 @@ def _poll_url(base: str, extra: dict[str, str] | None = None) -> str:
     return f"{base.rstrip('/')}/socket.io/?{urlencode(q)}"
 
 
+def _is_timeout(exc: BaseException) -> bool:
+    msg = str(exc).lower()
+    return "timed out" in msg or "timeout" in msg or "curl: (28)" in msg
+
+
 def iter_scorebot(
     sess: BrowserSession,
     list_id: str | int,
     *,
     base: str = SCOREBOT_DEFAULT,
-    timeout: float = 30.0,
+    timeout: float = 55.0,
 ) -> Iterator[tuple[str, Any]]:
-    """Yield (event_name, payload) until the caller stops iterating."""
-    status, body, _ = request(sess, "GET", _poll_url(base), timeout=timeout)
-    sid = None
-    for pkt in decode_payload(body):
-        opened = parse_open(pkt)
-        if opened and "sid" in opened:
-            sid = opened["sid"]
-        ev = parse_event(pkt)
-        if ev:
-            yield ev
-    if not sid:
-        raise RuntimeError(f"scorebot handshake failed status={status}")
+    """Yield (event_name, payload). Reuses one TLS session so Engine.IO `io` cookie sticks.
 
-    emit = encode_event("readyForMatch", ready_for_match_payload(list_id))
-    request(
-        sess,
-        "POST",
-        _poll_url(base, {"sid": sid}),
-        data=encode_payload(emit),
-        timeout=timeout,
-        headers={"content-type": "text/plain;charset=UTF-8"},
-    )
+    Long-poll GET may wait ~pingInterval (25s) with no bytes; treat curl 28 as empty poll.
+    """
+    import logging
 
-    while True:
-        _st, body, _hdrs = request(
-            sess, "GET", _poll_url(base, {"sid": sid}), timeout=timeout
+    from curl_cffi.requests import Session
+
+    log = logging.getLogger("hltv_bot.scorebot")
+    headers = sess.as_headers()
+    client = Session(impersonate=sess.impersonate, timeout=timeout, verify=True)
+    try:
+        sid = None
+        for attempt in range(4):
+            try:
+                resp = client.get(_poll_url(base), headers=headers)
+            except Exception as e:
+                if _is_timeout(e) and attempt < 3:
+                    log.info("handshake timeout, retry %s", attempt + 1)
+                    time.sleep(1)
+                    continue
+                raise
+            if resp.status_code in (403, 429):
+                from hltv_bot.http import CloudflareError
+
+                raise CloudflareError(resp.status_code, str(resp.url))
+            for pkt in decode_payload(resp.content):
+                opened = parse_open(pkt)
+                if opened and "sid" in opened:
+                    sid = opened["sid"]
+                ev = parse_event(pkt)
+                if ev:
+                    yield ev
+            if sid:
+                break
+            time.sleep(1)
+        if not sid:
+            raise RuntimeError("scorebot handshake: no sid")
+        log.info("scorebot sid=%s listId=%s", sid, list_id)
+
+        emit = encode_event("readyForMatch", ready_for_match_payload(list_id))
+        post_headers = dict(headers)
+        post_headers["content-type"] = "text/plain;charset=UTF-8"
+        client.post(
+            _poll_url(base, {"sid": sid}),
+            data=encode_payload(emit),
+            headers=post_headers,
+            timeout=20,
         )
-        for pkt in decode_payload(body):
-            ev = parse_event(pkt)
-            if ev:
-                yield ev
+
+        misses = 0
+        while True:
+            try:
+                resp = client.get(
+                    _poll_url(base, {"sid": sid}),
+                    headers=headers,
+                    timeout=timeout,
+                )
+            except Exception as e:
+                if _is_timeout(e):
+                    misses += 1
+                    log.info("poll timeout n=%s (idle ok)", misses)
+                    if misses in (1, 5, 15):
+                        yield ("idle", {"misses": misses})
+                    continue
+                raise
+            if resp.status_code in (403, 429):
+                from hltv_bot.http import CloudflareError
+
+                raise CloudflareError(resp.status_code, str(resp.url))
+            misses = 0
+            got = False
+            for pkt in decode_payload(resp.content or b""):
+                ev = parse_event(pkt)
+                if ev:
+                    got = True
+                    yield ev
+            if not got:
+                log.debug("poll empty sid=%s", sid)
+    finally:
+        try:
+            client.close()
+        except Exception:
+            pass

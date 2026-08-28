@@ -1,4 +1,5 @@
 from hltv_bot.eio import decode_payload, encode_event, parse_event, parse_open
+from hltv_bot.scorebot import _is_timeout
 
 
 def test_decode_open_packet():
@@ -21,6 +22,10 @@ def test_parse_log_event():
     name, payload = ev
     assert name == "log"
     assert payload["log"][0]["Kill"]["killerNick"] == "donk"
+
+
+def test_curl_28_is_timeout():
+    assert _is_timeout(RuntimeError("curl: (28) Operation timed out after 30002 milliseconds"))
 
 
 def test_encode_ready():

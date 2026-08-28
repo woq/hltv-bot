@@ -448,6 +448,8 @@ class HltvTelegramBot:
             for name, payload in stream:
                 if state.stop.is_set() or self.watch is not state:
                     return
+                if name == "idle":
+                    continue
                 if name == "scoreboard" and isinstance(payload, dict):
                     board = payload
                 elif name == "log":
