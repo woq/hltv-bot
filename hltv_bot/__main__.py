@@ -82,8 +82,17 @@ def main(argv: list[str] | None = None) -> int:
             print(("LIVE " if row["live"] == "1" else "     ") + row["id"], row["title"])
         return 0
     if args.cmd == "bot":
+        import logging
+        import sys
+
         from hltv_bot.bot import bot_from_env
 
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s %(levelname)s %(name)s %(message)s",
+            stream=sys.stdout,
+            force=True,
+        )
         bot_from_env().run()
         return 0
     return 1

@@ -7,11 +7,14 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=/opt/hltv-bot
 EnvironmentFile=/opt/hltv-bot/.env
+Environment=PYTHONUNBUFFERED=1
 # which uv  → 改成实际路径（root 常见 /root/.local/bin/uv）
 ExecStart=/root/.local/bin/uv run python -m hltv_bot bot
 Restart=always
 RestartSec=5
-# 1GB 机器别无限胀
+SuccessExitStatus=143
+StandardOutput=journal
+StandardError=journal
 MemoryMax=400M
 
 [Install]

@@ -81,6 +81,32 @@ class Telegram:
             },
         )
 
+    def chat_member_status(self, chat_id: int, user_id: int) -> str:
+        try:
+            r = self._call(
+                "getChatMember",
+                {"chat_id": chat_id, "user_id": user_id},
+            )
+            if isinstance(r, dict):
+                return str(r.get("status") or "")
+        except Exception:
+            return ""
+        return ""
+
+    def chat_admin_user_ids(self, chat_id: int) -> set[int]:
+        ids: set[int] = set()
+        try:
+            r = self._call("getChatAdministrators", {"chat_id": chat_id})
+        except Exception:
+            return ids
+        if not isinstance(r, list):
+            return ids
+        for m in r:
+            uid = (m.get("user") or {}).get("id")
+            if uid is not None:
+                ids.add(int(uid))
+        return ids
+
     def set_my_commands(self, commands: list[dict], scope: dict | None = None) -> None:
         payload: dict = {"commands": commands}
         if scope:

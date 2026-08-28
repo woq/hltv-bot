@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import logging
 import os
 import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+
+log = logging.getLogger("hltv_bot")
 
 from hltv_bot.chats import add_group, group_ids, list_groups, remove_group
 from hltv_bot.format import format_match_list, format_telegram
@@ -31,6 +34,7 @@ HELP = """\
 /groups — 已授权群
 /cookie — 更新 Cookie
 /status — 状态
+/debug — 调试（user/chat/admin）
 """
 
 ADMIN_CMDS = frozenset(
@@ -42,6 +46,7 @@ ADMIN_CMDS = frozenset(
         "/updatecookie",
         "/update_cookie",
         "/status",
+        "/debug",
     }
 )
 
@@ -70,6 +75,7 @@ ADMIN_BOT_COMMANDS = USER_BOT_COMMANDS + [
     {"command": "groups", "description": "已授权群"},
     {"command": "cookie", "description": "更新 Cookie"},
     {"command": "status", "description": "状态"},
+    {"command": "debug", "description": "调试"},
 ]
 
 
@@ -107,6 +113,19 @@ class HltvTelegramBot:
     def is_admin(self, user_id: int | None) -> bool:
         return user_id is not None and int(user_id) in self.admin_ids
 
+    def can_setup_chat(self, chat_id: int, user_id: int | None, chat_type: str) -> bool:
+        """/allow /deny in a group that is not yet on the list."""
+        if self.is_admin(user_id):
+            return True
+        if chat_type not in ("group", "supergroup"):
+            return False
+        if user_id:
+            st = self.tg.chat_member_status(chat_id, int(user_id))
+            if st in ("creator", "administrator"):
+                return True
+        admins = self.tg.chat_admin_user_ids(chat_id)
+        return bool(admins & self.admin_ids)
+
     def chat_allowed(self, chat_id: int, *, user_id: int | None = None) -> bool:
         if self.is_admin(user_id):
             return True
@@ -125,16 +144,40 @@ class HltvTelegramBot:
         parts = text.strip().split()
         cmd = (parts[0].split("@")[0] if parts else "").lower()
         arg = " ".join(parts[1:]) if len(parts) > 1 else ""
+        listed = int(chat_id) in group_ids()
+        log.info(
+            "msg chat=%s type=%s user=%s cmd=%s listed=%s bot_admin=%s text=%r",
+            chat_id,
+            chat_type,
+            user_id,
+            cmd,
+            listed,
+            self.is_admin(user_id),
+            (text or "")[:120],
+        )
         if chat_id in self._await_cookie and not cmd.startswith("/"):
             if not self.is_admin(user_id):
                 return
             self._apply_cookie(chat_id, text, message_id=message_id)
             return
-        if cmd in ADMIN_CMDS and not self.is_admin(user_id):
+        if cmd in {"/allow", "/deny"}:
+            if not self.can_setup_chat(chat_id, user_id, chat_type):
+                log.info("deny setup cmd %s user=%s chat=%s", cmd, user_id, chat_id)
+                self.tg.send_message(
+                    chat_id,
+                    f"无权限授权本群\n你的 id: <code>{user_id}</code>\nchat: <code>{chat_id}</code>",
+                )
+                return
+        elif cmd in ADMIN_CMDS and not self.is_admin(user_id):
+            log.info("deny admin cmd %s user=%s chat=%s", cmd, user_id, chat_id)
+            if cmd in {"/debug", "/status", "/groups", "/cookie"}:
+                self.tg.send_message(
+                    chat_id,
+                    f"无权限\n你的 id: <code>{user_id}</code>",
+                )
             return
-        if cmd not in ADMIN_CMDS | {"/start", "/help"} and not self.chat_allowed(
-            chat_id, user_id=user_id
-        ):
+        if cmd not in ADMIN_CMDS | {"/start", "/help"} and not listed and not self.is_admin(user_id):
+            log.info("skip cmd=%s chat=%s not in allow-list", cmd, chat_id)
             return
         if cmd.startswith("/") and user_id is not None:
             interval = CMD_COOLDOWN.get(cmd, DEFAULT_CMD_COOLDOWN)
@@ -171,6 +214,8 @@ class HltvTelegramBot:
             self._cmd_status(chat_id)
         elif cmd in ("/cookie", "/updatecookie", "/update_cookie"):
             self._cmd_cookie(chat_id, arg, message_id=message_id)
+        elif cmd == "/debug":
+            self._cmd_debug(chat_id, user_id=user_id, chat_title=chat_title, chat_type=chat_type)
 
     def _cmd_matches(self, chat_id: int, arg: str = "") -> None:
         all_mode = arg.strip().lower() in {"all", "全部", "*", "full"}
@@ -263,6 +308,7 @@ class HltvTelegramBot:
             self.tg.send_message(chat_id, "在目标群里发 /allow，或 /allow -100xxxxxxxxxx")
             return
         added = add_group(gid, title)
+        log.info("allow chat=%s title=%s added=%s", gid, title, added)
         self.tg.send_message(
             chat_id,
             ("已加入" if added else "已在名单里") + f" <code>{gid}</code> {title}".rstrip(),
@@ -279,6 +325,36 @@ class HltvTelegramBot:
         else:
             self.tg.send_message(chat_id, f"名单里没有 <code>{gid}</code>")
 
+    def _cmd_debug(
+        self,
+        chat_id: int,
+        *,
+        user_id: int | None,
+        chat_title: str,
+        chat_type: str,
+    ) -> None:
+        rows = list_groups()
+        listed = int(chat_id) in group_ids()
+        lines = [
+            "<b>debug</b>",
+            f"user_id: <code>{user_id}</code>",
+            f"chat_id: <code>{chat_id}</code>",
+            f"chat_type: {chat_type or '?'}",
+            f"title: {chat_title or '-'}",
+            f"bot_admin: {self.is_admin(user_id)}",
+            f"can_setup: {self.can_setup_chat(chat_id, user_id, chat_type)}",
+            f"chat_listed: {listed}",
+            f"admins: {', '.join(str(i) for i in sorted(self.admin_ids))}",
+            "groups:",
+        ]
+        if rows:
+            for g in rows:
+                lines.append(f"  <code>{g.get('id')}</code> {g.get('title') or ''}")
+        else:
+            lines.append("  (empty)")
+        log.info("debug %s", " | ".join(lines))
+        self.tg.send_message(chat_id, "\n".join(lines))
+
     def _cmd_groups(self, chat_id: int) -> None:
         rows = list_groups()
         if not rows:
@@ -294,17 +370,30 @@ class HltvTelegramBot:
         chat = member.get("chat") or {}
         new = (member.get("new_chat_member") or {}).get("status") or ""
         old = (member.get("old_chat_member") or {}).get("status") or ""
-        if new not in ("member", "administrator") or old in ("member", "administrator"):
-            return
         from_id = (member.get("from") or {}).get("id")
         cid = chat.get("id")
         title = chat.get("title") or ""
-        if cid is None or not self.is_admin(from_id):
-            return
-        self.tg.send_message(
+        ctype = chat.get("type") or ""
+        log.info(
+            "my_chat_member chat=%s type=%s title=%r from=%s %s -> %s",
             cid,
-            f"已进群 <b>{title}</b>\n管理员发 /allow 加入推送名单",
+            ctype,
+            title,
+            from_id,
+            old,
+            new,
         )
+        if new not in ("member", "administrator") or old in ("member", "administrator"):
+            return
+        if cid is None:
+            return
+        if self.can_setup_chat(int(cid), from_id, ctype):
+            self.tg.send_message(
+                cid,
+                f"已进群 <b>{title}</b>\n发 /allow 加入推送名单",
+            )
+            return
+        log.info("added to chat but adder cannot /allow from=%s", from_id)
 
     def _session_path(self) -> Path:
         return Path(self.session.path or "data/session.json")
@@ -413,30 +502,38 @@ class HltvTelegramBot:
                 pass
 
     def run(self) -> None:
+        log.info("bot start admins=%s", sorted(self.admin_ids))
         try:
             self.register_commands()
+            log.info("setMyCommands ok")
         except Exception:
-            pass
+            log.exception("setMyCommands failed")
         offset = 0
         while True:
             try:
                 updates = self.tg.get_updates(offset=offset, timeout=25)
             except Exception:
+                log.exception("getUpdates failed")
                 time.sleep(3)
                 continue
+            if updates:
+                log.info("updates n=%s", len(updates))
             for upd in updates:
                 offset = upd["update_id"] + 1
+                keys = [k for k in upd if k != "update_id"]
+                log.info("update id=%s keys=%s", upd.get("update_id"), keys)
                 if upd.get("my_chat_member"):
                     try:
                         self.handle_added_to_chat(upd)
                     except Exception:
-                        pass
+                        log.exception("my_chat_member handler")
                     continue
                 msg = upd.get("message") or upd.get("edited_message") or {}
                 text = msg.get("text") or ""
                 chat = msg.get("chat") or {}
                 cid = chat.get("id")
                 if cid is None or not text:
+                    log.info("skip empty chat=%s text=%r", cid, text)
                     continue
                 try:
                     self.handle_text(
@@ -448,6 +545,7 @@ class HltvTelegramBot:
                         chat_type=chat.get("type") or "",
                     )
                 except Exception as e:
+                    log.exception("handle_text chat=%s", cid)
                     try:
                         self.tg.send_message(cid, f"错误: {e}")
                     except Exception:
