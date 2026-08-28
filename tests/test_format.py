@@ -46,6 +46,7 @@ def test_format_contains_score_and_log():
     assert "13" in text and "6" in text
     assert "tN1R" in text
     assert "AWP" in text
+    assert "killed" in text or "huNter-" in text
     assert "<pre>" in text
 
 

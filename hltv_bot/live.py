@@ -3,17 +3,49 @@ from __future__ import annotations
 from typing import Any
 
 
+def _as_player_list(raw: Any) -> list[dict[str, Any]]:
+    if isinstance(raw, list):
+        return [x for x in raw if isinstance(x, dict)]
+    if isinstance(raw, dict):
+        inner = raw.get("players")
+        if isinstance(inner, list):
+            return [x for x in inner if isinstance(x, dict)]
+        vals = [v for v in raw.values() if isinstance(v, dict)]
+        if vals and any("deaths" in v or "kills" in v or "score" in v for v in vals):
+            return vals
+    return []
+
+
+def _side_players(board: dict[str, Any], *keys: str) -> list[dict[str, Any]]:
+    for key in keys:
+        if key in board:
+            lst = _as_player_list(board[key])
+            if lst:
+                return lst
+    return []
+
+
+def _num(p: dict[str, Any], *keys: str) -> float:
+    for key in keys:
+        if key in p and p[key] is not None:
+            try:
+                return float(p[key])
+            except (TypeError, ValueError):
+                continue
+    return 0.0
+
+
 def _players(side: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
     out = []
     for p in side or []:
-        nick = p.get("nick") or p.get("name") or p.get("dbName") or "?"
+        nick = p.get("nick") or p.get("name") or p.get("dbName") or p.get("playerName") or "?"
         out.append(
             {
                 "nick": nick,
-                "kills": int(p.get("kills") or p.get("score") or 0),
-                "assists": int(p.get("assists") or 0),
-                "deaths": int(p.get("deaths") or 0),
-                "adr": float(p.get("damagePrRound") or p.get("adr") or 0),
+                "kills": int(_num(p, "kills", "score")),
+                "assists": int(_num(p, "assists", "assistsUnconfirmed")),
+                "deaths": int(_num(p, "deaths")),
+                "adr": float(_num(p, "damagePrRound", "adr", "damage")),
             }
         )
     return out
@@ -71,10 +103,21 @@ def format_log_item(item: dict[str, Any]) -> dict[str, Any] | None:
         return {"type": "round_over_ct" if side == "ct" else "round_over_t", "text": text}
     if "Suicide" in item:
         s = item["Suicide"]
-        return {"type": "other", "text": f"{s.get('playerNick')} suicide"}
-    # unknown single-key objects: use key + nick-ish
+        nick = s.get("playerNick") or s.get("nick") or ""
+        return {"type": "suicide", "text": f"{nick} 自杀"}
     if len(item) == 1:
         kind, payload = next(iter(item.items()))
+        if kind in {
+            "PlayerJoin",
+            "PlayerQuit",
+            "MatchStarted",
+            "MatchStart",
+            "MatchOver",
+            "Reconnect",
+            "Disconnect",
+            "Assist",
+        }:
+            return None
         if isinstance(payload, dict):
             nick = payload.get("playerNick") or payload.get("nick") or ""
             return {"type": "other", "text": f"{kind} {nick}".strip()}
@@ -119,8 +162,13 @@ def snapshot_from_scoreboard(
         ct_score, t_score = 0, 0
     round_n = board.get("currentRound") or board.get("round") or ""
     map_name = board.get("mapName") or board.get("map") or ""
-    ct_players = board.get("ct") or board.get("counterTerrorists") or board.get("ctPlayers")
-    t_players = board.get("t") or board.get("terrorists") or board.get("tPlayers")
+    map_name = str(map_name or "").removeprefix("de_").replace("_", " ").title()
+    ct_players = _side_players(
+        board, "ctTeam", "ctPlayers", "counterTerrorists", "CT", "ct"
+    )
+    t_players = _side_players(
+        board, "terroristTeam", "tPlayers", "terrorists", "TERRORIST", "t"
+    )
     return {
         "live": True,
         "url": meta.get("url"),

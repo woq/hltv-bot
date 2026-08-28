@@ -7,42 +7,52 @@ _ROUND_BREAK = frozenset(
 )
 
 _WEAPON = {
-    "ak47": "AK",
-    "m4a1": "M4",
-    "m4a1_silencer": "M4",
+    "ak47": "AK-47",
+    "m4a1": "M4A1",
+    "m4a1_silencer": "M4A1-S",
+    "m4a4": "M4A4",
     "awp": "AWP",
-    "deagle": "Deag",
-    "usp_silencer": "USP",
-    "glock": "Glock",
-    "galilar": "Galil",
+    "deagle": "Desert Eagle",
+    "revolver": "R8 Revolver",
+    "usp_silencer": "USP-S",
+    "glock": "Glock-18",
+    "galilar": "Galil AR",
     "famas": "FAMAS",
-    "ssg08": "SCOUT",
-    "sg556": "SG",
+    "ssg08": "SSG 08",
+    "sg556": "SG 553",
     "aug": "AUG",
     "mp9": "MP9",
-    "mac10": "MAC10",
-    "ump45": "UMP",
+    "mac10": "MAC-10",
+    "ump45": "UMP-45",
+    "mp7": "MP7",
+    "mp5sd": "MP5-SD",
+    "p90": "P90",
+    "bizon": "PP-Bizon",
     "p250": "P250",
-    "tec9": "TEC9",
-    "five-seven": "57",
-    "cz75a": "CZ",
+    "tec9": "Tec-9",
+    "fiveseven": "Five-SeveN",
+    "five-seven": "Five-SeveN",
+    "cz75a": "CZ75-Auto",
+    "elite": "Dual Berettas",
     "nova": "Nova",
-    "xm1014": "XM",
-    "mag7": "MAG7",
-    "sawedoff": "Sawed",
+    "xm1014": "XM1014",
+    "mag7": "MAG-7",
+    "sawedoff": "Sawed-Off",
     "m249": "M249",
     "negev": "Negev",
-    "hegrenade": "HE",
-    "inferno": "火",
-    "molotov": "火",
-    "flashbang": "闪",
-    "smokegrenade": "烟",
-    "decoy": "诱",
-    "knife": "刀",
-    "knife_t": "刀",
-    "taser": "电击",
+    "hegrenade": "HE Grenade",
+    "inferno": "Incendiary",
+    "molotov": "Molotov",
+    "flashbang": "Flashbang",
+    "smokegrenade": "Smoke",
+    "decoy": "Decoy",
+    "knife": "Knife",
+    "knife_t": "Knife",
+    "taser": "Zeus x27",
     "c4": "C4",
 }
+
+_HR = "──────────────"
 
 _STREAK = {
     2: "2K",
@@ -70,7 +80,11 @@ def _killer_victim(entry: dict) -> tuple[str, str]:
 
 def _weapon_label(weapon: str) -> str:
     w = (weapon or "").lower().replace("weapon_", "")
-    return _WEAPON.get(w, w.upper() if w else "")
+    if not w:
+        return ""
+    if w in _WEAPON:
+        return _WEAPON[w]
+    return w.replace("_", " ").title()
 
 
 def _this_round(log: list[dict]) -> list[dict]:
@@ -117,27 +131,27 @@ def _log_line(entry: dict, *, kill_n: int = 0) -> str | None:
         killer, victim = _killer_victim(entry)
         weap = _weapon_label(entry.get("weapon") or "")
         icon = "🎯" if entry.get("headshot") else "💀"
+        bits = [f"{icon} <b>{h(killer)}</b> killed {h(victim)}"]
+        if weap:
+            bits.append(f"with {h(weap)}")
         extra = []
         if entry.get("headshot"):
             extra.append("HS")
-        if entry.get("assist"):
-            extra.append("A")
-        if weap:
-            extra.insert(0, weap)
         if kill_n >= 2:
             extra.append(_STREAK.get(kill_n, f"{kill_n}K"))
-        tail = f"  <i>{h(' '.join(extra))}</i>" if extra else ""
-        return f"{icon} <b>{h(killer)}</b> → {h(victim)}{tail}"
+        if extra:
+            bits.append(f"({h(', '.join(extra))})")
+        return " ".join(bits)
     if typ in ("bomb",) or "plant" in (entry.get("text") or "").lower():
         text = entry.get("text") or ""
-        if "defus" in text.lower():
+        if "defus" in text.lower() or "拆" in text:
             return f"🧰 {h(text)}"
         return f"💣 {h(text)}"
     if typ in _ROUND_BREAK and typ != "round_start":
         return f"🏁 {h(entry.get('text') or '回合结束')}"
     if typ == "round_start":
         return "▶️ 回合开始"
-    if typ == "quit":
+    if typ in {"quit", "suicide"}:
         return None
     text = entry.get("text") or ""
     if not text:
@@ -150,14 +164,14 @@ def _plain(name: object, width: int) -> str:
     return s + " " * (width - len(s))
 
 
-def _mono(nick: str, k, a, d, adr, width: int = 11) -> str:
+def _mono(nick: str, k, a, d, adr, width: int = 12) -> str:
     n = str(nick)[:width]
     n = n + " " * (width - len(n))
     try:
         adr_s = f"{float(adr):.0f}"
     except (TypeError, ValueError):
         adr_s = str(adr)
-    return f"{n} {int(k or 0):>2} {int(a or 0):>2} {int(d or 0):>2} {adr_s:>3}"
+    return f"{n} {int(k or 0):>2} {int(a or 0):>2} {int(d or 0):>2} {adr_s:>4}"
 
 
 def format_telegram(snap: dict, *, log_limit: int = 15) -> str:
@@ -177,19 +191,24 @@ def format_telegram(snap: dict, *, log_limit: int = 15) -> str:
 
     lines = [
         f"{live}  <b>{h(round_text)}</b>" if round_text else live,
-        f"<pre>{_plain(left.get('name'), 12)} {ct}\n{_plain(right.get('name'), 12)} {t}</pre>",
+        "",
+        f"<b>{h(left.get('name'))}</b>   <code>{ct}</code>",
+        f"<b>{h(right.get('name'))}</b>   <code>{t}</code>",
     ]
 
     for team in (left, right):
         players = list(team.get("players") or [])[:5]
         players.sort(key=lambda p: (-int(p.get("kills") or 0), float(p.get("adr") or 0)))
+        lines.append(_HR)
+        lines.append(f"<b>{h(team.get('name') or '?')}</b>")
         body = "\n".join(
             _mono(p.get("nick") or "?", p.get("kills"), p.get("assists"), p.get("deaths"), p.get("adr"))
             for p in players
         )
-        lines.append(f"<b>{h(team.get('name') or '?')}</b>")
         if body:
-            lines.append(f"<pre>           K  A  D ADR\n{body}</pre>")
+            lines.append(f"<pre>             K  A  D  ADR\n{body}</pre>")
+        else:
+            lines.append("<i>暂无选手数据</i>")
 
     log_lines: list[str] = []
     for entry in log:
@@ -200,6 +219,7 @@ def format_telegram(snap: dict, *, log_limit: int = 15) -> str:
         if len(log_lines) >= log_limit:
             break
     if log_lines:
+        lines.append(_HR)
         lines.append("<b>Game log</b>")
         lines.extend(log_lines)
     lines.append("<i>/bump</i>")
