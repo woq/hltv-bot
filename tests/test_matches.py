@@ -1,5 +1,5 @@
 from hltv_bot.live import format_log_item, merge_log, snapshot_from_scoreboard
-from hltv_bot.matches import parse_match_list, parse_match_meta, pretty_name
+from hltv_bot.matches import format_start_time, parse_match_list, parse_match_meta, pretty_name
 
 
 def test_parse_match_list_dedupes():
@@ -11,6 +11,7 @@ def test_parse_match_list_dedupes():
       <div class="matchTeamName">G2</div>
       <div class="matchTeamName">Spirit</div>
       <div class="matchEventName">BLAST Open Porto 2026</div>
+      <div data-unix="1787923200000"></div>
       <a href="/matches/2396932/g2-vs-spirit-blast-open-porto-2026">x</a>
     </div>
     <a href="/matches/2396932/g2-vs-spirit-blast-open-porto-2026">again</a>
@@ -22,8 +23,16 @@ def test_parse_match_list_dedupes():
     assert rows[0]["stars"] == "3"
     assert rows[0]["team1"] == "G2"
     assert rows[0]["event"] == "BLAST Open Porto 2026"
+    assert rows[0]["time"]
     assert rows[1]["id"] == "111"
     assert rows[1]["live"] == "0"
+
+
+def test_format_start_time_clock():
+    import re
+
+    assert re.search(r"\d{2}:\d{2}", format_start_time(1787923200))
+    assert re.search(r"\d{2}:\d{2}", format_start_time(1787923200000))
 
 
 def test_pretty_name_acronyms():

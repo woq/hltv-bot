@@ -43,11 +43,10 @@ def test_format_contains_score_and_log():
     text = format_telegram(SNAP)
     assert "LIVE" in text
     assert "G2" in text and "Spirit" in text
-    assert "13-6" in text
+    assert "13" in text and "6" in text
     assert "tN1R" in text
     assert "AWP" in text
-    assert SNAP["url"] in text
-    assert "<b>" in text
+    assert "<pre>" in text
 
 
 def test_format_multikill_banner():
@@ -86,6 +85,7 @@ def test_match_list_rich_text():
                 "event": "BLAST Open Porto 2026",
                 "live": "1",
                 "stars": "5",
+                "time": "21:00",
             },
             {
                 "id": "2396933",
@@ -103,6 +103,7 @@ def test_match_list_rich_text():
     assert "/watch 2396932" in text
     assert text.count("BLAST Open Porto 2026") == 1
     assert "🔴" in text
+    assert "21:00" in text
     hidden = format_match_list(
         [
             {

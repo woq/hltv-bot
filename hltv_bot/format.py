@@ -137,56 +137,66 @@ def _log_line(entry: dict) -> str | None:
     return f"• {h(text)}"
 
 
-def format_telegram(snap: dict, *, log_limit: int = 10) -> str:
-    t1 = (snap.get("team1") or {}).get("name") or "?"
-    t2 = (snap.get("team2") or {}).get("name") or "?"
-    live = "🔴 <b>LIVE</b>" if snap.get("live") else "📊 <b>SCORE</b>"
-    round_text = h(snap.get("roundText") or "")
-    score = h(snap.get("scoreText") or f"{snap.get('ctScore')}-{snap.get('tScore')}")
+def _mono(nick: str, k, a, d, adr, width: int = 11) -> str:
+    n = str(nick)[:width]
+    n = n + " " * (width - len(n))
+    try:
+        adr_s = f"{float(adr):.0f}"
+    except (TypeError, ValueError):
+        adr_s = str(adr)
+    return f"{n} {int(k or 0):>2} {int(a or 0):>2} {int(d or 0):>2} {adr_s:>3}"
+
+
+def format_telegram(snap: dict, *, log_limit: int = 6) -> str:
+    """HLTV-style scoreboard compact enough for Telegram (~2–3k chars)."""
+    teams = list(snap.get("teams") or [])
+    left = teams[0] if teams else {"name": (snap.get("team2") or {}).get("name") or "CT", "players": []}
+    right = teams[1] if len(teams) > 1 else {"name": (snap.get("team1") or {}).get("name") or "T", "players": []}
+    ct = snap.get("ctScore")
+    t = snap.get("tScore")
+    if ct is None or t is None:
+        parts = str(snap.get("scoreText") or "0-0").replace(":", "-").split("-")
+        ct, t = (parts + ["0", "0"])[:2]
+    left_name = h(left.get("name") or "?")
+    right_name = h(right.get("name") or "?")
+    round_text = (snap.get("roundText") or "").replace(" - ", " · ")
+    live = "🔴 LIVE" if snap.get("live") else "📊"
+    banner = _streak_banner(snap.get("log") or [])
 
     lines = [
-        f"{live}  {h(t1)}  <code>{score}</code>  {h(t2)}",
+        f"{live}  <b>{h(round_text)}</b>" if round_text else live,
+        f"<pre>{str(left.get('name') or '?'):<12} {ct}\n{str(right.get('name') or '?'):<12} {t}</pre>",
     ]
-    if round_text:
-        lines.append(f"🗺️ {round_text}")
-
-    banner = _streak_banner(snap.get("log") or [])
     if banner:
         lines.append(banner)
 
-    lines.append("")
-    for i, team in enumerate(snap.get("teams") or []):
-        mark = "🔵" if i == 0 else "🟠"
-        lines.append(f"{mark} <b>{h(team.get('name') or '?')}</b>")
-        players = list(team.get("players") or [])
+    for team in (left, right):
+        players = list(team.get("players") or [])[:5]
         players.sort(key=lambda p: (-int(p.get("kills") or 0), float(p.get("adr") or 0)))
-        for p in players:
-            adr = p.get("adr")
-            adr_s = f"{adr:.0f}" if isinstance(adr, float) else str(adr)
-            nick = h(p.get("nick") or "?")
-            lines.append(
-                f"<code>{p.get('kills'):>2}/{p.get('assists')}/{p.get('deaths'):<2}</code>  {nick}  <i>{adr_s}</i>"
-            )
-        lines.append("")
+        body = "\n".join(
+            _mono(p.get("nick") or "?", p.get("kills"), p.get("assists"), p.get("deaths"), p.get("adr"))
+            for p in players
+        )
+        lines.append(f"<b>{h(team.get('name') or '?')}</b>")
+        if body:
+            lines.append(f"<pre>           K  A  D ADR\n{body}</pre>")
 
-    lines.append("📟 <b>log</b>")
-    n = 0
+    log_lines: list[str] = []
     for entry in snap.get("log") or []:
         line = _log_line(entry)
         if not line:
             continue
-        lines.append(line)
-        n += 1
-        if n >= log_limit:
+        log_lines.append(line)
+        if len(log_lines) >= log_limit:
             break
-
-    url = snap.get("url")
-    if url:
-        lines.append("")
-        lines.append(h(url))
-    lines.append("")
-    lines.append("<i>/bump 顶到最新</i>")
-    return "\n".join(lines).strip() + "\n"
+    if log_lines:
+        lines.append("<b>Game log</b>")
+        lines.extend(log_lines)
+    lines.append("<i>/bump</i>")
+    text = "\n".join(lines).strip() + "\n"
+    if len(text) > 3900:
+        text = text[:3890] + "…\n"
+    return text
 
 
 def format_match_list(
@@ -234,14 +244,18 @@ def format_match_list(
         lines = [head]
         for r in matches:
             n = star_n(r)
-            live = "🔴" if r.get("live") == "1" else "▫️"
+            live = r.get("live") == "1"
+            clock = h(r.get("time") or ("LIVE" if live else ""))
+            mark = "🔴" if live else "▫️"
             t1 = h(r.get("team1") or r.get("title") or "?")
             t2 = h(r.get("team2") or "")
-            vs = f"{t1}  —  {t2}" if t2 else t1
+            vs = f"{t1} — {t2}" if t2 else t1
             mid = h(r.get("id") or "")
-            star_s = "⭐" * n if n else "·"
-            lines.append(f"{live}  <b>{vs}</b>")
-            lines.append(f"{star_s}   <code>/watch {mid}</code>")
+            star_s = "⭐" * n if n else ""
+            time_bit = f"<code>{clock}</code>  " if clock else ""
+            lines.append(f"{mark} {time_bit}<b>{vs}</b>")
+            tail = f"{star_s}  " if star_s else ""
+            lines.append(f"{tail}<code>/watch {mid}</code>")
         blocks.append("\n".join(lines))
     hint = (
         "<i>/matches all 显示无星比赛</i>"

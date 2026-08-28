@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime, timedelta, timezone
 from html import unescape
 
 from hltv_bot.http import request
@@ -17,6 +18,8 @@ EVENT_NAME = re.compile(
     re.I,
 )
 DATA_STARS = re.compile(r'data-(?:stars|star-rating|rating)="(\d)"', re.I)
+DATA_UNIX = re.compile(r'data-unix="(\d{10,13})"')
+CST = timezone(timedelta(hours=8))
 
 
 def _abs(href: str) -> str:
@@ -67,6 +70,23 @@ _ACRONYMS = {
     "academy": "Academy",
     "ex": "ex",
 }
+
+
+def format_start_time(unix_raw: str | int | None, *, live: bool = False) -> str:
+    if unix_raw in (None, ""):
+        return "LIVE" if live else ""
+    try:
+        n = int(unix_raw)
+    except (TypeError, ValueError):
+        return "LIVE" if live else ""
+    if n > 10_000_000_000:
+        n //= 1000
+    dt = datetime.fromtimestamp(n, CST)
+    now = datetime.now(CST)
+    clock = dt.strftime("%H:%M")
+    if dt.date() != now.date():
+        return dt.strftime("%m/%d ") + clock
+    return clock
 
 
 def pretty_name(text: str) -> str:
@@ -169,6 +189,13 @@ def parse_match_list(html: str, *, limit: int = 40) -> list[dict[str, str]]:
             event = _clean(ev.group(1)) or event
         t1, t2, event = pretty_name(t1), pretty_name(t2), pretty_name(event)
         stars = _stars_in(chunk)
+        unix = None
+        for um in DATA_UNIX.finditer(prefix):
+            unix = um.group(1)
+        if unix is None:
+            um = DATA_UNIX.search(chunk)
+            unix = um.group(1) if um else None
+        time_s = format_start_time(unix, live=live)
         rows.append(
             {
                 "id": mid,
@@ -179,6 +206,8 @@ def parse_match_list(html: str, *, limit: int = 40) -> list[dict[str, str]]:
                 "title": f"{t1} vs {t2}".strip() or pretty_name(slug.replace("-", " ")),
                 "live": "1" if live else "0",
                 "stars": str(stars),
+                "time": time_s,
+                "unix": str(unix or ""),
             }
         )
         if len(rows) >= limit:

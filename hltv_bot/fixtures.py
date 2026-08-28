@@ -14,6 +14,7 @@ MOCK_MATCHES: list[dict[str, str]] = [
         "live": "1",
         "stars": "5",
         "url": "https://www.hltv.org/matches/2396932/g2-vs-spirit",
+        "time": "LIVE",
     },
     {
         "id": "2396933",
@@ -23,6 +24,7 @@ MOCK_MATCHES: list[dict[str, str]] = [
         "live": "0",
         "stars": "4",
         "url": "https://www.hltv.org/matches/2396933/navi-vs-pain",
+        "time": "02:00",
     },
     {
         "id": "2396934",
@@ -32,6 +34,7 @@ MOCK_MATCHES: list[dict[str, str]] = [
         "live": "0",
         "stars": "3",
         "url": "https://www.hltv.org/matches/2396934/m80-vs-furia",
+        "time": "05:30",
     },
     {
         "id": "2397116",
@@ -41,6 +44,7 @@ MOCK_MATCHES: list[dict[str, str]] = [
         "live": "1",
         "stars": "1",
         "url": "https://www.hltv.org/matches/2397116/x",
+        "time": "LIVE",
     },
     {
         "id": "2397226",
@@ -50,6 +54,7 @@ MOCK_MATCHES: list[dict[str, str]] = [
         "live": "1",
         "stars": "0",
         "url": "https://www.hltv.org/matches/2397226/x",
+        "time": "19:50",
     },
 ]
 

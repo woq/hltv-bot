@@ -21,7 +21,8 @@ from hltv_bot.telegram_api import Telegram
 DEFAULT_ADMIN_ID = 1442477170
 
 HELP = """\
-/matches — 有星赛事（分组+星级排序）
+/matches — 有星赛事（分组 / 星级 / 开赛时间）
+/matchs — 同上
 /matches all — 全部比赛
 /watch id — 盯这条 realtime，发一条消息并持续 edit
 /bump — 再发一条新消息并 edit（避免被讨论刷下去）
@@ -122,7 +123,7 @@ class HltvTelegramBot:
             self._cmd_deny(chat_id, arg)
         elif cmd == "/groups":
             self._cmd_groups(chat_id)
-        elif cmd == "/matches":
+        elif cmd in ("/matches", "/matchs", "/match"):
             self._await_cookie.discard(chat_id)
             self._cmd_matches(chat_id, arg)
         elif cmd == "/watch":
