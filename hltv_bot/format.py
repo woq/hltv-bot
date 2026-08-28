@@ -188,9 +188,17 @@ def format_telegram(snap: dict, *, log_limit: int = 15) -> str:
     live = "🔴 LIVE" if snap.get("live") else "📊"
     log = snap.get("log") or []
     kill_ns = round_kill_counts(log)
+    link = {
+        "connecting": "🟡 连接中",
+        "connected": "🟢 正常",
+        "idle": "🟢 正常",
+        "reconnect": "🟠 重连",
+        "disconnected": "🔴 断开",
+    }.get(str(snap.get("link") or "connected"), "🟢 正常")
 
+    title = f"{live}  <b>{h(round_text)}</b>" if round_text else live
     lines = [
-        f"{live}  <b>{h(round_text)}</b>" if round_text else live,
+        f"{title}  ·  {link}",
         "",
         f"<b>{h(left.get('name'))}</b>   <code>{ct}</code>",
         f"<b>{h(right.get('name'))}</b>   <code>{t}</code>",

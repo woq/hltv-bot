@@ -48,6 +48,9 @@ def test_format_contains_score_and_log():
     assert "AWP" in text
     assert "killed" in text or "huNter-" in text
     assert "<pre>" in text
+    snap_down = dict(SNAP)
+    snap_down["link"] = "disconnected"
+    assert "断开" in format_telegram(snap_down)
 
 
 def test_format_multikill_banner():

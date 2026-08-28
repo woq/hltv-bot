@@ -90,6 +90,8 @@ class WatchState:
     stop: threading.Event = field(default_factory=threading.Event)
     last_bump: float = 0.0
     last_edit: float = 0.0
+    last_snap: dict = field(default_factory=dict)
+    link: str = "connecting"
 
 
 class HltvTelegramBot:
@@ -438,7 +440,7 @@ class HltvTelegramBot:
 
     def _watch_loop(self, state: WatchState) -> None:
         board: dict = {}
-        log: list = []
+        feed: list = []
         try:
             stream = iter_scorebot(
                 self.session,
@@ -448,23 +450,30 @@ class HltvTelegramBot:
             for name, payload in stream:
                 if state.stop.is_set() or self.watch is not state:
                     return
-                if name == "idle":
-                    continue
-                if name == "scoreboard" and isinstance(payload, dict):
+                status_changed = False
+                if name == "status" and isinstance(payload, dict):
+                    new_link = str(payload.get("state") or state.link)
+                    status_changed = new_link != state.link
+                    state.link = new_link
+                elif name == "scoreboard" and isinstance(payload, dict):
                     board = payload
                 elif name == "log":
-                    log = merge_log(log, payload)
+                    feed = merge_log(feed, payload)
                 else:
                     continue
-                snap = snapshot_from_scoreboard(board, meta=state.meta, log=log)
-                fp = snapshot_fingerprint(snap)
-                if fp == state.fingerprint:
+                snap = snapshot_from_scoreboard(board, meta=state.meta, log=feed)
+                snap["link"] = state.link
+                fp = snapshot_fingerprint(snap) + "|" + state.link
+                if fp == state.fingerprint and not status_changed:
                     continue
                 text = format_telegram(snap)
                 state.text = text
+                state.last_snap = snap
                 state.fingerprint = fp
                 now = time.time()
-                force = any(s in text for s in ("🔥 3K", "💥 4K", "⭐ ACE", "🏁"))
+                force = status_changed or any(
+                    s in text for s in ("🔥 3K", "💥 4K", "⭐ ACE", "🏁")
+                )
                 if now - state.last_edit < MIN_EDIT_INTERVAL and not force:
                     continue
                 if (
@@ -486,10 +495,24 @@ class HltvTelegramBot:
                         state.last_bump = now
                     state.last_edit = now
         except CloudflareError as e:
+            self._mark_watch_down(state, "disconnected")
             self.tg.send_message(state.chat_id, f"Scorebot Cloudflare：{e}\n/cookie 更新后 /watch")
         except Exception as e:
+            self._mark_watch_down(state, "disconnected")
             if not state.stop.is_set():
-                self.tg.send_message(state.chat_id, f"watch 结束: {e}")
+                log.info("watch ended: %s", e)
+
+    def _mark_watch_down(self, state: WatchState, link: str) -> None:
+        state.link = link
+        snap = dict(state.last_snap or {"live": True, "teams": [], "log": []})
+        snap["link"] = link
+        try:
+            text = format_telegram(snap)
+            state.text = text
+            if state.message_id:
+                self.tg.edit_message(state.chat_id, state.message_id, text)
+        except Exception:
+            pass
 
     def register_commands(self) -> None:
         self.tg.set_my_commands(USER_BOT_COMMANDS)

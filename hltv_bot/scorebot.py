@@ -88,77 +88,92 @@ def iter_scorebot(
 
     log = logging.getLogger("hltv_bot.scorebot")
     headers = sess.as_headers()
-    client = Session(impersonate=sess.impersonate, timeout=timeout, verify=True)
-    try:
-        sid = None
-        for attempt in range(4):
-            try:
-                resp = client.get(_poll_url(base), headers=headers)
-            except Exception as e:
-                if _is_timeout(e) and attempt < 3:
-                    log.info("handshake timeout, retry %s", attempt + 1)
-                    time.sleep(1)
-                    continue
-                raise
-            if resp.status_code in (403, 429):
-                from hltv_bot.http import CloudflareError
+    from hltv_bot.http import CloudflareError
 
-                raise CloudflareError(resp.status_code, str(resp.url))
-            for pkt in decode_payload(resp.content):
-                opened = parse_open(pkt)
-                if opened and "sid" in opened:
-                    sid = opened["sid"]
-                ev = parse_event(pkt)
-                if ev:
-                    yield ev
-            if sid:
-                break
-            time.sleep(1)
-        if not sid:
-            raise RuntimeError("scorebot handshake: no sid")
-        log.info("scorebot sid=%s listId=%s", sid, list_id)
-
-        emit = encode_event("readyForMatch", ready_for_match_payload(list_id))
-        post_headers = dict(headers)
-        post_headers["content-type"] = "text/plain;charset=UTF-8"
-        client.post(
-            _poll_url(base, {"sid": sid}),
-            data=encode_payload(emit),
-            headers=post_headers,
-            timeout=20,
-        )
-
-        misses = 0
-        while True:
-            try:
-                resp = client.get(
-                    _poll_url(base, {"sid": sid}),
-                    headers=headers,
-                    timeout=timeout,
-                )
-            except Exception as e:
-                if _is_timeout(e):
-                    misses += 1
-                    log.info("poll timeout n=%s (idle ok)", misses)
-                    if misses in (1, 5, 15):
-                        yield ("idle", {"misses": misses})
-                    continue
-                raise
-            if resp.status_code in (403, 429):
-                from hltv_bot.http import CloudflareError
-
-                raise CloudflareError(resp.status_code, str(resp.url))
-            misses = 0
-            got = False
-            for pkt in decode_payload(resp.content or b""):
-                ev = parse_event(pkt)
-                if ev:
-                    got = True
-                    yield ev
-            if not got:
-                log.debug("poll empty sid=%s", sid)
-    finally:
+    backoff = 1.0
+    while True:
+        client = Session(impersonate=sess.impersonate, timeout=timeout, verify=True)
         try:
-            client.close()
-        except Exception:
-            pass
+            yield ("status", {"state": "connecting"})
+            sid = None
+            for attempt in range(4):
+                try:
+                    resp = client.get(_poll_url(base), headers=headers)
+                except Exception as e:
+                    if _is_timeout(e) and attempt < 3:
+                        log.info("handshake timeout, retry %s", attempt + 1)
+                        yield ("status", {"state": "reconnect", "detail": "handshake timeout"})
+                        time.sleep(1)
+                        continue
+                    raise
+                if resp.status_code in (403, 429):
+                    raise CloudflareError(resp.status_code, str(resp.url))
+                for pkt in decode_payload(resp.content):
+                    opened = parse_open(pkt)
+                    if opened and "sid" in opened:
+                        sid = opened["sid"]
+                    ev = parse_event(pkt)
+                    if ev:
+                        yield ev
+                if sid:
+                    break
+                time.sleep(1)
+            if not sid:
+                raise RuntimeError("scorebot handshake: no sid")
+            log.info("scorebot sid=%s listId=%s", sid, list_id)
+            yield ("status", {"state": "connected"})
+            backoff = 1.0
+
+            emit = encode_event("readyForMatch", ready_for_match_payload(list_id))
+            post_headers = dict(headers)
+            post_headers["content-type"] = "text/plain;charset=UTF-8"
+            client.post(
+                _poll_url(base, {"sid": sid}),
+                data=encode_payload(emit),
+                headers=post_headers,
+                timeout=20,
+            )
+
+            misses = 0
+            while True:
+                try:
+                    resp = client.get(
+                        _poll_url(base, {"sid": sid}),
+                        headers=headers,
+                        timeout=timeout,
+                    )
+                except Exception as e:
+                    if _is_timeout(e):
+                        misses += 1
+                        log.info("poll timeout n=%s (idle ok)", misses)
+                        if misses == 1 or misses % 5 == 0:
+                            yield ("status", {"state": "idle", "misses": misses})
+                        continue
+                    raise
+                if resp.status_code in (403, 429):
+                    raise CloudflareError(resp.status_code, str(resp.url))
+                if misses:
+                    yield ("status", {"state": "connected"})
+                misses = 0
+                got = False
+                for pkt in decode_payload(resp.content or b""):
+                    ev = parse_event(pkt)
+                    if ev:
+                        got = True
+                        yield ev
+                if not got:
+                    log.debug("poll empty sid=%s", sid)
+        except CloudflareError:
+            yield ("status", {"state": "disconnected", "detail": "cloudflare"})
+            raise
+        except Exception as e:
+            log.info("scorebot error, reconnect: %s", e)
+            yield ("status", {"state": "reconnect", "detail": str(e)[:80]})
+            time.sleep(backoff)
+            backoff = min(backoff * 2, 20)
+            continue
+        finally:
+            try:
+                client.close()
+            except Exception:
+                pass
