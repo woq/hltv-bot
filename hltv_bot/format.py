@@ -193,16 +193,22 @@ def format_match_list(
     rows: list[dict],
     *,
     limit: int = 24,
+    starred_only: bool = True,
 ) -> str:
-    rows = list(rows)[:limit]
-    if not rows:
-        return "今天没有抓到比赛。"
-
     def star_n(r: dict) -> int:
         try:
             return int(r.get("stars") or 0)
         except (TypeError, ValueError):
             return 0
+
+    rows = list(rows)
+    if starred_only:
+        rows = [r for r in rows if star_n(r) > 0]
+    rows = rows[:limit]
+    if not rows:
+        if starred_only:
+            return "没有带星级的比赛。\n发 <code>/matches all</code> 查看全部。"
+        return "今天没有抓到比赛。"
 
     grouped: dict[str, list[dict]] = {}
     for r in rows:
@@ -221,17 +227,26 @@ def format_match_list(
     blocks: list[str] = []
     for event, matches in sorted(grouped.items(), key=event_key):
         matches = sorted(matches, key=match_key)
-        lines = [f"📌 <b>{h(event)}</b>"]
+        top = max(star_n(x) for x in matches)
+        head = f"<b>{h(event)}</b>"
+        if top:
+            head += f"  {'⭐' * top}"
+        lines = [head]
         for r in matches:
             n = star_n(r)
-            stars = ("⭐" * n + " ") if n else ""
-            live = "🔴 " if r.get("live") == "1" else ""
+            live = "🔴" if r.get("live") == "1" else "▫️"
             t1 = h(r.get("team1") or r.get("title") or "?")
             t2 = h(r.get("team2") or "")
-            vs = f"<b>{t1}</b> vs <b>{t2}</b>" if t2 else f"<b>{t1}</b>"
+            vs = f"{t1}  —  {t2}" if t2 else t1
             mid = h(r.get("id") or "")
-            lines.append(f"{live}{stars}{vs}".strip())
-            lines.append(f"<code>/watch {mid}</code>")
+            star_s = "⭐" * n if n else "·"
+            lines.append(f"{live}  <b>{vs}</b>")
+            lines.append(f"{star_s}   <code>/watch {mid}</code>")
         blocks.append("\n".join(lines))
-    blocks.append("<i>点复制 /watch id 发送</i>")
+    hint = (
+        "<i>/matches all 显示无星比赛</i>"
+        if starred_only
+        else "<i>/matches 只看有星赛事</i>"
+    )
+    blocks.append(hint)
     return "\n\n".join(blocks) + "\n"

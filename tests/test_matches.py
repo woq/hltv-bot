@@ -1,5 +1,5 @@
 from hltv_bot.live import format_log_item, merge_log, snapshot_from_scoreboard
-from hltv_bot.matches import parse_match_list, parse_match_meta
+from hltv_bot.matches import parse_match_list, parse_match_meta, pretty_name
 
 
 def test_parse_match_list_dedupes():
@@ -24,6 +24,13 @@ def test_parse_match_list_dedupes():
     assert rows[0]["event"] == "BLAST Open Porto 2026"
     assert rows[1]["id"] == "111"
     assert rows[1]["live"] == "0"
+
+
+def test_pretty_name_acronyms():
+    assert pretty_name("natus vincere") == "Natus Vincere"
+    assert pretty_name("g2") == "G2"
+    assert pretty_name("cct 2026 europe series 8") == "CCT 2026 Europe Series 8"
+    assert pretty_name("G2") == "G2"
 
 
 def test_parse_match_meta():

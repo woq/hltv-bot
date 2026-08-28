@@ -103,6 +103,34 @@ def test_match_list_rich_text():
     assert "/watch 2396932" in text
     assert text.count("BLAST Open Porto 2026") == 1
     assert "🔴" in text
+    hidden = format_match_list(
+        [
+            {
+                "id": "9",
+                "team1": "x",
+                "team2": "y",
+                "event": "low",
+                "live": "1",
+                "stars": "0",
+            }
+        ],
+        starred_only=True,
+    )
+    assert "all" in hidden.lower()
+    shown = format_match_list(
+        [
+            {
+                "id": "9",
+                "team1": "x",
+                "team2": "y",
+                "event": "low",
+                "live": "1",
+                "stars": "0",
+            }
+        ],
+        starred_only=False,
+    )
+    assert "/watch 9" in shown
 
 
 def test_html_escapes_nicks():

@@ -9,11 +9,11 @@ from hltv_bot.session import BrowserSession
 MATCHES_URL = "https://www.hltv.org/matches"
 MATCH_HREF = re.compile(r'href="(/matches/(\d+)/([^"]+))"')
 TEAM_NAME = re.compile(
-    r'class="[^"]*matchTeamName[^"]*"[^>]*>\s*([^<]+)',
+    r'class="[^"]*matchTeamName[^"]*"[^>]*>(?:<[^>]+>)*\s*([^<]+)',
     re.I,
 )
 EVENT_NAME = re.compile(
-    r'class="[^"]*matchEvent(?:Name)?[^"]*"[^>]*>\s*([^<]+)',
+    r'class="[^"]*matchEvent(?:Name)?[^"]*"[^>]*>(?:<[^>]+>)*\s*([^<]+)',
     re.I,
 )
 DATA_STARS = re.compile(r'data-(?:stars|star-rating|rating)="(\d)"', re.I)
@@ -27,6 +27,64 @@ def _abs(href: str) -> str:
 
 def _clean(text: str) -> str:
     return re.sub(r"\s+", " ", unescape(text)).strip()
+
+
+_ACRONYMS = {
+    "g2": "G2",
+    "navi": "NaVi",
+    "natus": "Natus",
+    "vincere": "Vincere",
+    "m80": "M80",
+    "esl": "ESL",
+    "cct": "CCT",
+    "iem": "IEM",
+    "blast": "BLAST",
+    "pgl": "PGL",
+    "faze": "FaZe",
+    "mouz": "MOUZ",
+    "furia": "FURIA",
+    "pain": "paiN",
+    "mibr": "MIBR",
+    "og": "OG",
+    "c9": "C9",
+    "nip": "NiP",
+    "saw": "SAW",
+    "ap": "AP",
+    "eu": "EU",
+    "na": "NA",
+    "sa": "SA",
+    "asia": "Asia",
+    "europe": "Europe",
+    "pacific": "Pacific",
+    "series": "Series",
+    "closed": "Closed",
+    "open": "Open",
+    "qualifier": "Qualifier",
+    "challenger": "Challenger",
+    "league": "League",
+    "season": "Season",
+    "cup": "Cup",
+    "academy": "Academy",
+    "ex": "ex",
+}
+
+
+def pretty_name(text: str) -> str:
+    s = _clean(text)
+    if not s:
+        return s
+    if any(c.isupper() for c in s) and not s.islower():
+        return s
+    out: list[str] = []
+    for w in s.split(" "):
+        k = w.lower()
+        if k in _ACRONYMS:
+            out.append(_ACRONYMS[k])
+        elif k.isdigit():
+            out.append(w)
+        else:
+            out.append(w[:1].upper() + w[1:].lower() if w else w)
+    return " ".join(out)
 
 
 def _stars_in(chunk: str) -> int:
@@ -87,7 +145,7 @@ def _chunk_around(html: str, pos: int, span: int = 1800) -> str:
     return html[start:end]
 
 
-def parse_match_list(html: str, *, limit: int = 24) -> list[dict[str, str]]:
+def parse_match_list(html: str, *, limit: int = 40) -> list[dict[str, str]]:
     seen: set[str] = set()
     rows: list[dict[str, str]] = []
     for m in MATCH_HREF.finditer(html):
@@ -109,6 +167,7 @@ def parse_match_list(html: str, *, limit: int = 24) -> list[dict[str, str]]:
         ev = EVENT_NAME.search(chunk)
         if ev:
             event = _clean(ev.group(1)) or event
+        t1, t2, event = pretty_name(t1), pretty_name(t2), pretty_name(event)
         stars = _stars_in(chunk)
         rows.append(
             {
@@ -117,7 +176,7 @@ def parse_match_list(html: str, *, limit: int = 24) -> list[dict[str, str]]:
                 "team1": t1,
                 "team2": t2,
                 "event": event,
-                "title": f"{t1} vs {t2}".strip() or slug.replace("-", " "),
+                "title": f"{t1} vs {t2}".strip() or pretty_name(slug.replace("-", " ")),
                 "live": "1" if live else "0",
                 "stars": str(stars),
             }

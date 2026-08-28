@@ -76,7 +76,8 @@ python3 -m hltv_bot bot
 
 | 命令 | |
 |---|---|
-| `/matches` | 按赛事分组，组内按 HLTV 星级排序；LIVE 标 🔴；HTML 富文本，每条 `/watch id` |
+| `/matches` | 默认只列出**有星级**的比赛，按赛事分组、星级排序 |
+| `/matches all` | 全部比赛（含无星） |
 | `/watch <id>` | 发一条 LIVE 消息并持续 edit |
 | `/bump` | **新发一条**，之后 edit 新消息 |
 | `/stop` | 停 |

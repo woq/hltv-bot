@@ -19,7 +19,8 @@ from hltv_bot.telegram_api import Telegram
 DEFAULT_ADMIN_ID = 1442477170
 
 HELP = """\
-/matches — 按赛事分组、星级排序（HTML）
+/matches — 有星赛事（分组+星级排序）
+/matches all — 全部比赛
 /watch id — 盯这条 realtime，发一条消息并持续 edit
 /bump — 再发一条新消息并 edit（避免被讨论刷下去）
 /stop — 停止
@@ -118,7 +119,7 @@ class HltvTelegramBot:
             self._cmd_groups(chat_id)
         elif cmd == "/matches":
             self._await_cookie.discard(chat_id)
-            self._cmd_matches(chat_id)
+            self._cmd_matches(chat_id, arg)
         elif cmd == "/watch":
             self._await_cookie.discard(chat_id)
             self._cmd_watch(chat_id, arg)
@@ -134,7 +135,7 @@ class HltvTelegramBot:
         elif cmd in ("/cookie", "/updatecookie", "/update_cookie"):
             self._cmd_cookie(chat_id, arg, message_id=message_id)
 
-    def _cmd_matches(self, chat_id: int) -> None:
+    def _cmd_matches(self, chat_id: int, arg: str = "") -> None:
         try:
             rows = fetch_matches(self.session)
         except CloudflareError as e:
@@ -143,7 +144,10 @@ class HltvTelegramBot:
         if not rows:
             self.tg.send_message(chat_id, "列表是空的（或解析失败）")
             return
-        self.tg.send_message(chat_id, format_match_list(rows))
+        all_mode = arg.strip().lower() in {"all", "全部", "*", "full"}
+        self.tg.send_message(
+            chat_id, format_match_list(rows, starred_only=not all_mode)
+        )
 
     def _cmd_watch(self, chat_id: int, arg: str) -> None:
         if not arg:
