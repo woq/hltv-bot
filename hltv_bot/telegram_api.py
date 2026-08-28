@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import time
+from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
@@ -13,17 +15,33 @@ class Telegram:
 
     def _call(self, method: str, payload: dict) -> dict:
         data = json.dumps(payload).encode("utf-8")
-        req = Request(
-            f"{self.base}/{method}",
-            data=data,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        with urlopen(req, timeout=self.timeout) as resp:
-            body = json.loads(resp.read().decode("utf-8"))
-        if not body.get("ok"):
-            raise RuntimeError(f"telegram {method} failed: {body}")
-        return body["result"]
+        last_err: Exception | None = None
+        for attempt in range(2):
+            req = Request(
+                f"{self.base}/{method}",
+                data=data,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            try:
+                with urlopen(req, timeout=self.timeout) as resp:
+                    body = json.loads(resp.read().decode("utf-8"))
+            except HTTPError as e:
+                raw = e.read().decode("utf-8", "replace")
+                if e.code == 429:
+                    wait = 3
+                    try:
+                        wait = int(json.loads(raw).get("parameters", {}).get("retry_after") or 3)
+                    except json.JSONDecodeError:
+                        pass
+                    time.sleep(min(max(wait, 1), 15))
+                    last_err = e
+                    continue
+                raise RuntimeError(f"telegram {method} HTTP {e.code}: {raw[:200]}") from e
+            if not body.get("ok"):
+                raise RuntimeError(f"telegram {method} failed: {body}")
+            return body["result"]
+        raise RuntimeError(f"telegram {method} rate limited: {last_err}")
 
     def get_updates(self, offset: int = 0, timeout: int = 25) -> list[dict]:
         q = urlencode(

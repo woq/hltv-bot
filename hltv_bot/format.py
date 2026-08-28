@@ -145,6 +145,11 @@ def _log_line(entry: dict, *, kill_n: int = 0) -> str | None:
     return f"• {h(text)}"
 
 
+def _plain(name: object, width: int) -> str:
+    s = str(name or "?").replace("<", "").replace(">", "")[:width]
+    return s + " " * (width - len(s))
+
+
 def _mono(nick: str, k, a, d, adr, width: int = 11) -> str:
     n = str(nick)[:width]
     n = n + " " * (width - len(n))
@@ -172,7 +177,7 @@ def format_telegram(snap: dict, *, log_limit: int = 15) -> str:
 
     lines = [
         f"{live}  <b>{h(round_text)}</b>" if round_text else live,
-        f"<pre>{str(left.get('name') or '?'):<12} {ct}\n{str(right.get('name') or '?'):<12} {t}</pre>",
+        f"<pre>{_plain(left.get('name'), 12)} {ct}\n{_plain(right.get('name'), 12)} {t}</pre>",
     ]
 
     for team in (left, right):
@@ -199,8 +204,11 @@ def format_telegram(snap: dict, *, log_limit: int = 15) -> str:
         lines.extend(log_lines)
     lines.append("<i>/bump</i>")
     text = "\n".join(lines).strip() + "\n"
+    while len(text) > 3800 and log_limit > 6:
+        log_limit -= 3
+        return format_telegram(snap, log_limit=log_limit)
     if len(text) > 3900:
-        text = text[:3890] + "…\n"
+        text = text[:3890] + "\n"
     return text
 
 
@@ -242,11 +250,7 @@ def format_match_list(
     blocks: list[str] = []
     for event, matches in sorted(grouped.items(), key=event_key):
         matches = sorted(matches, key=match_key)
-        top = max(star_n(x) for x in matches)
-        head = f"<b>{h(event)}</b>"
-        if top:
-            head += f"  {'⭐' * top}"
-        lines = [head]
+        lines = [f"<b>{h(event)}</b>"]
         for r in matches:
             n = star_n(r)
             live = r.get("live") == "1"

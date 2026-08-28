@@ -8,6 +8,8 @@ from hltv_bot.http import request
 from hltv_bot.session import BrowserSession
 
 MATCHES_URL = "https://www.hltv.org/matches"
+_MATCH_CACHE: dict = {"at": 0.0, "rows": []}
+_MATCH_CACHE_TTL = 45.0
 MATCH_HREF = re.compile(r'href="(/matches/(\d+)/([^"]+))"')
 TEAM_NAME = re.compile(
     r'class="[^"]*matchTeamName[^"]*"[^>]*>(?:<[^>]+>)*\s*([^<]+)',
@@ -231,6 +233,11 @@ def parse_match_meta(html: str, url: str = "") -> dict[str, str | None]:
 
 
 def fetch_matches(sess: BrowserSession, timeout: float = 20.0) -> list[dict[str, str]]:
+    import time as _time
+
+    now = _time.monotonic()
+    if _MATCH_CACHE["rows"] and now - _MATCH_CACHE["at"] < _MATCH_CACHE_TTL:
+        return list(_MATCH_CACHE["rows"])
     _st, body, _ = request(
         sess,
         "GET",
@@ -243,7 +250,10 @@ def fetch_matches(sess: BrowserSession, timeout: float = 20.0) -> list[dict[str,
             "sec-fetch-site": "none",
         },
     )
-    return parse_match_list(body.decode("utf-8", "replace"))
+    rows = parse_match_list(body.decode("utf-8", "replace"))
+    _MATCH_CACHE["at"] = now
+    _MATCH_CACHE["rows"] = rows
+    return list(rows)
 
 
 def fetch_match_meta(sess: BrowserSession, url: str, timeout: float = 20.0) -> dict[str, str | None]:

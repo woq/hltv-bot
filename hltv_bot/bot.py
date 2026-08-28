@@ -13,6 +13,7 @@ from hltv_bot.http import CloudflareError
 from hltv_bot.live import merge_log, snapshot_from_scoreboard
 from hltv_bot.matches import fetch_match_meta, fetch_matches
 from hltv_bot.scorebot import iter_scorebot, scorebot_base
+from hltv_bot.ratelimit import Cooldown
 from hltv_bot.settings import is_real, parse_real_arg, set_real
 from hltv_bot.session import BrowserSession, load_session, save_cookie
 from hltv_bot.snapshot import snapshot_fingerprint
@@ -51,6 +52,19 @@ ADMIN_CMDS = frozenset(
     }
 )
 
+CMD_COOLDOWN = {
+    "/matches": 8.0,
+    "/matchs": 8.0,
+    "/match": 8.0,
+    "/watch": 6.0,
+    "/bump": 4.0,
+    "/new": 4.0,
+    "/cookie": 3.0,
+    "/real": 2.0,
+}
+DEFAULT_CMD_COOLDOWN = 1.2
+MIN_EDIT_INTERVAL = 1.8
+
 
 @dataclass
 class WatchState:
@@ -62,6 +76,7 @@ class WatchState:
     fingerprint: str = ""
     stop: threading.Event = field(default_factory=threading.Event)
     last_bump: float = 0.0
+    last_edit: float = 0.0
 
 
 class HltvTelegramBot:
@@ -80,6 +95,7 @@ class HltvTelegramBot:
         self.watch: WatchState | None = None
         self._thread: threading.Thread | None = None
         self._await_cookie: set[int] = set()
+        self._cool = Cooldown()
 
     def is_admin(self, user_id: int | None) -> bool:
         return user_id is not None and int(user_id) in self.admin_ids
@@ -113,6 +129,14 @@ class HltvTelegramBot:
             chat_id, user_id=user_id
         ):
             return
+        if cmd.startswith("/") and user_id is not None:
+            interval = CMD_COOLDOWN.get(cmd, DEFAULT_CMD_COOLDOWN)
+            key = f"{user_id}:{cmd}"
+            if not self._cool.allow(key, interval):
+                wait = self._cool.remaining(key, interval)
+                if cmd in {"/matches", "/matchs", "/match", "/watch", "/bump"}:
+                    self.tg.send_message(chat_id, f"稍等 {wait:.0f}s")
+                return
         if cmd in ("/start", "/help"):
             self._await_cookie.discard(chat_id)
             if self.is_admin(user_id) or self.chat_allowed(chat_id, user_id=user_id):
@@ -368,6 +392,9 @@ class HltvTelegramBot:
                 state.text = text
                 state.fingerprint = fp
                 now = time.time()
+                force = any(s in text for s in ("🔥 3K", "💥 4K", "⭐ ACE", "🏁"))
+                if now - state.last_edit < MIN_EDIT_INTERVAL and not force:
+                    continue
                 if (
                     self.bump_seconds
                     and state.message_id
@@ -376,6 +403,7 @@ class HltvTelegramBot:
                     msg = self.tg.send_message(state.chat_id, text)
                     state.message_id = msg["message_id"]
                     state.last_bump = now
+                    state.last_edit = now
                     continue
                 if state.message_id:
                     try:
@@ -384,6 +412,7 @@ class HltvTelegramBot:
                         msg = self.tg.send_message(state.chat_id, text)
                         state.message_id = msg["message_id"]
                         state.last_bump = now
+                    state.last_edit = now
         except CloudflareError as e:
             self.tg.send_message(state.chat_id, f"Scorebot Cloudflare：{e}\n/cookie 更新后 /watch")
         except Exception as e:

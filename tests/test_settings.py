@@ -19,6 +19,15 @@ def test_set_real_persists(tmp_path):
     assert set_real(False, p) is False
 
 
+def test_cooldown_blocks_then_allows():
+    from hltv_bot.ratelimit import Cooldown
+
+    c = Cooldown()
+    assert c.allow("u:/matches", 10) is True
+    assert c.allow("u:/matches", 10) is False
+    assert c.remaining("u:/matches", 10) > 0
+
+
 def test_mock_matches_format():
     text = format_match_list(MOCK_MATCHES, starred_only=True)
     assert "G2" in text
