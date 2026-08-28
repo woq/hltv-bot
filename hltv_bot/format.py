@@ -197,26 +197,29 @@ def format_telegram(snap: dict, *, log_limit: int = 15) -> str:
     }.get(str(snap.get("link") or "connected"), "🟢 正常")
 
     title = f"{live}  <b>{h(round_text)}</b>" if round_text else live
+    score_line = (
+        f"<b>{h(left.get('name'))}</b> <code>{ct}</code>"
+        f"    "
+        f"<b>{h(right.get('name'))}</b> <code>{t}</code>"
+    )
     lines = [
         f"{title}  ·  {link}",
-        "",
-        f"<b>{h(left.get('name'))}</b>   <code>{ct}</code>",
-        f"<b>{h(right.get('name'))}</b>   <code>{t}</code>",
+        score_line,
     ]
 
+    mixed: list[dict] = []
     for team in (left, right):
-        players = list(team.get("players") or [])[:5]
-        players.sort(key=lambda p: (-int(p.get("kills") or 0), float(p.get("adr") or 0)))
-        lines.append(_HR)
-        lines.append(f"<b>{h(team.get('name') or '?')}</b>")
-        body = "\n".join(
-            _mono(p.get("nick") or "?", p.get("kills"), p.get("assists"), p.get("deaths"), p.get("adr"))
-            for p in players
-        )
-        if body:
-            lines.append(f"<pre>             K  A  D  ADR\n{body}</pre>")
-        else:
-            lines.append("<i>暂无选手数据</i>")
+        mixed.extend(list(team.get("players") or [])[:5])
+    mixed.sort(key=lambda p: (-int(p.get("kills") or 0), float(p.get("adr") or 0)))
+    body = "\n".join(
+        _mono(p.get("nick") or "?", p.get("kills"), p.get("assists"), p.get("deaths"), p.get("adr"))
+        for p in mixed
+    )
+    lines.append(_HR)
+    if body:
+        lines.append(f"<pre>             K  A  D  ADR\n{body}</pre>")
+    else:
+        lines.append("<i>暂无选手数据</i>")
 
     log_lines: list[str] = []
     for entry in log:
