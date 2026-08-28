@@ -20,19 +20,17 @@ from hltv_bot.telegram_api import Telegram
 DEFAULT_ADMIN_ID = 1442477170
 
 HELP = """\
-/matches — 有星赛事（分组 / 星级 / 开赛时间 UTC+8）
-/matchs — 同上
-/matches all — 全部比赛
-/watch id — 盯这条 realtime，发一条消息并持续 edit
-/bump — 再发一条新消息并 edit（避免被讨论刷下去）
-/stop — 停止
+/matches — 今日比赛
+/watch — 实时观赛
+/bump — 顶到最新
+/stop — 停止观赛
 
 管理员：
-/allow — 把当前群加入推送名单（把 bot 拉进群后在群里发）
-/deny — 从名单去掉当前群（或 /deny chat_id）
+/allow — 授权本群
+/deny — 取消授权
 /groups — 已授权群
-/status — cookie / 伪装
 /cookie — 更新 Cookie
+/status — 状态
 """
 
 ADMIN_CMDS = frozenset(
@@ -60,19 +58,18 @@ DEFAULT_CMD_COOLDOWN = 1.2
 MIN_EDIT_INTERVAL = 1.8
 
 USER_BOT_COMMANDS = [
-    {"command": "matches", "description": "今日有星比赛（时间 UTC+8）"},
-    {"command": "matchs", "description": "同 matches"},
-    {"command": "watch", "description": "实时比分和 Game log"},
-    {"command": "bump", "description": "新发一条直播消息并继续更新"},
-    {"command": "stop", "description": "停止当前直播"},
-    {"command": "help", "description": "命令说明"},
+    {"command": "matches", "description": "今日比赛"},
+    {"command": "watch", "description": "实时观赛(自动更新)"},
+    {"command": "bump", "description": "顶到最新"},
+    {"command": "stop", "description": "停止观赛"},
+    {"command": "help", "description": "帮助"},
 ]
 ADMIN_BOT_COMMANDS = USER_BOT_COMMANDS + [
-    {"command": "allow", "description": "授权当前群"},
-    {"command": "deny", "description": "取消授权当前群"},
-    {"command": "groups", "description": "已授权群列表"},
-    {"command": "cookie", "description": "更新 HLTV Cookie"},
-    {"command": "status", "description": "运行状态"},
+    {"command": "allow", "description": "授权本群"},
+    {"command": "deny", "description": "取消授权"},
+    {"command": "groups", "description": "已授权群"},
+    {"command": "cookie", "description": "更新 Cookie"},
+    {"command": "status", "description": "状态"},
 ]
 
 
