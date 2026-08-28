@@ -1,0 +1,13 @@
+[Unit]
+Description=Xvfb display :%i
+After=network.target
+
+[Service]
+User=hltv
+Group=hltv
+ExecStart=/usr/bin/Xvfb :%i -screen 0 1920x1080x24 -nolisten tcp
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

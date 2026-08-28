@@ -1,0 +1,98 @@
+from hltv_bot.format import format_telegram
+from hltv_bot.profile import pick_impersonate
+from hltv_bot.scorebot import ready_for_match_payload, scorebot_base
+from hltv_bot.snapshot import snapshot_fingerprint
+
+SNAP = {
+    "url": "https://www.hltv.org/matches/2396932/g2-vs-spirit",
+    "live": True,
+    "team1": {"name": "G2", "id": "5995"},
+    "team2": {"name": "Spirit", "id": "7020"},
+    "roundText": "19 - Dust2",
+    "scoreText": "13-6",
+    "ctScore": 13,
+    "tScore": 6,
+    "teams": [
+        {
+            "name": "Spirit",
+            "players": [
+                {"nick": "tN1R", "kills": 16, "assists": 1, "deaths": 12, "adr": 85.3}
+            ],
+        },
+        {
+            "name": "G2",
+            "players": [
+                {"nick": "r1nkle", "kills": 19, "assists": 2, "deaths": 8, "adr": 91.3}
+            ],
+        },
+    ],
+    "log": [
+        {
+            "type": "kill",
+            "text": "sh1ro huNter-",
+            "weapon": "awp",
+            "headshot": False,
+            "assist": False,
+        },
+        {"type": "round_over_ct", "text": "Round over - Winner: CT (6 - 13)"},
+    ],
+}
+
+
+def test_format_contains_score_and_log():
+    text = format_telegram(SNAP)
+    assert "LIVE" in text
+    assert "G2" in text and "Spirit" in text
+    assert "13-6" in text
+    assert "tN1R" in text
+    assert "AWP" in text
+    assert SNAP["url"] in text
+    assert "<b>" in text
+
+
+def test_format_multikill_banner():
+    snap = dict(SNAP)
+    snap["log"] = [
+        {
+            "type": "kill",
+            "killer": "sh1ro",
+            "victim": "a",
+            "weapon": "awp",
+            "headshot": True,
+        },
+        {"type": "kill", "killer": "sh1ro", "victim": "b", "weapon": "awp"},
+        {"type": "kill", "killer": "sh1ro", "victim": "c", "weapon": "awp"},
+    ]
+    text = format_telegram(snap)
+    assert "3K" in text
+    assert "sh1ro" in text
+
+
+def test_html_escapes_nicks():
+    snap = dict(SNAP)
+    snap["team1"] = {"name": "A<B"}
+    text = format_telegram(snap)
+    assert "A&lt;B" in text
+    assert "A<B" not in text
+
+
+def test_fingerprint_changes_with_log():
+    a = snapshot_fingerprint(SNAP)
+    other = dict(SNAP)
+    other["log"] = [{"text": "Round started"}]
+    assert a != snapshot_fingerprint(other)
+
+
+def test_ready_payload():
+    assert ready_for_match_payload(2396932) == '{"token": "", "listId": "2396932"}'
+
+
+def test_scorebot_base_picks_last_url():
+    assert scorebot_base("https://a.example,https://scorebot-lb.hltv.org") == (
+        "https://scorebot-lb.hltv.org"
+    )
+
+
+def test_pick_impersonate_returns_string():
+    name = pick_impersonate("chrome131")
+    assert isinstance(name, str) and name.startswith("chrome")

@@ -1,0 +1,15 @@
+[Unit]
+Description=x11vnc on display :%i
+After=xvfb@%i.service
+Requires=xvfb@%i.service
+
+[Service]
+User=hltv
+Group=hltv
+Environment=DISPLAY=:%i
+ExecStart=/usr/bin/x11vnc -display :%i -localhost -nopw -forever -shared -rfbport 5900
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

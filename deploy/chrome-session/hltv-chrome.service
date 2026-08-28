@@ -1,0 +1,25 @@
+[Unit]
+Description=Persistent Google Chrome for HLTV (CDP 9222)
+After=xvfb@99.service
+Requires=xvfb@99.service
+
+[Service]
+User=hltv
+Group=hltv
+Environment=DISPLAY=:99
+Environment=HOME=/var/lib/hltv-chrome
+ExecStart=/usr/bin/google-chrome-stable \
+  --user-data-dir=/var/lib/hltv-chrome/profile \
+  --remote-debugging-address=127.0.0.1 \
+  --remote-debugging-port=9222 \
+  --no-first-run \
+  --no-default-browser-check \
+  --disable-dev-shm-usage \
+  --disable-gpu \
+  --window-size=1920,1080 \
+  https://www.hltv.org/matches
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

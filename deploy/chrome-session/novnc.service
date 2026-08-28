@@ -1,0 +1,13 @@
+[Unit]
+Description=noVNC (localhost:6080) for first Cloudflare pass
+After=x11vnc@99.service
+Requires=x11vnc@99.service
+
+[Service]
+User=hltv
+Group=hltv
+ExecStart=/usr/bin/websockify --web=/usr/share/novnc 127.0.0.1:6080 127.0.0.1:5900
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

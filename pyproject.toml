@@ -1,0 +1,16 @@
+[project]
+name = "hltv-bot"
+version = "0.2.0"
+description = "HLTV Scorebot live log + Telegram edit, Chrome-profile impersonation"
+requires-python = ">=3.11"
+readme = "README.md"
+dependencies = [
+  "curl_cffi>=0.7.0",
+  "python-dotenv>=1.0.0",
+]
+
+[project.scripts]
+hltv-bot = "hltv_bot.__main__:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

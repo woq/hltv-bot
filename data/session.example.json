@@ -1,0 +1,10 @@
+{
+  "impersonate": "chrome131",
+  "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
+  "sec_ch_ua": "\"Chromium\";v=\"134\", \"Not:A-Brand\";v=\"24\", \"Google Chrome\";v=\"134\"",
+  "sec_ch_ua_mobile": "?0",
+  "sec_ch_ua_platform": "\"Windows\"",
+  "accept_language": "zh-CN,zh;q=0.9,zh-TW;q=0.8",
+  "dnt": "1",
+  "cookie": "PASTE_COOKIE_HEADER_FROM_DEVTOOLS_HERE"
+}
