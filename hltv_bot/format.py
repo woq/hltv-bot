@@ -187,3 +187,37 @@ def format_telegram(snap: dict, *, log_limit: int = 10) -> str:
     lines.append("")
     lines.append("<i>/bump 顶到最新</i>")
     return "\n".join(lines).strip() + "\n"
+
+
+def format_match_list(
+    rows: list[dict],
+    *,
+    live_limit: int = 10,
+    upcoming_limit: int = 8,
+) -> str:
+    live = [r for r in rows if r.get("live") == "1"][:live_limit]
+    upcoming = [r for r in rows if r.get("live") != "1"][:upcoming_limit]
+
+    def card(r: dict) -> str:
+        n = int(r.get("stars") or 0)
+        stars = ("⭐" * n + " ") if n else ""
+        t1 = h(r.get("team1") or r.get("title") or "?")
+        t2 = h(r.get("team2") or "")
+        vs = f"<b>{t1}</b> vs <b>{t2}</b>" if t2 else f"<b>{t1}</b>"
+        event = h(r.get("event") or "")
+        mid = h(r.get("id") or "")
+        parts = [f"{stars}{vs}".strip()]
+        if event:
+            parts.append(f"<i>{event}</i>")
+        parts.append(f"<code>/watch {mid}</code>")
+        return "\n".join(parts)
+
+    blocks: list[str] = []
+    if live:
+        blocks.append("🔴 <b>LIVE</b>\n\n" + "\n\n".join(card(r) for r in live))
+    if upcoming:
+        blocks.append("📅 <b>稍后</b>\n\n" + "\n\n".join(card(r) for r in upcoming))
+    if not blocks:
+        return "今天没有抓到比赛。"
+    blocks.append("<i>点复制 /watch id 发送</i>")
+    return "\n\n".join(blocks) + "\n"

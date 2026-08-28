@@ -7,17 +7,16 @@ from hltv_bot.http import request
 from hltv_bot.session import BrowserSession
 
 MATCHES_URL = "https://www.hltv.org/matches"
-MATCH_HREF = re.compile(
-    r'href="(/matches/(\d+)/[^"]+)"[^>]*>',
-)
-LIVE_BLOCK = re.compile(
-    r'class="[^"]*live-match[^"]*"[\s\S]{0,1200}?href="(/matches/(\d+)/[^"]+)"',
+MATCH_HREF = re.compile(r'href="(/matches/(\d+)/([^"]+))"')
+TEAM_NAME = re.compile(
+    r'class="[^"]*matchTeamName[^"]*"[^>]*>\s*([^<]+)',
     re.I,
 )
-SCOREBOT_ID = re.compile(r'data-scorebot-id="(\d+)"')
-SCOREBOT_URL = re.compile(r'data-scorebot-url="([^"]+)"')
-TEAM1 = re.compile(r'data-team1-name="([^"]*)"')
-TEAM2 = re.compile(r'data-team2-name="([^"]*)"')
+EVENT_NAME = re.compile(
+    r'class="[^"]*matchEvent(?:Name)?[^"]*"[^>]*>\s*([^<]+)',
+    re.I,
+)
+DATA_STARS = re.compile(r'data-(?:stars|star-rating|rating)="(\d)"', re.I)
 
 
 def _abs(href: str) -> str:
@@ -26,27 +25,106 @@ def _abs(href: str) -> str:
     return "https://www.hltv.org" + href
 
 
-def parse_match_list(html: str, *, limit: int = 20) -> list[dict[str, str]]:
+def _clean(text: str) -> str:
+    return re.sub(r"\s+", " ", unescape(text)).strip()
+
+
+def _stars_in(chunk: str) -> int:
+    m = DATA_STARS.search(chunk)
+    if m:
+        return max(0, min(5, int(m.group(1))))
+    all_s = len(re.findall(r"fa-star", chunk, re.I))
+    empty = len(re.findall(r"fa-star-o|fa-star empty", chunk, re.I))
+    n = all_s - empty
+    if n <= 0:
+        n = len(re.findall(r"★", chunk))
+    return max(0, min(5, n))
+
+
+def _teams_event_from_slug(slug: str) -> tuple[str, str, str]:
+    slug = unescape(slug)
+    if "-vs-" not in slug:
+        pretty = slug.replace("-", " ")
+        return pretty, "", ""
+    left, right = slug.split("-vs-", 1)
+    t1 = left.replace("-", " ")
+    # event tokens often start at known series names
+    parts = right.split("-")
+    event_i = None
+    keys = {
+        "cct",
+        "esl",
+        "blast",
+        "iem",
+        "major",
+        "pgl",
+        "starladder",
+        "nodwin",
+        "exort",
+        "gluck",
+        "logitech",
+        "kibertochka",
+        "fiesta",
+        "challenger",
+        "qualifier",
+    }
+    for i, p in enumerate(parts):
+        if p.lower() in keys:
+            event_i = i
+            break
+    if event_i is None and len(parts) >= 3:
+        event_i = max(1, len(parts) - 4)
+    if event_i is None:
+        return t1, right.replace("-", " "), ""
+    t2 = " ".join(parts[:event_i])
+    event = " ".join(parts[event_i:])
+    return t1, t2, event
+
+
+def _chunk_around(html: str, pos: int, span: int = 1800) -> str:
+    start = max(0, pos - span)
+    end = min(len(html), pos + span)
+    return html[start:end]
+
+
+def parse_match_list(html: str, *, limit: int = 24) -> list[dict[str, str]]:
     seen: set[str] = set()
-    live_ids = {m.group(2) for m in LIVE_BLOCK.finditer(html)}
     rows: list[dict[str, str]] = []
     for m in MATCH_HREF.finditer(html):
-        href, mid = m.group(1), m.group(2)
+        href, mid, slug = m.group(1), m.group(2), m.group(3)
         if mid in seen:
             continue
         seen.add(mid)
-        slug = href.rsplit("/", 1)[-1]
-        title = unescape(slug.replace("-", " "))
+        chunk = _chunk_around(html, m.start())
+        prefix = html[max(0, m.start() - 1200) : m.start()]
+        live_at = [x.start() for x in re.finditer(r"liveMatch|live-match", prefix, re.I)]
+        up_at = [x.start() for x in re.finditer(r"upcomingMatch|upcoming-match", prefix, re.I)]
+        last_live = max(live_at) if live_at else -1
+        last_up = max(up_at) if up_at else -1
+        live = last_live > last_up
+        teams = [_clean(x) for x in TEAM_NAME.findall(chunk) if _clean(x)]
+        t1, t2, event = _teams_event_from_slug(slug)
+        if len(teams) >= 2:
+            t1, t2 = teams[0], teams[1]
+        ev = EVENT_NAME.search(chunk)
+        if ev:
+            event = _clean(ev.group(1)) or event
+        stars = _stars_in(chunk)
         rows.append(
             {
                 "id": mid,
                 "url": _abs(href),
-                "title": title,
-                "live": "1" if mid in live_ids else "0",
+                "team1": t1,
+                "team2": t2,
+                "event": event,
+                "title": f"{t1} vs {t2}".strip() or slug.replace("-", " "),
+                "live": "1" if live else "0",
+                "stars": str(stars),
             }
         )
         if len(rows) >= limit:
             break
+    rows.sort(key=lambda r: (0 if r["live"] == "1" else 1, -int(r["stars"])))
     return rows
 
 
@@ -57,10 +135,10 @@ def parse_match_meta(html: str, url: str = "") -> dict[str, str | None]:
 
     return {
         "url": url or None,
-        "scorebotId": g(SCOREBOT_ID),
-        "scorebotUrl": g(SCOREBOT_URL),
-        "team1": g(TEAM1),
-        "team2": g(TEAM2),
+        "scorebotId": g(re.compile(r'data-scorebot-id="(\d+)"')),
+        "scorebotUrl": g(re.compile(r'data-scorebot-url="([^"]+)"')),
+        "team1": g(re.compile(r'data-team1-name="([^"]*)"')),
+        "team2": g(re.compile(r'data-team2-name="([^"]*)"')),
     }
 
 

@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from hltv_bot.chats import add_group, group_ids, list_groups, remove_group
-from hltv_bot.format import format_telegram
+from hltv_bot.format import format_match_list, format_telegram
 from hltv_bot.http import CloudflareError
 from hltv_bot.live import merge_log, snapshot_from_scoreboard
 from hltv_bot.matches import fetch_match_meta, fetch_matches
@@ -19,9 +19,9 @@ from hltv_bot.telegram_api import Telegram
 DEFAULT_ADMIN_ID = 1442477170
 
 HELP = """\
-/matches — 今日比赛列表
-/watch id — 盯这条的 realtime，发一条消息并持续 edit
-/bump — 再发一条新消息，之后 edit 这条（避免被讨论刷下去）
+/matches — 今日比赛（LIVE / 星级 / 赛事，HTML 富文本）
+/watch id — 盯这条 realtime，发一条消息并持续 edit
+/bump — 再发一条新消息并 edit（避免被讨论刷下去）
 /stop — 停止
 
 管理员：
@@ -143,12 +143,7 @@ class HltvTelegramBot:
         if not rows:
             self.tg.send_message(chat_id, "列表是空的（或解析失败）")
             return
-        lines = ["比赛"]
-        for r in rows[:15]:
-            flag = "LIVE " if r.get("live") == "1" else ""
-            lines.append(f"{flag}{r['id']}  {r['title']}")
-        lines.append("\n/watch id")
-        self.tg.send_message(chat_id, "\n".join(lines))
+        self.tg.send_message(chat_id, format_match_list(rows))
 
     def _cmd_watch(self, chat_id: int, arg: str) -> None:
         if not arg:

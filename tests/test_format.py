@@ -1,4 +1,4 @@
-from hltv_bot.format import format_telegram
+from hltv_bot.format import format_match_list, format_telegram
 from hltv_bot.profile import pick_impersonate
 from hltv_bot.scorebot import ready_for_match_payload, scorebot_base
 from hltv_bot.snapshot import snapshot_fingerprint
@@ -66,6 +66,34 @@ def test_format_multikill_banner():
     text = format_telegram(snap)
     assert "3K" in text
     assert "sh1ro" in text
+
+
+def test_match_list_rich_text():
+    text = format_match_list(
+        [
+            {
+                "id": "2396932",
+                "team1": "G2",
+                "team2": "Spirit",
+                "event": "BLAST Open Porto 2026",
+                "live": "1",
+                "stars": "5",
+            },
+            {
+                "id": "111",
+                "team1": "A",
+                "team2": "B",
+                "event": "CCT",
+                "live": "0",
+                "stars": "0",
+            },
+        ]
+    )
+    assert "LIVE" in text
+    assert "⭐⭐⭐⭐⭐" in text
+    assert "/watch 2396932" in text
+    assert "<b>G2</b>" in text
+    assert "稍后" in text
 
 
 def test_html_escapes_nicks():

@@ -4,13 +4,24 @@ from hltv_bot.matches import parse_match_list, parse_match_meta
 
 def test_parse_match_list_dedupes():
     html = """
-    <div class="live-match"><a href="/matches/2396932/g2-vs-spirit">x</a></div>
-    <a href="/matches/2396932/g2-vs-spirit">again</a>
-    <a href="/matches/111/foo-vs-bar">y</a>
+    <div class="liveMatch-container">
+      <div class="matchRating">
+        <i class="fa fa-star"></i><i class="fa fa-star"></i><i class="fa fa-star"></i>
+      </div>
+      <div class="matchTeamName">G2</div>
+      <div class="matchTeamName">Spirit</div>
+      <div class="matchEventName">BLAST Open Porto 2026</div>
+      <a href="/matches/2396932/g2-vs-spirit-blast-open-porto-2026">x</a>
+    </div>
+    <a href="/matches/2396932/g2-vs-spirit-blast-open-porto-2026">again</a>
+    <div class="upcomingMatch"><a href="/matches/111/foo-vs-bar-cct-2026">y</a></div>
     """
     rows = parse_match_list(html)
     assert rows[0]["id"] == "2396932"
     assert rows[0]["live"] == "1"
+    assert rows[0]["stars"] == "3"
+    assert rows[0]["team1"] == "G2"
+    assert rows[0]["event"] == "BLAST Open Porto 2026"
     assert rows[1]["id"] == "111"
     assert rows[1]["live"] == "0"
 
