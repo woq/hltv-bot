@@ -95,17 +95,23 @@ def round_multikills(log: list[dict]) -> list[tuple[str, int]]:
     return ranked[:3]
 
 
-def _streak_banner(log: list[dict]) -> str:
-    bits = []
-    for nick, n in round_multikills(log):
-        label = _STREAK.get(n, f"{n}K")
-        bits.append(f"{label} <b>{h(nick)}</b>")
-    if not bits:
-        return ""
-    return "🔥 " + "  ·  ".join(bits)
+def round_kill_counts(log: list[dict]) -> dict[int, int]:
+    """id(entry) -> 1-based kill number for that killer in the current round."""
+    events = list(reversed(_this_round(log)))
+    tallies: dict[str, int] = {}
+    out: dict[int, int] = {}
+    for entry in events:
+        if entry.get("type") != "kill":
+            continue
+        killer, _ = _killer_victim(entry)
+        if not killer:
+            continue
+        tallies[killer] = tallies.get(killer, 0) + 1
+        out[id(entry)] = tallies[killer]
+    return out
 
 
-def _log_line(entry: dict) -> str | None:
+def _log_line(entry: dict, *, kill_n: int = 0) -> str | None:
     typ = entry.get("type")
     if typ == "kill":
         killer, victim = _killer_victim(entry)
@@ -118,6 +124,8 @@ def _log_line(entry: dict) -> str | None:
             extra.append("A")
         if weap:
             extra.insert(0, weap)
+        if kill_n >= 2:
+            extra.append(_STREAK.get(kill_n, f"{kill_n}K"))
         tail = f"  <i>{h(' '.join(extra))}</i>" if extra else ""
         return f"{icon} <b>{h(killer)}</b> → {h(victim)}{tail}"
     if typ in ("bomb",) or "plant" in (entry.get("text") or "").lower():
@@ -147,8 +155,8 @@ def _mono(nick: str, k, a, d, adr, width: int = 11) -> str:
     return f"{n} {int(k or 0):>2} {int(a or 0):>2} {int(d or 0):>2} {adr_s:>3}"
 
 
-def format_telegram(snap: dict, *, log_limit: int = 6) -> str:
-    """HLTV-style scoreboard compact enough for Telegram (~2–3k chars)."""
+def format_telegram(snap: dict, *, log_limit: int = 15) -> str:
+    """HLTV-style scoreboard; log keeps 2K/3K on the kill line (15 events)."""
     teams = list(snap.get("teams") or [])
     left = teams[0] if teams else {"name": (snap.get("team2") or {}).get("name") or "CT", "players": []}
     right = teams[1] if len(teams) > 1 else {"name": (snap.get("team1") or {}).get("name") or "T", "players": []}
@@ -157,18 +165,15 @@ def format_telegram(snap: dict, *, log_limit: int = 6) -> str:
     if ct is None or t is None:
         parts = str(snap.get("scoreText") or "0-0").replace(":", "-").split("-")
         ct, t = (parts + ["0", "0"])[:2]
-    left_name = h(left.get("name") or "?")
-    right_name = h(right.get("name") or "?")
     round_text = (snap.get("roundText") or "").replace(" - ", " · ")
     live = "🔴 LIVE" if snap.get("live") else "📊"
-    banner = _streak_banner(snap.get("log") or [])
+    log = snap.get("log") or []
+    kill_ns = round_kill_counts(log)
 
     lines = [
         f"{live}  <b>{h(round_text)}</b>" if round_text else live,
         f"<pre>{str(left.get('name') or '?'):<12} {ct}\n{str(right.get('name') or '?'):<12} {t}</pre>",
     ]
-    if banner:
-        lines.append(banner)
 
     for team in (left, right):
         players = list(team.get("players") or [])[:5]
@@ -182,8 +187,8 @@ def format_telegram(snap: dict, *, log_limit: int = 6) -> str:
             lines.append(f"<pre>           K  A  D ADR\n{body}</pre>")
 
     log_lines: list[str] = []
-    for entry in snap.get("log") or []:
-        line = _log_line(entry)
+    for entry in log:
+        line = _log_line(entry, kill_n=kill_ns.get(id(entry), 0))
         if not line:
             continue
         log_lines.append(line)
@@ -258,9 +263,9 @@ def format_match_list(
             lines.append(f"{tail}<code>/watch {mid}</code>")
         blocks.append("\n".join(lines))
     hint = (
-        "<i>/matches all 显示无星比赛</i>"
+        "<i>时间 UTC+8 · /matches all 显示无星比赛</i>"
         if starred_only
-        else "<i>/matches 只看有星赛事</i>"
+        else "<i>时间 UTC+8 · /matches 只看有星赛事</i>"
     )
     blocks.append(hint)
     return "\n\n".join(blocks) + "\n"

@@ -65,6 +65,7 @@ def test_format_multikill_banner():
     text = format_telegram(snap)
     assert "3K" in text
     assert "sh1ro" in text
+    assert "Game log" in text
 
 
 def test_match_list_rich_text():
