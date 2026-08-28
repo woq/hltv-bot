@@ -122,6 +122,7 @@ def iter_scorebot(
                 raise RuntimeError("scorebot handshake: no sid")
             log.info("scorebot sid=%s listId=%s", sid, list_id)
             yield ("status", {"state": "connected"})
+            yield ("tick", None)
             backoff = 1.0
 
             emit = encode_event("readyForMatch", ready_for_match_payload(list_id))
@@ -163,6 +164,7 @@ def iter_scorebot(
                         yield ev
                 if not got:
                     log.debug("poll empty sid=%s", sid)
+                yield ("tick", None)
         except CloudflareError:
             yield ("status", {"state": "disconnected", "detail": "cloudflare"})
             raise

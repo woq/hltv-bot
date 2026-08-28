@@ -1,4 +1,4 @@
-from hltv_bot.format import format_match_list, format_telegram
+from hltv_bot.format import format_match_list, format_rich_html, format_telegram
 from hltv_bot.profile import pick_impersonate
 from hltv_bot.scorebot import ready_for_match_payload, scorebot_base
 from hltv_bot.snapshot import snapshot_fingerprint
@@ -51,6 +51,9 @@ def test_format_contains_score_and_log():
     snap_down = dict(SNAP)
     snap_down["link"] = "disconnected"
     assert "断开" in format_telegram(snap_down)
+    rich = format_rich_html(SNAP)
+    assert "<table" in rich and "<ul>" in rich and "<h3>" in rich
+    assert "AWP" in rich
 
 
 def test_format_multikill_banner():

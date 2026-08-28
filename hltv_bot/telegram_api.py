@@ -58,6 +58,25 @@ class Telegram:
             raise RuntimeError(f"telegram getUpdates failed: {body}")
         return body.get("result") or []
 
+    def send_rich(self, chat_id: int | str, html: str) -> dict:
+        return self._call(
+            "sendRichMessage",
+            {
+                "chat_id": chat_id,
+                "rich_message": {"html": html, "skip_entity_detection": True},
+            },
+        )
+
+    def edit_rich(self, chat_id: int | str, message_id: int, html: str) -> dict:
+        return self._call(
+            "editMessageText",
+            {
+                "chat_id": chat_id,
+                "message_id": message_id,
+                "rich_message": {"html": html, "skip_entity_detection": True},
+            },
+        )
+
     def send_message(self, chat_id: int | str, text: str) -> dict:
         return self._call(
             "sendMessage",

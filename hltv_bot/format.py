@@ -174,6 +174,79 @@ def _mono(nick: str, k, a, d, adr, width: int = 12) -> str:
     return f"{n} {int(k or 0):>2} {int(a or 0):>2} {int(d or 0):>2} {adr_s:>4}"
 
 
+def format_rich_html(snap: dict, *, log_limit: int = 15) -> str:
+    """Telegram Bot API rich-html (table, h3/h4, ul, hr, footer)."""
+    teams = list(snap.get("teams") or [])
+    left = teams[0] if teams else {"name": (snap.get("team2") or {}).get("name") or "CT", "players": []}
+    right = teams[1] if len(teams) > 1 else {"name": (snap.get("team1") or {}).get("name") or "T", "players": []}
+    ct = snap.get("ctScore")
+    t = snap.get("tScore")
+    if ct is None or t is None:
+        parts = str(snap.get("scoreText") or "0-0").replace(":", "-").split("-")
+        ct, t = (parts + ["0", "0"])[:2]
+    round_text = (snap.get("roundText") or "").replace(" - ", " · ")
+    live = "LIVE" if snap.get("live") else "SCORE"
+    link = {
+        "connecting": "连接中",
+        "connected": "正常",
+        "idle": "正常",
+        "reconnect": "重连",
+        "disconnected": "断开",
+    }.get(str(snap.get("link") or "connected"), "正常")
+    log = snap.get("log") or []
+    kill_ns = round_kill_counts(log)
+
+    mixed: list[dict] = []
+    for team in (left, right):
+        mixed.extend(list(team.get("players") or [])[:5])
+    mixed.sort(key=lambda p: (-int(p.get("kills") or 0), float(p.get("adr") or 0)))
+
+    rows = ["<tr><th>Player</th><th align=\"right\">K</th><th align=\"right\">A</th><th align=\"right\">D</th><th align=\"right\">ADR</th></tr>"]
+    for p in mixed:
+        nick = h(p.get("nick") or "?")
+        adr = p.get("adr")
+        try:
+            adr_s = f"{float(adr):.0f}"
+        except (TypeError, ValueError):
+            adr_s = str(adr)
+        rows.append(
+            "<tr>"
+            f"<td>{nick}</td>"
+            f"<td align=\"right\">{int(p.get('kills') or 0)}</td>"
+            f"<td align=\"right\">{int(p.get('assists') or 0)}</td>"
+            f"<td align=\"right\">{int(p.get('deaths') or 0)}</td>"
+            f"<td align=\"right\">{h(adr_s)}</td>"
+            "</tr>"
+        )
+    table = (
+        '<table bordered striped compact>'
+        + "".join(rows)
+        + "</table>"
+        if mixed
+        else "<p><i>暂无选手数据</i></p>"
+    )
+
+    items = []
+    for entry in log:
+        line = _log_line(entry, kill_n=kill_ns.get(id(entry), 0))
+        if not line:
+            continue
+        items.append(f"<li>{line}</li>")
+        if len(items) >= log_limit:
+            break
+    log_html = f"<ul>{''.join(items)}</ul>" if items else "<p><i>暂无事件</i></p>"
+
+    return (
+        f"<h3>🔴 {h(live)} · {h(round_text)} · {h(link)}</h3>"
+        f"<p><b>{h(left.get('name'))}</b> <code>{ct}</code>"
+        f" &nbsp;&nbsp; "
+        f"<b>{h(right.get('name'))}</b> <code>{t}</code></p>"
+        f"<hr/>{table}<hr/>"
+        f"<h4>Game log</h4>{log_html}"
+        f"<footer>/bump</footer>"
+    )
+
+
 def format_telegram(snap: dict, *, log_limit: int = 15) -> str:
     """HLTV-style scoreboard; log keeps 2K/3K on the kill line (15 events)."""
     teams = list(snap.get("teams") or [])

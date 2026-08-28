@@ -10,7 +10,7 @@ from pathlib import Path
 log = logging.getLogger("hltv_bot")
 
 from hltv_bot.chats import add_group, group_ids, list_groups, remove_group
-from hltv_bot.format import format_match_list, format_telegram
+from hltv_bot.format import format_match_list, format_rich_html, format_telegram
 from hltv_bot.http import CloudflareError
 from hltv_bot.live import merge_log, snapshot_from_scoreboard
 from hltv_bot.matches import fetch_match_meta, fetch_matches
@@ -249,8 +249,17 @@ class HltvTelegramBot:
             self.tg.send_message(chat_id, "没有 data-scorebot-id")
             return
         t1, t2 = meta.get("team1") or "?", meta.get("team2") or "?"
-        text = f"🔴 <b>LIVE</b>  {t1}  —  {t2}\n连接 {list_id}…"
-        msg = self.tg.send_message(chat_id, text)
+        html = (
+            f"<h3>🔴 LIVE · 连接中</h3>"
+            f"<p><b>{t1}</b> — <b>{t2}</b></p>"
+            f"<p><code>{list_id}</code></p>"
+        )
+        try:
+            msg = self.tg.send_rich(chat_id, html)
+        except Exception as e:
+            log.warning("sendRichMessage failed: %s", e)
+            msg = self.tg.send_message(chat_id, f"🔴 LIVE  {t1} — {t2}\n连接 {list_id}…")
+        text = f"LIVE {t1} {t2}"
         state = WatchState(
             chat_id=chat_id,
             list_id=str(list_id),
@@ -268,8 +277,11 @@ class HltvTelegramBot:
         if not w or w.chat_id != chat_id or not w.text:
             self.tg.send_message(chat_id, "没有正在 watch 的消息")
             return
-        msg = self.tg.send_message(chat_id, w.text)
-        w.message_id = msg["message_id"]
+        try:
+            msg = self.tg.send_rich(chat_id, w.text)
+        except Exception:
+            msg = self.tg.send_message(chat_id, w.text)
+        w.message_id = msg["message_id"] if isinstance(msg, dict) else w.message_id
         w.last_bump = time.time()
 
     def _cmd_stop(self, chat_id: int) -> None:
@@ -459,6 +471,10 @@ class HltvTelegramBot:
                     board = payload
                 elif name == "log":
                     feed = merge_log(feed, payload)
+                elif name == "tick":
+                    if state.last_snap:
+                        self._flush_watch(state, format_rich_html(state.last_snap))
+                    continue
                 else:
                     continue
                 snap = snapshot_from_scoreboard(board, meta=state.meta, log=feed)
@@ -466,34 +482,20 @@ class HltvTelegramBot:
                 fp = snapshot_fingerprint(snap) + "|" + state.link
                 if fp == state.fingerprint and not status_changed:
                     continue
-                text = format_telegram(snap)
-                state.text = text
+                html = format_rich_html(snap)
+                state.text = html
                 state.last_snap = snap
                 state.fingerprint = fp
                 now = time.time()
-                force = status_changed or any(
-                    s in text for s in ("🔥 3K", "💥 4K", "⭐ ACE", "🏁")
+                force = (
+                    name == "tick"
+                    or status_changed
+                    or any(s in html for s in ("🔥 3K", "💥 4K", "⭐ ACE", "🏁"))
                 )
                 if now - state.last_edit < MIN_EDIT_INTERVAL and not force:
                     continue
-                if (
-                    self.bump_seconds
-                    and state.message_id
-                    and now - state.last_bump >= self.bump_seconds
-                ):
-                    msg = self.tg.send_message(state.chat_id, text)
-                    state.message_id = msg["message_id"]
-                    state.last_bump = now
-                    state.last_edit = now
-                    continue
-                if state.message_id:
-                    try:
-                        self.tg.edit_message(state.chat_id, state.message_id, text)
-                    except Exception:
-                        msg = self.tg.send_message(state.chat_id, text)
-                        state.message_id = msg["message_id"]
-                        state.last_bump = now
-                    state.last_edit = now
+                self._flush_watch(state, html)
+                continue
         except CloudflareError as e:
             self._mark_watch_down(state, "disconnected")
             self.tg.send_message(state.chat_id, f"Scorebot Cloudflare：{e}\n/cookie 更新后 /watch")
@@ -502,15 +504,54 @@ class HltvTelegramBot:
             if not state.stop.is_set():
                 log.info("watch ended: %s", e)
 
+    def _flush_watch(self, state: WatchState, html: str) -> None:
+        if not html:
+            return
+        now = time.time()
+        snap = state.last_snap or {}
+        fallback = format_telegram(snap) if snap else html
+        if (
+            self.bump_seconds
+            and state.message_id
+            and now - state.last_bump >= self.bump_seconds
+        ):
+            try:
+                msg = self.tg.send_rich(state.chat_id, html)
+            except Exception:
+                msg = self.tg.send_message(state.chat_id, fallback)
+            state.message_id = msg.get("message_id") if isinstance(msg, dict) else state.message_id
+            state.last_bump = now
+            state.last_edit = now
+            log.info("watch send chat=%s msg=%s", state.chat_id, state.message_id)
+            return
+        if state.message_id:
+            try:
+                self.tg.edit_rich(state.chat_id, state.message_id, html)
+                log.info("watch edit chat=%s msg=%s", state.chat_id, state.message_id)
+            except Exception as e:
+                log.warning("watch edit_rich failed: %s", e)
+                try:
+                    self.tg.edit_message(state.chat_id, state.message_id, fallback)
+                except Exception as e2:
+                    log.warning("watch edit_message failed: %s", e2)
+                    try:
+                        msg = self.tg.send_rich(state.chat_id, html)
+                    except Exception:
+                        msg = self.tg.send_message(state.chat_id, fallback)
+                    if isinstance(msg, dict) and msg.get("message_id"):
+                        state.message_id = msg["message_id"]
+                        state.last_bump = now
+            state.last_edit = now
+
     def _mark_watch_down(self, state: WatchState, link: str) -> None:
         state.link = link
         snap = dict(state.last_snap or {"live": True, "teams": [], "log": []})
         snap["link"] = link
         try:
-            text = format_telegram(snap)
-            state.text = text
+            html = format_rich_html(snap)
+            state.text = html
             if state.message_id:
-                self.tg.edit_message(state.chat_id, state.message_id, text)
+                self.tg.edit_rich(state.chat_id, state.message_id, html)
         except Exception:
             pass
 
