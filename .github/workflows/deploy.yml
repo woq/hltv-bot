@@ -19,7 +19,7 @@ jobs:
           host: 154.83.86.212
           username: root
           key: ${{ secrets.DEPLOY_SSH_KEY }}
-          script_stop: true
+          command_timeout: 10m
           script: |
             set -euo pipefail
             export PATH="/root/.local/bin:/usr/local/bin:$PATH"
