@@ -29,7 +29,7 @@ python3 -m hltv_bot import-cookie -o data/session.json
 
 ## GitHub Actions 部署
 
-推到 `main` 会 SSH 到 **154.83.86.212**，更新 `/opt/hltv-bot` 并 `systemctl restart hltv-bot`。  
+推到 `main` 会在 Actions 里 **checkout + rsync（SSH）** 到 **154.83.86.212:/opt/hltv-bot**，再 `uv sync` 并重启服务。VPS **不需要 git**。  
 `.env` / `data/session.json` 已存在则不覆盖。
 
 本机生成部署密钥并写入 GitHub Secret（**私钥不要进仓库**）：
