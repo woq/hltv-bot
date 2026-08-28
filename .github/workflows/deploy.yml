@@ -1,0 +1,40 @@
+name: deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-vps
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: SSH deploy /opt/hltv-bot
+        uses: appleboy/ssh-action@v1.2.2
+        with:
+          host: 154.83.86.212
+          username: root
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script_stop: true
+          script: |
+            set -euo pipefail
+            export PATH="/root/.local/bin:/usr/local/bin:$PATH"
+            mkdir -p /opt/hltv-bot
+            if [ ! -d /opt/hltv-bot/.git ]; then
+              git clone https://github.com/woq/hltv-bot.git /opt/hltv-bot
+            fi
+            cd /opt/hltv-bot
+            git fetch origin main
+            git reset --hard origin/main
+            uv sync
+            test -f .env || cp .env.example .env
+            test -f data/session.json || cp data/session.example.json data/session.json
+            install -m 644 deploy/hltv-bot.service /etc/systemd/system/hltv-bot.service
+            systemctl daemon-reload
+            systemctl enable hltv-bot
+            systemctl restart hltv-bot
+            systemctl is-active hltv-bot
