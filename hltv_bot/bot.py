@@ -6,6 +6,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from hltv_bot.chats import add_group, group_ids, list_groups, remove_group
 from hltv_bot.format import format_telegram
 from hltv_bot.http import CloudflareError
 from hltv_bot.live import merge_log, snapshot_from_scoreboard
@@ -15,14 +16,33 @@ from hltv_bot.session import BrowserSession, load_session, save_cookie
 from hltv_bot.snapshot import snapshot_fingerprint
 from hltv_bot.telegram_api import Telegram
 
+DEFAULT_ADMIN_ID = 1442477170
+
 HELP = """\
 /matches — 今日比赛列表
 /watch id — 盯这条的 realtime，发一条消息并持续 edit
 /bump — 再发一条新消息，之后 edit 这条（避免被讨论刷下去）
 /stop — 停止
-/status — cookie / 伪装 / 是否在看
-/cookie — 更新 Cookie（下一条消息贴 DevTools 的 Cookie 头）
+
+管理员：
+/allow — 把当前群加入推送名单（把 bot 拉进群后在群里发）
+/deny — 从名单去掉当前群（或 /deny chat_id）
+/groups — 已授权群
+/status — cookie / 伪装
+/cookie — 更新 Cookie
 """
+
+ADMIN_CMDS = frozenset(
+    {
+        "/allow",
+        "/deny",
+        "/groups",
+        "/cookie",
+        "/updatecookie",
+        "/update_cookie",
+        "/status",
+    }
+)
 
 
 @dataclass
@@ -43,34 +63,59 @@ class HltvTelegramBot:
         tg: Telegram,
         session: BrowserSession,
         *,
-        allowed_chat: str | None = None,
+        admin_ids: set[int] | None = None,
         bump_seconds: float = 0.0,
     ):
         self.tg = tg
         self.session = session
-        self.allowed_chat = str(allowed_chat) if allowed_chat else None
+        self.admin_ids = admin_ids or {DEFAULT_ADMIN_ID}
         self.bump_seconds = bump_seconds
         self.watch: WatchState | None = None
         self._thread: threading.Thread | None = None
         self._await_cookie: set[int] = set()
 
-    def allowed(self, chat_id: int) -> bool:
-        if not self.allowed_chat:
-            return True
-        return str(chat_id) == self.allowed_chat
+    def is_admin(self, user_id: int | None) -> bool:
+        return user_id is not None and int(user_id) in self.admin_ids
 
-    def handle_text(self, chat_id: int, text: str, *, message_id: int | None = None) -> None:
-        if not self.allowed(chat_id):
-            return
+    def chat_allowed(self, chat_id: int, *, user_id: int | None = None) -> bool:
+        if self.is_admin(user_id):
+            return True
+        return int(chat_id) in group_ids()
+
+    def handle_text(
+        self,
+        chat_id: int,
+        text: str,
+        *,
+        message_id: int | None = None,
+        user_id: int | None = None,
+        chat_title: str = "",
+        chat_type: str = "",
+    ) -> None:
         parts = text.strip().split()
         cmd = (parts[0].split("@")[0] if parts else "").lower()
         arg = " ".join(parts[1:]) if len(parts) > 1 else ""
         if chat_id in self._await_cookie and not cmd.startswith("/"):
+            if not self.is_admin(user_id):
+                return
             self._apply_cookie(chat_id, text, message_id=message_id)
+            return
+        if cmd in ADMIN_CMDS and not self.is_admin(user_id):
+            return
+        if cmd not in ADMIN_CMDS | {"/start", "/help"} and not self.chat_allowed(
+            chat_id, user_id=user_id
+        ):
             return
         if cmd in ("/start", "/help"):
             self._await_cookie.discard(chat_id)
-            self.tg.send_message(chat_id, HELP)
+            if self.is_admin(user_id) or self.chat_allowed(chat_id, user_id=user_id):
+                self.tg.send_message(chat_id, HELP)
+        elif cmd == "/allow":
+            self._cmd_allow(chat_id, arg, chat_title=chat_title, chat_type=chat_type)
+        elif cmd == "/deny":
+            self._cmd_deny(chat_id, arg)
+        elif cmd == "/groups":
+            self._cmd_groups(chat_id)
         elif cmd == "/matches":
             self._await_cookie.discard(chat_id)
             self._cmd_matches(chat_id)
@@ -163,8 +208,65 @@ class HltvTelegramBot:
                     f"session: {self.session.path}",
                     watch_line,
                     f"auto-bump: {self.bump_seconds}s" if self.bump_seconds else "auto-bump: off（用 /bump）",
+                    f"admins: {', '.join(str(i) for i in sorted(self.admin_ids))}",
+                    f"groups: {len(list_groups())}",
                 ]
             ),
+        )
+
+    def _cmd_allow(self, chat_id: int, arg: str, *, chat_title: str, chat_type: str) -> None:
+        target = arg.strip()
+        title = chat_title
+        if target.lstrip("-").isdigit():
+            gid = int(target)
+            title = title if gid == chat_id else ""
+        elif chat_type in ("group", "supergroup"):
+            gid = int(chat_id)
+        else:
+            self.tg.send_message(chat_id, "在目标群里发 /allow，或 /allow -100xxxxxxxxxx")
+            return
+        added = add_group(gid, title)
+        self.tg.send_message(
+            chat_id,
+            ("已加入" if added else "已在名单里") + f" <code>{gid}</code> {title}".rstrip(),
+        )
+
+    def _cmd_deny(self, chat_id: int, arg: str) -> None:
+        target = arg.strip()
+        if target.lstrip("-").isdigit():
+            gid = int(target)
+        else:
+            gid = int(chat_id)
+        if remove_group(gid):
+            self.tg.send_message(chat_id, f"已移除 <code>{gid}</code>")
+        else:
+            self.tg.send_message(chat_id, f"名单里没有 <code>{gid}</code>")
+
+    def _cmd_groups(self, chat_id: int) -> None:
+        rows = list_groups()
+        if not rows:
+            self.tg.send_message(chat_id, "还没有授权群。把 bot 拉进群后发 /allow")
+            return
+        lines = ["授权群"]
+        for g in rows:
+            lines.append(f"<code>{g.get('id')}</code>  {g.get('title') or ''}")
+        self.tg.send_message(chat_id, "\n".join(lines))
+
+    def handle_added_to_chat(self, upd: dict) -> None:
+        member = upd.get("my_chat_member") or {}
+        chat = member.get("chat") or {}
+        new = (member.get("new_chat_member") or {}).get("status") or ""
+        old = (member.get("old_chat_member") or {}).get("status") or ""
+        if new not in ("member", "administrator") or old in ("member", "administrator"):
+            return
+        from_id = (member.get("from") or {}).get("id")
+        cid = chat.get("id")
+        title = chat.get("title") or ""
+        if cid is None or not self.is_admin(from_id):
+            return
+        self.tg.send_message(
+            cid,
+            f"已进群 <b>{title}</b>\n管理员发 /allow 加入推送名单",
         )
 
     def _session_path(self) -> Path:
@@ -263,16 +365,30 @@ class HltvTelegramBot:
                 continue
             for upd in updates:
                 offset = upd["update_id"] + 1
+                if upd.get("my_chat_member"):
+                    try:
+                        self.handle_added_to_chat(upd)
+                    except Exception:
+                        pass
+                    continue
                 msg = upd.get("message") or upd.get("edited_message") or {}
                 text = msg.get("text") or ""
-                chat = (msg.get("chat") or {}).get("id")
-                if chat is None or not text:
+                chat = msg.get("chat") or {}
+                cid = chat.get("id")
+                if cid is None or not text:
                     continue
                 try:
-                    self.handle_text(int(chat), text, message_id=msg.get("message_id"))
+                    self.handle_text(
+                        int(cid),
+                        text,
+                        message_id=msg.get("message_id"),
+                        user_id=(msg.get("from") or {}).get("id"),
+                        chat_title=chat.get("title") or "",
+                        chat_type=chat.get("type") or "",
+                    )
                 except Exception as e:
                     try:
-                        self.tg.send_message(chat, f"错误: {e}")
+                        self.tg.send_message(cid, f"错误: {e}")
                     except Exception:
                         pass
 
@@ -291,9 +407,20 @@ def bot_from_env() -> HltvTelegramBot:
     if not Path(session_path).exists():
         raise SystemExit(f"缺少 {session_path}（复制 data/session.example.json 并贴入 Cookie）")
     bump = float(os.environ.get("HLTV_BUMP_SECONDS") or "0")
+    raw_admins = os.environ.get("TELEGRAM_ADMIN_IDS") or str(DEFAULT_ADMIN_ID)
+    admin_ids: set[int] = set()
+    for part in raw_admins.replace(";", ",").split(","):
+        part = part.strip()
+        if part.lstrip("-").isdigit():
+            admin_ids.add(int(part))
+    if not admin_ids:
+        admin_ids = {DEFAULT_ADMIN_ID}
+    seed = os.environ.get("TELEGRAM_CHAT_ID") or ""
+    if seed.strip().lstrip("-").isdigit():
+        add_group(int(seed.strip()), "seed")
     return HltvTelegramBot(
         Telegram(token),
         load_session(session_path),
-        allowed_chat=os.environ.get("TELEGRAM_CHAT_ID") or None,
+        admin_ids=admin_ids,
         bump_seconds=bump,
     )

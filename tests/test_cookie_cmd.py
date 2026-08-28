@@ -1,4 +1,4 @@
-from hltv_bot.bot import HltvTelegramBot
+from hltv_bot.bot import DEFAULT_ADMIN_ID, HltvTelegramBot
 from hltv_bot.session import BrowserSession, parse_cookie_line
 
 
@@ -30,12 +30,13 @@ def test_cookie_command_waits_then_saves(tmp_path):
     sess = BrowserSession(impersonate="chrome131", headers={}, cookie="", path=sess_path)
     tg = FakeTg()
     bot = HltvTelegramBot(tg, sess)
-    bot.handle_text(1, "/cookie")
+    bot.handle_text(1, "/cookie", user_id=DEFAULT_ADMIN_ID)
     assert 1 in bot._await_cookie
     bot.handle_text(
         1,
         "Cookie: cf_clearance=tok; __cf_bm=bm",
         message_id=99,
+        user_id=DEFAULT_ADMIN_ID,
     )
     assert 1 not in bot._await_cookie
     assert bot.session.has_clearance()

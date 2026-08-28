@@ -26,7 +26,13 @@ class Telegram:
         return body["result"]
 
     def get_updates(self, offset: int = 0, timeout: int = 25) -> list[dict]:
-        q = urlencode({"offset": offset, "timeout": timeout})
+        q = urlencode(
+            {
+                "offset": offset,
+                "timeout": timeout,
+                "allowed_updates": json.dumps(["message", "my_chat_member"]),
+            }
+        )
         req = Request(f"{self.base}/getUpdates?{q}")
         with urlopen(req, timeout=timeout + 10) as resp:
             body = json.loads(resp.read().decode("utf-8"))

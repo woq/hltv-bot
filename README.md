@@ -81,7 +81,14 @@ python3 -m hltv_bot bot
 | `/bump` | **新发一条**，之后 edit 新消息 |
 | `/stop` | 停 |
 | `/status` | impersonate / cookie 名 |
-| `/cookie` | 下一条消息贴 Cookie 头，写入 session 并尽量删除原消息 |
+| `/cookie` | 下一条消息贴 Cookie 头（仅管理员） |
+| `/allow` | 管理员：把**当前群**加入推送名单 |
+| `/deny` | 管理员：去掉当前群或 `/deny chat_id` |
+| `/groups` | 管理员：列出已授权群 |
+
+默认管理员 Telegram user id：`1442477170`（`.env` 里 `TELEGRAM_ADMIN_IDS`，逗号分隔可加多个）。
+
+把 bot 拉进私有群后，用该账号发 `/allow`。直播命令只在已授权群生效；`/allow` `/deny` `/groups` `/cookie` `/status` 仅管理员。
 
 `HLTV_BUMP_SECONDS=300` 可定时自动 bump（默认 0，只手动 `/bump`）。
 
