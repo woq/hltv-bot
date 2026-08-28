@@ -59,6 +59,22 @@ CMD_COOLDOWN = {
 DEFAULT_CMD_COOLDOWN = 1.2
 MIN_EDIT_INTERVAL = 1.8
 
+USER_BOT_COMMANDS = [
+    {"command": "matches", "description": "今日有星比赛（时间 UTC+8）"},
+    {"command": "matchs", "description": "同 matches"},
+    {"command": "watch", "description": "实时比分和 Game log"},
+    {"command": "bump", "description": "新发一条直播消息并继续更新"},
+    {"command": "stop", "description": "停止当前直播"},
+    {"command": "help", "description": "命令说明"},
+]
+ADMIN_BOT_COMMANDS = USER_BOT_COMMANDS + [
+    {"command": "allow", "description": "授权当前群"},
+    {"command": "deny", "description": "取消授权当前群"},
+    {"command": "groups", "description": "已授权群列表"},
+    {"command": "cookie", "description": "更新 HLTV Cookie"},
+    {"command": "status", "description": "运行状态"},
+]
+
 
 @dataclass
 class WatchState:
@@ -387,7 +403,23 @@ class HltvTelegramBot:
             if not state.stop.is_set():
                 self.tg.send_message(state.chat_id, f"watch 结束: {e}")
 
+    def register_commands(self) -> None:
+        self.tg.set_my_commands(USER_BOT_COMMANDS)
+        self.tg.set_my_commands(USER_BOT_COMMANDS, {"type": "all_group_chats"})
+        self.tg.set_my_commands(ADMIN_BOT_COMMANDS, {"type": "all_private_chats"})
+        for aid in self.admin_ids:
+            try:
+                self.tg.set_my_commands(
+                    ADMIN_BOT_COMMANDS, {"type": "chat", "chat_id": aid}
+                )
+            except Exception:
+                pass
+
     def run(self) -> None:
+        try:
+            self.register_commands()
+        except Exception:
+            pass
         offset = 0
         while True:
             try:

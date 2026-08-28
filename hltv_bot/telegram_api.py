@@ -81,6 +81,12 @@ class Telegram:
             },
         )
 
+    def set_my_commands(self, commands: list[dict], scope: dict | None = None) -> None:
+        payload: dict = {"commands": commands}
+        if scope:
+            payload["scope"] = scope
+        self._call("setMyCommands", payload)
+
     def delete_message(self, chat_id: int | str, message_id: int) -> None:
         try:
             self._call(

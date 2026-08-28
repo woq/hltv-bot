@@ -96,6 +96,8 @@ python3 -m hltv_bot bot
 
 ## 建议跑在哪
 
+启动时会调用 Telegram `setMyCommands`：群里是 matches/watch/bump/stop，私聊管理员额外有 allow/deny/groups/cookie/status。点输入框 `/` 就能看到。若群里 bot 收不到命令，去 @BotFather → /setprivacy → Disable。
+
 限流：`/matches` 8s、`/watch` 6s、`/bump` 4s；live **edit 最少间隔 1.8s**（3K/ACE/回合结束立刻推）；HLTV 列表缓存 45s；Telegram 429 会按 `retry_after` 重试一次。
 
 采集和 bot **跑在和 Chrome 同一出口 IP 的 PC** 上。手机只开 Telegram。MCP 只用来烤 cookie / 调试，不要当 24h 进程。
