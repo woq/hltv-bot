@@ -76,17 +76,15 @@ python3 -m hltv_bot bot
 
 | 命令 | |
 |---|---|
-| `/matches` | 有星比赛：按赛事分组、星级排序；开赛时间为 **UTC+8 的 24 小时制**（HLTV 的 unix 时间戳换算，不是美式上午/下午）；`/matchs` 同义 |
-| `/matches all` | 全部比赛（含无星） |
-
-| `/watch <id>` | 发一条 LIVE 消息并持续 edit |
-| `/bump` | **新发一条**，之后 edit 新消息 |
-| `/stop` | 停 |
-| `/status` | impersonate / cookie 名 |
-| `/cookie` | 下一条消息贴 Cookie 头（仅管理员） |
-| `/allow` | 管理员：把**当前群**加入推送名单 |
-| `/deny` | 管理员：去掉当前群或 `/deny chat_id` |
-| `/groups` | 管理员：列出已授权群 |
+| `/matches` | 今日比赛 |
+| `/watch` | 实时观赛(自动更新) |
+| `/bump` | 顶到最新 |
+| `/stop` | 停止观赛 |
+| `/allow` | 授权本群 |
+| `/deny` | 取消授权 |
+| `/groups` | 已授权群 |
+| `/cookie` | 更新 Cookie |
+| `/status` | 状态 |
 
 默认管理员 Telegram user id：`1442477170`（`.env` 里 `TELEGRAM_ADMIN_IDS`，逗号分隔可加多个）。
 
