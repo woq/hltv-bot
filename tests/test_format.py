@@ -72,6 +72,14 @@ def test_match_list_rich_text():
     text = format_match_list(
         [
             {
+                "id": "111",
+                "team1": "A",
+                "team2": "B",
+                "event": "CCT",
+                "live": "1",
+                "stars": "1",
+            },
+            {
                 "id": "2396932",
                 "team1": "G2",
                 "team2": "Spirit",
@@ -80,20 +88,21 @@ def test_match_list_rich_text():
                 "stars": "5",
             },
             {
-                "id": "111",
-                "team1": "A",
-                "team2": "B",
-                "event": "CCT",
+                "id": "2396933",
+                "team1": "NaVi",
+                "team2": "paiN",
+                "event": "BLAST Open Porto 2026",
                 "live": "0",
-                "stars": "0",
+                "stars": "4",
             },
         ]
     )
-    assert "LIVE" in text
+    assert text.index("BLAST") < text.index("CCT")
+    assert text.index("G2") < text.index("NaVi")
     assert "⭐⭐⭐⭐⭐" in text
     assert "/watch 2396932" in text
-    assert "<b>G2</b>" in text
-    assert "稍后" in text
+    assert text.count("BLAST Open Porto 2026") == 1
+    assert "🔴" in text
 
 
 def test_html_escapes_nicks():

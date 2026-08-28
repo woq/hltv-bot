@@ -192,32 +192,46 @@ def format_telegram(snap: dict, *, log_limit: int = 10) -> str:
 def format_match_list(
     rows: list[dict],
     *,
-    live_limit: int = 10,
-    upcoming_limit: int = 8,
+    limit: int = 24,
 ) -> str:
-    live = [r for r in rows if r.get("live") == "1"][:live_limit]
-    upcoming = [r for r in rows if r.get("live") != "1"][:upcoming_limit]
+    rows = list(rows)[:limit]
+    if not rows:
+        return "今天没有抓到比赛。"
 
-    def card(r: dict) -> str:
-        n = int(r.get("stars") or 0)
-        stars = ("⭐" * n + " ") if n else ""
-        t1 = h(r.get("team1") or r.get("title") or "?")
-        t2 = h(r.get("team2") or "")
-        vs = f"<b>{t1}</b> vs <b>{t2}</b>" if t2 else f"<b>{t1}</b>"
-        event = h(r.get("event") or "")
-        mid = h(r.get("id") or "")
-        parts = [f"{stars}{vs}".strip()]
-        if event:
-            parts.append(f"<i>{event}</i>")
-        parts.append(f"<code>/watch {mid}</code>")
-        return "\n".join(parts)
+    def star_n(r: dict) -> int:
+        try:
+            return int(r.get("stars") or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    grouped: dict[str, list[dict]] = {}
+    for r in rows:
+        key = (r.get("event") or "").strip() or "其它"
+        grouped.setdefault(key, []).append(r)
+
+    def event_key(item: tuple[str, list[dict]]) -> tuple:
+        name, ms = item
+        stars = [star_n(x) for x in ms]
+        live_n = sum(1 for x in ms if x.get("live") == "1")
+        return (-max(stars, default=0), -live_n, name.lower())
+
+    def match_key(r: dict) -> tuple:
+        return (-star_n(r), 0 if r.get("live") == "1" else 1)
 
     blocks: list[str] = []
-    if live:
-        blocks.append("🔴 <b>LIVE</b>\n\n" + "\n\n".join(card(r) for r in live))
-    if upcoming:
-        blocks.append("📅 <b>稍后</b>\n\n" + "\n\n".join(card(r) for r in upcoming))
-    if not blocks:
-        return "今天没有抓到比赛。"
+    for event, matches in sorted(grouped.items(), key=event_key):
+        matches = sorted(matches, key=match_key)
+        lines = [f"📌 <b>{h(event)}</b>"]
+        for r in matches:
+            n = star_n(r)
+            stars = ("⭐" * n + " ") if n else ""
+            live = "🔴 " if r.get("live") == "1" else ""
+            t1 = h(r.get("team1") or r.get("title") or "?")
+            t2 = h(r.get("team2") or "")
+            vs = f"<b>{t1}</b> vs <b>{t2}</b>" if t2 else f"<b>{t1}</b>"
+            mid = h(r.get("id") or "")
+            lines.append(f"{live}{stars}{vs}".strip())
+            lines.append(f"<code>/watch {mid}</code>")
+        blocks.append("\n".join(lines))
     blocks.append("<i>点复制 /watch id 发送</i>")
     return "\n\n".join(blocks) + "\n"

@@ -19,7 +19,7 @@ from hltv_bot.telegram_api import Telegram
 DEFAULT_ADMIN_ID = 1442477170
 
 HELP = """\
-/matches — 今日比赛（LIVE / 星级 / 赛事，HTML 富文本）
+/matches — 按赛事分组、星级排序（HTML）
 /watch id — 盯这条 realtime，发一条消息并持续 edit
 /bump — 再发一条新消息并 edit（避免被讨论刷下去）
 /stop — 停止
