@@ -35,6 +35,7 @@ jobs:
             --exclude '.env' \
             --exclude 'data/session.json' \
             --exclude 'data/chats.json' \
+            --exclude 'data/settings.json' \
             ./ "$HOST:/opt/hltv-bot/"
           ssh "$HOST" bash -s <<'REMOTE'
           set -euo pipefail

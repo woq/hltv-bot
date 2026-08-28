@@ -7,11 +7,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from hltv_bot.chats import add_group, group_ids, list_groups, remove_group
+from hltv_bot.fixtures import MOCK_MATCHES, iter_mock_scorebot, mock_meta
 from hltv_bot.format import format_match_list, format_telegram
 from hltv_bot.http import CloudflareError
 from hltv_bot.live import merge_log, snapshot_from_scoreboard
 from hltv_bot.matches import fetch_match_meta, fetch_matches
 from hltv_bot.scorebot import iter_scorebot, scorebot_base
+from hltv_bot.settings import is_real, parse_real_arg, set_real
 from hltv_bot.session import BrowserSession, load_session, save_cookie
 from hltv_bot.snapshot import snapshot_fingerprint
 from hltv_bot.telegram_api import Telegram
@@ -31,6 +33,8 @@ HELP = """\
 /groups — 已授权群
 /status — cookie / 伪装
 /cookie — 更新 Cookie
+/real — 关闭真实请求（默认，用测试数据）
+/real 1 — 开启真实 HLTV 请求
 """
 
 ADMIN_CMDS = frozenset(
@@ -42,6 +46,7 @@ ADMIN_CMDS = frozenset(
         "/updatecookie",
         "/update_cookie",
         "/status",
+        "/real",
     }
 )
 
@@ -134,19 +139,25 @@ class HltvTelegramBot:
             self._cmd_status(chat_id)
         elif cmd in ("/cookie", "/updatecookie", "/update_cookie"):
             self._cmd_cookie(chat_id, arg, message_id=message_id)
+        elif cmd == "/real":
+            self._cmd_real(chat_id, arg)
 
     def _cmd_matches(self, chat_id: int, arg: str = "") -> None:
-        try:
-            rows = fetch_matches(self.session)
-        except CloudflareError as e:
-            self.tg.send_message(chat_id, f"Cloudflare 拦了列表页：{e}\n发 /cookie 更新 Cookie")
-            return
+        all_mode = arg.strip().lower() in {"all", "全部", "*", "full"}
+        if is_real():
+            try:
+                rows = fetch_matches(self.session)
+            except CloudflareError as e:
+                self.tg.send_message(chat_id, f"Cloudflare 拦了列表页：{e}\n发 /cookie 更新 Cookie")
+                return
+        else:
+            rows = list(MOCK_MATCHES)
         if not rows:
             self.tg.send_message(chat_id, "列表是空的（或解析失败）")
             return
-        all_mode = arg.strip().lower() in {"all", "全部", "*", "full"}
+        note = "" if is_real() else "🧪 <i>测试数据 · /real 1 接真源</i>\n\n"
         self.tg.send_message(
-            chat_id, format_match_list(rows, starred_only=not all_mode)
+            chat_id, note + format_match_list(rows, starred_only=not all_mode)
         )
 
     def _cmd_watch(self, chat_id: int, arg: str) -> None:
@@ -154,17 +165,23 @@ class HltvTelegramBot:
             self.tg.send_message(chat_id, "用法: /watch 2396932")
             return
         self._stop_watch()
-        try:
-            meta = fetch_match_meta(self.session, arg.strip())
-        except CloudflareError as e:
-            self.tg.send_message(chat_id, f"详情页 Cloudflare：{e}\n发 /cookie 更新 Cookie")
-            return
-        list_id = meta.get("scorebotId") or "".join(ch for ch in arg if ch.isdigit())
+        raw = arg.strip()
+        if is_real():
+            try:
+                meta = fetch_match_meta(self.session, raw)
+            except CloudflareError as e:
+                self.tg.send_message(chat_id, f"详情页 Cloudflare：{e}\n发 /cookie 更新 Cookie")
+                return
+        else:
+            digits = "".join(ch for ch in raw if ch.isdigit()) or "2396932"
+            meta = mock_meta(digits)
+        list_id = meta.get("scorebotId") or "".join(ch for ch in raw if ch.isdigit())
         if not list_id:
             self.tg.send_message(chat_id, "没有 data-scorebot-id")
             return
         t1, t2 = meta.get("team1") or "?", meta.get("team2") or "?"
-        text = f"LIVE | {t1} vs {t2}\n连接 Scorebot {list_id}…\n\n讨论多了发 /bump"
+        mode = "" if is_real() else "\n🧪 测试数据"
+        text = f"🔴 <b>LIVE</b>  {t1}  —  {t2}{mode}\n连接 {list_id}…"
         msg = self.tg.send_message(chat_id, text)
         state = WatchState(
             chat_id=chat_id,
@@ -209,9 +226,21 @@ class HltvTelegramBot:
                     f"auto-bump: {self.bump_seconds}s" if self.bump_seconds else "auto-bump: off（用 /bump）",
                     f"admins: {', '.join(str(i) for i in sorted(self.admin_ids))}",
                     f"groups: {len(list_groups())}",
+                    f"real: {'on' if is_real() else 'off（测试数据）'}",
                 ]
             ),
         )
+
+    def _cmd_real(self, chat_id: int, arg: str) -> None:
+        parsed = parse_real_arg(arg)
+        if parsed is None:
+            self.tg.send_message(chat_id, "用法: /real 关闭真实请求 · /real 1 开启")
+            return
+        on = set_real(parsed)
+        if on:
+            self.tg.send_message(chat_id, "已开启真实 HLTV 请求")
+        else:
+            self.tg.send_message(chat_id, "已关闭真实请求，/matches /watch 用测试数据")
 
     def _cmd_allow(self, chat_id: int, arg: str, *, chat_title: str, chat_type: str) -> None:
         target = arg.strip()
@@ -313,9 +342,15 @@ class HltvTelegramBot:
         board: dict = {}
         log: list = []
         try:
-            for name, payload in iter_scorebot(
-                self.session, state.list_id, base=scorebot_base(state.meta.get("scorebotUrl"))
-            ):
+            if is_real():
+                stream = iter_scorebot(
+                    self.session,
+                    state.list_id,
+                    base=scorebot_base(state.meta.get("scorebotUrl")),
+                )
+            else:
+                stream = iter_mock_scorebot(state.list_id)
+            for name, payload in stream:
                 if state.stop.is_set() or self.watch is not state:
                     return
                 if name == "scoreboard" and isinstance(payload, dict):

@@ -78,6 +78,8 @@ python3 -m hltv_bot bot
 |---|---|
 | `/matches` | 默认只列出**有星级**的比赛，按赛事分组、星级排序 |
 | `/matches all` | 全部比赛（含无星） |
+| `/real` | 管理员：关闭真实请求（默认，测试数据） |
+| `/real 1` | 管理员：开启真实 HLTV |
 | `/watch <id>` | 发一条 LIVE 消息并持续 edit |
 | `/bump` | **新发一条**，之后 edit 新消息 |
 | `/stop` | 停 |
