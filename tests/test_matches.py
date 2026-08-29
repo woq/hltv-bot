@@ -265,6 +265,45 @@ def test_merge_log_keeps_kill_and_assist_burst():
     assert len(log) == 2
 
 
+def test_merge_log_live_burst_not_replayed_against_prior_round():
+    prior = merge_log(
+        [],
+        {
+            "log": [
+                {"Kill": {"killerNick": "m0NESY", "victimNick": "arT", "weapon": "awp", "headShot": True, "eventId": 1}},
+                {"Kill": {"killerNick": "TeSeS", "victimNick": "try", "weapon": "ak47", "headShot": False, "eventId": 2}},
+            ]
+        },
+    )
+    prior = [{"type": "round_start", "killer": "回合", "text": "开始", "detail": "开始"}] + prior
+    live = merge_log(
+        prior,
+        {
+            "log": [
+                {"Kill": {"killerNick": "m0NESY", "victimNick": "arT", "weapon": "awp", "headShot": True, "eventId": 3}},
+                {"Assist": {"assisterNick": "dumau", "victimNick": "arT"}},
+                {"Kill": {"killerNick": "TeSeS", "victimNick": "try", "weapon": "ak47", "headShot": False, "eventId": 4}},
+                {"Assist": {"assisterNick": "s1mple", "victimNick": "try"}},
+            ]
+        },
+    )
+    kills = [x for x in live if x.get("type") == "kill"]
+    assert len(kills) == 4
+
+
+def test_merge_log_allows_reused_event_id_after_round_start():
+    first = merge_log(
+        [],
+        {"log": [{"Kill": {"killerNick": "n1ssim", "victimNick": "kyousuke", "weapon": "ak47", "headShot": True, "eventId": 1}}]},
+    )
+    nxt = merge_log(
+        [{"type": "round_start", "killer": "回合", "text": "开始", "detail": "开始"}] + first,
+        {"log": [{"Kill": {"killerNick": "m0NESY", "victimNick": "arT", "weapon": "glock", "headShot": True, "eventId": 1}}]},
+    )
+    assert nxt[0]["killer"] == "m0NESY"
+    assert sum(1 for x in nxt if x.get("type") == "kill") == 2
+
+
 def test_mark_new_round_inserts_start():
     feed = [{"type": "kill", "killer": "a", "victim": "b", "weapon": "ak47"}]
     out, n = mark_new_round(feed, {"currentRound": 13}, 12)
@@ -274,6 +313,13 @@ def test_mark_new_round_inserts_start():
     assert n2 == 13
     assert again[0]["type"] == "round_start"
     assert sum(1 for x in again if x.get("type") == "round_start") == 1
+    mapped, n3 = mark_new_round(
+        [{"type": "kill", "killer": "a", "victim": "b", "weapon": "ak47"}],
+        {"currentRound": 1},
+        24,
+    )
+    assert n3 == 1
+    assert mapped[0]["type"] == "round_start"
 
 
 def test_patch_board_uses_last_round_end_score():

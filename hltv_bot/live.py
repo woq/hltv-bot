@@ -148,11 +148,11 @@ def mark_new_round(
     board: dict[str, Any],
     prev_round: int | None,
 ) -> tuple[list[dict[str, Any]], int | None]:
-    """Insert a round_start when scoreboard currentRound increases (half / next round)."""
+    """Insert a round_start when scoreboard currentRound changes (half / next map)."""
     n = _coerce_round(board)
     if n is None:
         return feed, prev_round
-    if prev_round is not None and n > prev_round:
+    if prev_round is not None and n != prev_round:
         if not feed or feed[0].get("type") != "round_start":
             feed = [
                 {"type": "round_start", "killer": "回合", "text": "开始", "detail": "开始"},
@@ -296,25 +296,41 @@ def merge_log(existing: list[dict[str, Any]], incoming: Any) -> list[dict[str, A
     if not prepared:
         return existing
 
-    seen_ids = {str(x.get("event_id")) for x in existing if x.get("event_id")}
+    seen_ids_all = {str(x.get("event_id")) for x in existing if x.get("event_id")}
+    seen_ids_round = {
+        str(x.get("event_id")) for x in _this_round_entries(existing) if x.get("event_id")
+    }
     seen_fb = {str(x.get("_raw")) for x in _this_round_entries(existing) if x.get("_raw")}
     seen_sem = {k for x in existing if (k := _semantic_key(x))}
     incoming_ids = [str(x.get("event_id")) for x in prepared if x.get("event_id")]
-    if existing and incoming_ids and all(i in seen_ids for i in incoming_ids):
+    if existing and incoming_ids and all(i in seen_ids_round for i in incoming_ids):
         live_log.debug("log replay skipped n=%s", len(prepared))
         return existing
+    if (
+        existing
+        and incoming_ids
+        and len(incoming_ids) >= 4
+        and all(i in seen_ids_all for i in incoming_ids)
+    ):
+        live_log.debug("log history replay skipped n=%s", len(prepared))
+        return existing
 
-    matched = sum(1 for x in prepared if (k := _semantic_key(x)) and k in seen_sem)
-    replay = bool(existing) and len(prepared) >= 4 and matched >= max(2, len(prepared) // 2)
+    kill_rows = [x for x in prepared if x.get("type") == "kill"]
+    kill_matched = sum(1 for x in kill_rows if (k := _semantic_key(x)) and k in seen_sem)
+    replay = (
+        bool(existing)
+        and len(kill_rows) >= 4
+        and kill_matched >= max(2, len(kill_rows) // 2)
+    )
     if replay:
-        live_log.debug("log dump replay matched=%s n=%s", matched, len(prepared))
+        live_log.debug("log dump replay kills=%s matched=%s", len(kill_rows), kill_matched)
 
     out = list(existing)
     pairs = _pairs_this_round(out)
     added = 0
     for formatted in prepared:
         eid = formatted.get("event_id")
-        if eid and eid in seen_ids:
+        if eid and eid in seen_ids_round:
             continue
         fb = formatted.get("_raw")
         if fb and fb in seen_fb:
@@ -326,7 +342,7 @@ def merge_log(existing: list[dict[str, Any]], incoming: Any) -> list[dict[str, A
         if pair and pair in pairs:
             continue
         if eid:
-            seen_ids.add(str(eid))
+            seen_ids_round.add(str(eid))
         if fb:
             seen_fb.add(str(fb))
         if sem:
@@ -336,6 +352,7 @@ def merge_log(existing: list[dict[str, Any]], incoming: Any) -> list[dict[str, A
         if formatted.get("type") in _ROUND_BREAK:
             pairs = set()
             seen_fb = set()
+            seen_ids_round = set()
         elif pair:
             pairs.add(pair)
     if added:

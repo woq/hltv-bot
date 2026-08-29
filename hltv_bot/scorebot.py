@@ -86,11 +86,17 @@ def _is_timeout(exc: BaseException) -> bool:
     return "timed out" in msg or "timeout" in msg or "curl: (28)" in msg
 
 
+_POLL_5XX = frozenset({502, 503, 504, 520, 521, 522, 523, 524})
+
+
+def is_poll_5xx(status: int) -> bool:
+    return status in _POLL_5XX
+
+
 def _is_http_error(exc: BaseException) -> bool:
     msg = str(exc)
-    return "HTTP " in msg or "status" in msg.lower() and any(
-        s in msg for s in ("502", "503", "504", "520", "521", "522", "523", "524")
-    )
+    has_5xx = any(s in msg for s in ("502", "503", "504", "520", "521", "522", "523", "524"))
+    return has_5xx and ("HTTP " in msg or "status" in msg.lower())
 
 
 def reconnect_wait(backoff: float, *, http_5xx: bool = False) -> float:
@@ -236,6 +242,7 @@ def iter_scorebot(
                     if _is_timeout(e):
                         timed_out = True
                         misses += 1
+                        http_fails = 0
                         log.info("poll timeout n=%s (idle ok)", misses)
                         if misses == 1 or misses % 5 == 0:
                             yield ("status", {"state": "idle", "misses": misses})
@@ -248,6 +255,8 @@ def iter_scorebot(
                 if resp.status_code in (403, 429):
                     raise CloudflareError(resp.status_code, str(resp.url))
                 if resp.status_code >= 400:
+                    if not is_poll_5xx(resp.status_code):
+                        raise RuntimeError(f"scorebot poll HTTP {resp.status_code}")
                     http_fails += 1
                     log.warning(
                         "poll http %s n=%s sid=%s elapsed=%.2fs bytes=%s body=%s",

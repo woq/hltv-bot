@@ -8,6 +8,7 @@ from hltv_bot.scorebot import (
     RECONNECT_MIN,
     _is_http_error,
     _is_timeout,
+    is_poll_5xx,
     next_backoff,
     poll_gap,
     reconnect_wait,
@@ -70,6 +71,11 @@ def test_next_backoff_doubles_and_caps():
 def test_http_502_is_http_error():
     assert _is_http_error(RuntimeError("scorebot poll HTTP 502"))
     assert not _is_http_error(RuntimeError("curl: (28) timed out"))
+    assert not _is_http_error(RuntimeError("scorebot poll HTTP 400"))
+    assert is_poll_5xx(502)
+    assert is_poll_5xx(524)
+    assert not is_poll_5xx(400)
+    assert not is_poll_5xx(403)
 
 
 def test_poll_gap_empty_vs_event_vs_timeout():
