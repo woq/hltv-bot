@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -54,13 +55,24 @@ def _players(side: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
     return out
 
 
+def _event_id(item: dict[str, Any]) -> str | None:
+    for v in item.values():
+        if isinstance(v, dict) and v.get("eventId") is not None:
+            return str(v.get("eventId"))
+    return None
+
+
+def _fallback_key(item: dict[str, Any]) -> str:
+    return json.dumps(item, sort_keys=True, separators=(",", ":"), default=str)
+
+
 def format_log_item(item: dict[str, Any]) -> dict[str, Any] | None:
     if "Kill" in item:
         k = item["Kill"]
         weapon = (k.get("weapon") or "").lower()
         killer = k.get("killerNick") or k.get("killerName") or ""
         victim = k.get("victimNick") or k.get("victimName") or ""
-        return {
+        out = {
             "type": "kill",
             "killer": killer,
             "victim": victim,
@@ -69,6 +81,10 @@ def format_log_item(item: dict[str, Any]) -> dict[str, Any] | None:
             "headshot": bool(k.get("headShot")),
             "assist": False,
         }
+        eid = _event_id(item)
+        if eid:
+            out["event_id"] = eid
+        return out
     if "Assist" in item:
         a = item["Assist"]
         return {
@@ -129,6 +145,9 @@ def format_log_item(item: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def merge_log(existing: list[dict[str, Any]], incoming: Any) -> list[dict[str, Any]]:
+    """Append new log rows. First packet after connect is the full history;
+    reconnect sends that history again — skip already-seen eventId.
+    """
     block = incoming
     if isinstance(incoming, dict) and "log" in incoming:
         block = incoming["log"]
@@ -139,11 +158,37 @@ def merge_log(existing: list[dict[str, Any]], incoming: Any) -> list[dict[str, A
         items = [block]
     else:
         return existing
+
+    seen_ids = {str(x.get("event_id")) for x in existing if x.get("event_id")}
+    seen_fb = {str(x.get("_raw")) for x in existing if x.get("_raw")}
+    incoming_ids = [i for i in (_event_id(it) for it in items) if i]
+    if existing and incoming_ids and all(i in seen_ids for i in incoming_ids):
+        live_log.debug("log replay skipped n=%s", len(items))
+        return existing
+
     out = list(existing)
+    added = 0
     for it in items:
         formatted = format_log_item(it)
-        if formatted:
-            out.insert(0, formatted)
+        if not formatted:
+            continue
+        eid = formatted.get("event_id") or _event_id(it)
+        if eid:
+            if eid in seen_ids:
+                continue
+            formatted["event_id"] = eid
+            seen_ids.add(eid)
+        elif formatted.get("type") != "round_start":
+            # RoundStart 载荷经常是 {}，用 JSON 当 key 会把每回合开始并成一条。
+            fb = _fallback_key(it)
+            if fb in seen_fb:
+                continue
+            formatted["_raw"] = fb
+            seen_fb.add(fb)
+        out.insert(0, formatted)
+        added += 1
+    if added:
+        live_log.debug("log merged +%s total=%s", added, len(out))
     return out[:80]
 
 
@@ -156,8 +201,19 @@ def snapshot_from_scoreboard(
     meta = meta or {}
     ct_name = board.get("ctTeamName") or board.get("ctName") or meta.get("team2") or "CT"
     t_name = board.get("tTeamName") or board.get("terroristTeamName") or meta.get("team1") or "T"
-    ct_score = board.get("ctScore") or board.get("counterTerroristScore") or 0
-    t_score = board.get("tScore") or board.get("terroristScore") or 0
+    ct_score = (
+        board.get("ctScore")
+        or board.get("counterTerroristScore")
+        or board.get("ctTeamScore")
+        or 0
+    )
+    t_score = (
+        board.get("tScore")
+        or board.get("terroristScore")
+        or board.get("tTeamScore")
+        or board.get("terroristTeamScore")
+        or 0
+    )
     try:
         ct_score = int(ct_score)
         t_score = int(t_score)

@@ -13,6 +13,10 @@ from hltv_bot.format import plain_to_rich
 log = logging.getLogger("hltv_bot.tg")
 
 
+def is_not_modified(exc: BaseException) -> bool:
+    return "not modified" in str(exc).lower()
+
+
 class Telegram:
     def __init__(self, token: str, timeout: float = 35.0):
         self.token = token
@@ -132,12 +136,27 @@ class Telegram:
         )
 
     def send_message(self, chat_id: int | str, text: str) -> dict:
-        """User-visible send: always sendRichMessage (never the plain-text send API)."""
-        return self.send_rich(chat_id, plain_to_rich(text))
+        return self._call(
+            "sendMessage",
+            {
+                "chat_id": chat_id,
+                "text": text[:4000],
+                "parse_mode": "HTML",
+                "disable_web_page_preview": True,
+            },
+        )
 
     def edit_message(self, chat_id: int | str, message_id: int, text: str) -> dict:
-        """User-visible edit: always rich_message on editMessageText."""
-        return self.edit_rich(chat_id, message_id, plain_to_rich(text))
+        return self._call(
+            "editMessageText",
+            {
+                "chat_id": chat_id,
+                "message_id": message_id,
+                "text": text[:4000],
+                "parse_mode": "HTML",
+                "disable_web_page_preview": True,
+            },
+        )
 
     def chat_member_status(self, chat_id: int, user_id: int) -> str:
         try:

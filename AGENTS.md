@@ -2,22 +2,19 @@
 
 ## Telegram 输出
 
-**所有用户可见消息必须是 Rich Message。** 细则：`docs/rich-message.md`。
+分流，不要把所有出站都做成 Rich。细则：`docs/rich-message.md`。
 
-- 发送：`sendRichMessage`（`Telegram.send_rich` / `send_message`）
-- 编辑：`editMessageText` + `rich_message`（`Telegram.edit_rich`）
-- 禁止 Bot API `sendMessage` 和 `parse_mode` 正文
-- 记分板按 HLTV：CT / T 两张表，不要混排球员
+- **`/watch` / `/bump`**：Rich Message。只 edit 同一条；新卡片只有 `/bump`。
+- **`/matches` 和其余通知**：普通 `sendMessage` + HTML。好复制，**不用**按 Rich 规范检查。
+- 记分板：比分表 + 名单表 + log 表，不要 h3/ul/footer 文章壳。
 
 ## 提交 / push 前
 
-在 `git commit` 或 `git push` 之前必须跑：
-
 ```bash
-python3 -m pytest tests/test_rich_message.py tests/test_format.py -q
+python3 -m pytest tests/test_rich_message.py tests/test_format.py tests/test_watch_flush.py -q
 ```
 
-`tests/test_rich_message.py` 会扫描 `hltv_bot/` 里是否又写回了 `"sendMessage"`。不过这条就不要提交、不要推。
+不要用「源码里禁止 sendMessage」这种检查。
 
 ## 其它文档
 

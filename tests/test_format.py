@@ -57,10 +57,14 @@ def test_format_contains_score_and_log():
     snap_down["link"] = "disconnected"
     assert "断开" in format_telegram(snap_down)
     rich = format_rich_html(SNAP)
-    assert "<table" in rich and "<ul>" in rich and "<h3>" in rich
+    assert "<table" in rich
+    assert "<h3>" not in rich
+    assert "<ul>" not in rich
+    assert "<footer>" not in rich
     assert "AWP" in rich
-    assert rich.count("<table") == 2
-    assert "CT ·" in rich and "T ·" in rich
+    assert rich.count("<table") >= 2
+    assert "<mark>CT</mark>" in rich
+    assert "<mark>T</mark>" in rich
 
 
 def test_format_multikill_banner():

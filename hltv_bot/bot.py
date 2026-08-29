@@ -14,7 +14,7 @@ from hltv_bot.debuglog import clip, event_brief, snap_brief
 from hltv_bot.format import (
     format_connecting_html,
     format_kv_table,
-    format_match_list_rich,
+    format_match_list,
     format_rich_html,
     h,
     plain_to_rich,
@@ -26,7 +26,7 @@ from hltv_bot.scorebot import iter_scorebot, scorebot_base
 from hltv_bot.ratelimit import Cooldown
 from hltv_bot.session import BrowserSession, load_session, save_cookie
 from hltv_bot.snapshot import snapshot_fingerprint
-from hltv_bot.telegram_api import Telegram
+from hltv_bot.telegram_api import Telegram, is_not_modified
 
 DEFAULT_ADMIN_ID = 1442477170
 
@@ -104,6 +104,8 @@ class WatchState:
     last_edit: float = 0.0
     last_snap: dict = field(default_factory=dict)
     link: str = "connecting"
+    pending: bool = False
+    sent_html: str = ""
 
 
 class HltvTelegramBot:
@@ -241,9 +243,9 @@ class HltvTelegramBot:
         if not rows:
             self.tg.send_message(chat_id, "列表是空的（或解析失败）")
             return
-        html = format_match_list_rich(rows, starred_only=not all_mode)
-        log.debug("matches html_len=%s", len(html))
-        self._send_rich(chat_id, html)
+        text = format_match_list(rows, starred_only=not all_mode)
+        log.debug("matches text_len=%s", len(text))
+        self.tg.send_message(chat_id, text)
 
     def _cmd_watch(self, chat_id: int, arg: str) -> None:
         if not arg:
@@ -270,13 +272,14 @@ class HltvTelegramBot:
         )
         log.info("watch start listId=%s %s vs %s url=%s", list_id, t1, t2, meta.get("url"))
         msg = self._send_rich(chat_id, html)
-        text = html
+        mid = msg.get("message_id") if isinstance(msg, dict) else None
         state = WatchState(
             chat_id=chat_id,
             list_id=str(list_id),
             meta=meta,
-            message_id=msg["message_id"],
-            text=text,
+            message_id=mid,
+            text=html,
+            sent_html=html,
             last_bump=time.time(),
         )
         self.watch = state
@@ -289,9 +292,7 @@ class HltvTelegramBot:
             self.tg.send_message(chat_id, "没有正在 watch 的消息")
             return
         log.info("bump chat=%s old_msg=%s", chat_id, w.message_id)
-        msg = self._send_rich(chat_id, w.text)
-        w.message_id = msg["message_id"] if isinstance(msg, dict) else w.message_id
-        w.last_bump = time.time()
+        self._flush_watch(w, w.text, send_new=True)
 
     def _cmd_stop(self, chat_id: int) -> None:
         self._stop_watch()
@@ -313,10 +314,7 @@ class HltvTelegramBot:
                     ("cookies", h(", ".join(names) or "(none)")),
                     ("session", h(str(self.session.path or ""))),
                     ("watch", h(watch_line)),
-                    (
-                        "auto-bump",
-                        f"{self.bump_seconds}s" if self.bump_seconds else "off · /bump",
-                    ),
+                    ("new card", "/bump only"),
                     ("admins", h(", ".join(str(i) for i in sorted(self.admin_ids)))),
                     ("groups", str(len(list_groups()))),
                 ],
@@ -507,19 +505,8 @@ class HltvTelegramBot:
                     feed = merge_log(feed, payload)
                     log.info("watch log %s feed %s -> %s", event_brief(name, payload), before, len(feed))
                 elif name == "tick":
-                    if state.last_snap:
-                        html = (
-                            format_rich_html(state.last_snap)
-                            if board
-                            else format_connecting_html(
-                                team1=str(state.meta.get("team1") or "?"),
-                                team2=str(state.meta.get("team2") or "?"),
-                                list_id=state.list_id,
-                                url=state.meta.get("url"),
-                                link=state.link,
-                            )
-                        )
-                        self._flush_watch(state, html)
+                    if state.pending and state.text:
+                        self._flush_watch(state, state.text)
                     continue
                 else:
                     log.debug("watch ignore event %s", name)
@@ -552,16 +539,15 @@ class HltvTelegramBot:
                 state.text = html
                 state.last_snap = snap
                 state.fingerprint = fp
+                state.pending = True
                 now = time.time()
-                force = (
-                    name == "tick"
-                    or status_changed
-                    or any(s in html for s in ("<mark>3K</mark>", "<mark>4K</mark>", "<mark>ACE</mark>", "回合结束"))
+                force = status_changed or any(
+                    s in html for s in ("<mark>3K</mark>", "<mark>4K</mark>", "<mark>ACE</mark>", "回合结束")
                 )
                 wait = now - state.last_edit
                 if wait < MIN_EDIT_INTERVAL and not force:
                     log.debug(
-                        "watch skip interval wait=%.2fs force=%s %s",
+                        "watch defer interval wait=%.2fs force=%s %s",
                         wait,
                         force,
                         snap_brief(snap),
@@ -585,40 +571,40 @@ class HltvTelegramBot:
             log.warning("sendRichMessage failed: %s html=%s", e, clip(html, 240))
             return self.tg.send_rich(chat_id, plain_to_rich(html))
 
-    def _flush_watch(self, state: WatchState, html: str) -> None:
+    def _flush_watch(self, state: WatchState, html: str, *, send_new: bool = False) -> None:
         if not html:
             return
         now = time.time()
         snap = state.last_snap or {}
-        if (
-            self.bump_seconds
-            and state.message_id
-            and now - state.last_bump >= self.bump_seconds
-        ):
-            log.info("watch auto-bump chat=%s", state.chat_id)
+        if send_new:
             msg = self._send_rich(state.chat_id, html)
-            state.message_id = msg.get("message_id") if isinstance(msg, dict) else state.message_id
+            if isinstance(msg, dict) and msg.get("message_id"):
+                state.message_id = msg["message_id"]
             state.last_bump = now
             state.last_edit = now
+            state.sent_html = html
+            state.pending = False
             log.info("watch send chat=%s msg=%s %s", state.chat_id, state.message_id, snap_brief(snap))
             return
-        if state.message_id:
-            try:
-                self.tg.edit_rich(state.chat_id, state.message_id, html)
-                log.info("watch edit chat=%s msg=%s %s", state.chat_id, state.message_id, snap_brief(snap))
-            except Exception as e:
+        if html == state.sent_html:
+            state.pending = False
+            log.debug("watch skip identical html msg=%s", state.message_id)
+            return
+        if not state.message_id:
+            log.warning("watch edit skipped: no message_id (will not send a new card)")
+            return
+        try:
+            self.tg.edit_rich(state.chat_id, state.message_id, html)
+            log.info("watch edit chat=%s msg=%s %s", state.chat_id, state.message_id, snap_brief(snap))
+        except Exception as e:
+            if is_not_modified(e):
+                log.debug("watch not modified msg=%s", state.message_id)
+            else:
                 log.warning("watch edit_rich failed: %s html=%s", e, clip(html, 240))
-                try:
-                    self.tg.edit_rich(state.chat_id, state.message_id, plain_to_rich(html))
-                    log.info("watch edit simplified chat=%s msg=%s", state.chat_id, state.message_id)
-                except Exception as e2:
-                    log.warning("watch edit simplified failed: %s", e2)
-                    msg = self._send_rich(state.chat_id, html)
-                    if isinstance(msg, dict) and msg.get("message_id"):
-                        state.message_id = msg["message_id"]
-                        state.last_bump = now
-                        log.info("watch resend chat=%s msg=%s", state.chat_id, state.message_id)
-            state.last_edit = now
+                return
+        state.sent_html = html
+        state.pending = False
+        state.last_edit = now
 
     def _mark_watch_down(self, state: WatchState, link: str) -> None:
         state.link = link
@@ -627,8 +613,7 @@ class HltvTelegramBot:
         try:
             html = format_rich_html(snap)
             state.text = html
-            if state.message_id:
-                self.tg.edit_rich(state.chat_id, state.message_id, html)
+            self._flush_watch(state, html)
         except Exception:
             pass
 

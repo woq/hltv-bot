@@ -76,3 +76,38 @@ def test_kill_log_and_snapshot():
     )
     assert snap["scoreText"] == "13-6"
     assert snap["teams"][0]["players"][0]["nick"] == "donk"
+
+
+def test_merge_log_skips_reconnect_replay():
+    raw = {
+        "log": [
+            {"Kill": {"killerNick": "n1ssim", "victimNick": "kyousuke", "weapon": "ak47", "headShot": True, "eventId": 1}},
+            {"Kill": {"killerNick": "latto", "victimNick": "kyousuke", "weapon": "deagle", "headShot": False, "eventId": 2}},
+        ]
+    }
+    once = merge_log([], raw)
+    twice = merge_log(once, raw)
+    assert len(once) == 2
+    assert twice == once
+    third = merge_log(
+        twice,
+        {"log": [{"Kill": {"killerNick": "n1ssim", "victimNick": "x", "weapon": "ak47", "headShot": True, "eventId": 3}}]},
+    )
+    assert len(third) == 3
+    assert third[0]["killer"] == "n1ssim"
+    assert third[0]["event_id"] == "3"
+
+
+def test_snapshot_reads_ct_team_score_keys():
+    snap = snapshot_from_scoreboard(
+        {
+            "ctTeamName": "Legacy",
+            "terroristTeamName": "Falcons",
+            "ctTeamScore": 4,
+            "tTeamScore": 2,
+            "currentRound": 7,
+            "mapName": "de_dust2",
+        }
+    )
+    assert snap["scoreText"] == "4-2"
+    assert snap["roundText"].startswith("7")

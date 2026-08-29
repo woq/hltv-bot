@@ -247,50 +247,123 @@ def _adr_s(adr: object) -> str:
         return str(adr or "0")
 
 
-def _player_table(side: str, team: dict, score: object) -> str:
-    name = h(team.get("name") or side)
-    caption = f"{h(side)} · {name} · {h(score)}"
-    rows = [
-        "<tr>"
-        "<th>Player</th>"
-        "<th align=\"right\">K</th>"
-        "<th align=\"right\">A</th>"
-        "<th align=\"right\">D</th>"
-        "<th align=\"right\">ADR</th>"
-        "</tr>"
-    ]
-    players = _sorted_players(team)
-    if not players:
-        rows.append("<tr><td colspan=\"5\"><i>no players</i></td></tr>")
-    for p in players:
-        rows.append(
-            "<tr>"
-            f"<td>{h(p.get('nick') or '?')}</td>"
-            f"<td align=\"right\">{int(p.get('kills') or 0)}</td>"
-            f"<td align=\"right\">{int(p.get('assists') or 0)}</td>"
-            f"<td align=\"right\">{int(p.get('deaths') or 0)}</td>"
-            f"<td align=\"right\">{h(_adr_s(p.get('adr')))}</td>"
-            "</tr>"
-        )
+def _score_board(
+    *,
+    left_name: str,
+    right_name: str,
+    left_score: object,
+    right_score: object,
+    left_side: str,
+    right_side: str,
+    map_name: str = "",
+    round_n: str = "",
+    live: bool = True,
+    url: str = "",
+    status: str = "",
+    hot: bool = False,
+) -> str:
+    live_s = "LIVE" if live else "SCORE"
+    if url:
+        live_s = f'<a href="{h(url)}">{live_s}</a>'
+    cap = [live_s]
+    if map_name:
+        cap.append(h(map_name))
+    if round_n:
+        cap.append(f"R{h(round_n)}")
+    if status:
+        cap.append(f"<mark>{h(status)}</mark>" if hot else f"<i>{h(status)}</i>")
     return (
-        '<table bordered striped compact>'
-        f"<caption>{caption}</caption>"
-        + "".join(rows)
-        + "</table>"
+        '<table bordered compact>'
+        f"<caption>{' · '.join(cap)}</caption>"
+        "<tr>"
+        f'<td align="left"><b>{h(left_name)}</b><br>{h(left_side)}</td>'
+        f'<td align="center"><b>{h(left_score)}</b> &ndash; <b>{h(right_score)}</b></td>'
+        f'<td align="right"><b>{h(right_name)}</b><br>{h(right_side)}</td>'
+        "</tr>"
+        "</table>"
     )
 
 
-def _log_items(log: list[dict], *, rich: bool, limit: int) -> list[str]:
+def _roster_table(ct_team: dict, t_team: dict) -> str:
+    rows: list[str] = []
+
+    def section(side: str, team: dict) -> None:
+        rows.append(
+            "<tr>"
+            f'<th align="left" colspan="5"><mark>{h(side)}</mark> {h(team.get("name") or side)}</th>'
+            "</tr>"
+        )
+        rows.append(
+            "<tr>"
+            '<th align="left">Player</th>'
+            '<th align="right">K</th>'
+            '<th align="right">A</th>'
+            '<th align="right">D</th>'
+            '<th align="right">ADR</th>'
+            "</tr>"
+        )
+        players = _sorted_players(team)
+        if not players:
+            rows.append('<tr><td colspan="5"><i>—</i></td></tr>')
+            return
+        for p in players:
+            rows.append(
+                "<tr>"
+                f'<td>{h(p.get("nick") or "?")}</td>'
+                f'<td align="right">{int(p.get("kills") or 0)}</td>'
+                f'<td align="right">{int(p.get("assists") or 0)}</td>'
+                f'<td align="right">{int(p.get("deaths") or 0)}</td>'
+                f'<td align="right">{h(_adr_s(p.get("adr")))}</td>'
+                "</tr>"
+            )
+
+    section("CT", ct_team)
+    section("T", t_team)
+    return '<table bordered striped compact>' + "".join(rows) + "</table>"
+
+
+def _log_table(log: list[dict], *, limit: int = 8) -> str:
     kill_ns = round_kill_counts(log)
-    out: list[str] = []
+    rows: list[str] = ['<tr><th align="left" colspan="2">Log</th></tr>']
+    n = 0
     for entry in log:
-        line = _log_line(entry, kill_n=kill_ns.get(id(entry), 0), rich=rich)
-        if not line:
+        typ = entry.get("type")
+        if typ in {"quit", "suicide"}:
             continue
-        out.append(line)
-        if len(out) >= limit:
+        if typ == "kill":
+            killer, victim = _killer_victim(entry)
+            weap = _weapon_label(entry.get("weapon") or "")
+            extra: list[str] = []
+            if entry.get("headshot"):
+                extra.append("<mark>HS</mark>")
+            kn = kill_ns.get(id(entry), 0)
+            if kn >= 2:
+                extra.append(f"<mark>{h(_STREAK_PLAIN.get(min(kn, 5), 'ACE'))}</mark>")
+            detail = "killed " + h(victim)
+            if weap:
+                detail += f" · {h(weap)}"
+            if extra:
+                detail += " " + " ".join(extra)
+            rows.append(f"<tr><td><b>{h(killer)}</b></td><td>{detail}</td></tr>")
+        elif typ in _ROUND_BREAK and typ != "round_start":
+            rows.append(
+                f'<tr><td colspan="2"><b>{h(entry.get("text") or "回合结束")}</b></td></tr>'
+            )
+        elif typ == "round_start":
+            rows.append('<tr><td colspan="2"><i>回合开始</i></td></tr>')
+        elif typ == "bomb" or "plant" in (entry.get("text") or "").lower():
+            rows.append(f'<tr><td colspan="2"><b>{h(entry.get("text") or "")}</b></td></tr>')
+        else:
+            text = entry.get("text") or ""
+            if not text:
+                continue
+            rows.append(f"<tr><td colspan=\"2\">{h(text)}</td></tr>")
+        n += 1
+        if n >= limit:
             break
-    return out
+    if n == 0:
+        rows.append('<tr><td colspan="2"><i>—</i></td></tr>')
+    return '<table striped compact>' + "".join(rows) + "</table>"
 
 
 def format_connecting_html(
@@ -302,22 +375,20 @@ def format_connecting_html(
     link: str = "connecting",
 ) -> str:
     status, hot = _LINK_LABEL.get(link, (link, True))
-    status_html = f"<mark>{h(status)}</mark>" if status else ""
-    title = "LIVE"
-    if url:
-        title = f'<a href="{h(url)}">LIVE</a>'
-    parts = [
-        f"<h3>{title}</h3>",
-        f"<p><b>{h(team1)}</b> vs <b>{h(team2)}</b></p>",
-    ]
-    meta_bits = [status_html]
-    if list_id:
-        meta_bits.append(f"<code>{h(list_id)}</code>")
-    meta_bits = [x for x in meta_bits if x]
-    if meta_bits:
-        parts.append("<p>" + " · ".join(meta_bits) + "</p>")
-    parts.append("<footer>/bump</footer>")
-    return "".join(parts)
+    if list_id and not status:
+        status = str(list_id)
+    return _score_board(
+        left_name=team1,
+        right_name=team2,
+        left_score="–",
+        right_score="–",
+        left_side="",
+        right_side="",
+        live=True,
+        url=url or "",
+        status=status or str(list_id),
+        hot=hot,
+    )
 
 
 def _plain(name: object, width: int) -> str:
@@ -335,8 +406,8 @@ def _mono(nick: str, k, a, d, adr, width: int = 12) -> str:
     return f"{n} {int(k or 0):>2} {int(a or 0):>2} {int(d or 0):>2} {adr_s:>4}"
 
 
-def format_rich_html(snap: dict, *, log_limit: int = 15) -> str:
-    """HLTV-style scoreboard as Telegram rich HTML (Bot API 10.3 tags)."""
+def format_rich_html(snap: dict, *, log_limit: int = 8) -> str:
+    """HLTV live widget: score strip + one roster + log table (no article chrome)."""
     teams = list(snap.get("teams") or [])
     ct_team = teams[0] if teams else {"name": (snap.get("team2") or {}).get("name") or "CT", "players": []}
     t_team = teams[1] if len(teams) > 1 else {"name": (snap.get("team1") or {}).get("name") or "T", "players": []}
@@ -347,56 +418,31 @@ def format_rich_html(snap: dict, *, log_limit: int = 15) -> str:
         ct, t = (parts + ["0", "0"])[:2]
     map_name, round_n = _map_and_round(snap)
     status, hot = _LINK_LABEL.get(str(snap.get("link") or "connected"), ("", False))
-    url = snap.get("url") or ""
-    live_label = "LIVE" if snap.get("live") else "SCORE"
-    if url:
-        live_label = f'<a href="{h(url)}">{live_label}</a>'
-    title_bits = [live_label]
-    if map_name:
-        title_bits.append(h(map_name))
-    heading = " · ".join(title_bits)
-
-    score_line = (
-        f"<b>{h(ct_team.get('name'))}</b> <code>{h(ct)}</code>"
-        " &ndash; "
-        f"<code>{h(t)}</code> <b>{h(t_team.get('name'))}</b>"
-    )
-    sub: list[str] = []
-    if round_n:
-        sub.append(f"<i>R{h(round_n)}</i>")
-    if status:
-        sub.append(f"<mark>{h(status)}</mark>" if hot else f"<i>{h(status)}</i>")
-    sub_html = f"<br>{' · '.join(sub)}" if sub else ""
-
-    visible = max(6, min(10, log_limit))
-    lines = _log_items(snap.get("log") or [], rich=True, limit=log_limit)
-    head, tail = lines[:visible], lines[visible:]
-    if head:
-        log_html = "<ul>" + "".join(f"<li>{x}</li>" for x in head) + "</ul>"
-        if tail:
-            log_html += (
-                "<details><summary>Earlier</summary>"
-                "<ul>" + "".join(f"<li>{x}</li>" for x in tail) + "</ul>"
-                "</details>"
-            )
-    else:
-        log_html = "<p><i>no events</i></p>"
-
+    url = str(snap.get("url") or "")
     blocks = [
-        f"<h3>{heading}</h3>",
-        f"<p>{score_line}{sub_html}</p>",
-        _player_table("CT", ct_team, ct),
-        _player_table("T", t_team, t),
-        "<h4>Game log</h4>",
-        log_html,
-        "<footer>/bump</footer>",
-    ]
-    if url:
-        blocks.append(
-            "<tg-button-row>"
-            f'<tg-button type="url" url="{h(url)}">HLTV</tg-button>'
-            "</tg-button-row>"
+        _score_board(
+            left_name=str(ct_team.get("name") or "CT"),
+            right_name=str(t_team.get("name") or "T"),
+            left_score=ct,
+            right_score=t,
+            left_side="CT",
+            right_side="T",
+            map_name=map_name,
+            round_n=round_n,
+            live=bool(snap.get("live")),
+            url=url,
+            status=status,
+            hot=hot,
         )
+    ]
+    if _sorted_players(ct_team) or _sorted_players(t_team):
+        blocks.append(_roster_table(ct_team, t_team))
+    mk = round_multikills(snap.get("log") or [])
+    if mk and mk[0][1] >= 3:
+        nick, n = mk[0]
+        label = _STREAK_PLAIN.get(n, f"{n}K")
+        blocks.append(f"<aside><b>{h(nick)}</b> {h(label)}</aside>")
+    blocks.append(_log_table(snap.get("log") or [], limit=log_limit))
     return "".join(blocks)
 
 

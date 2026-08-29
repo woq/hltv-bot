@@ -1,69 +1,34 @@
 # Telegram Rich Message
 
-用户可见的每条 Bot 输出都必须是 **Rich Message**（Bot API 10.1+）。  
-禁止用 `sendMessage` / `parse_mode=HTML` 当主路径。
+官方：<https://core.telegram.org/bots/api#rich-message-formatting-options>（Bot API 10.1，2026-06-11）
 
-规范：<https://core.telegram.org/bots/api#rich-message-formatting-options>
+## 解决什么问题
 
-## 硬规则
+普通 `sendMessage` 是**一条字符串 + 有限 entity**（粗体、链接、`pre`）。做不了表、标题层级、折叠块、公式、文内插图，也不能边生成边推草稿。
 
-| 动作 | 方法 | payload |
+Rich Message 把一条消息当成**小文档**：标题、表格、列表、引用、脚注、数学、媒体块、地图、collage / slideshow。另有 `sendRichMessageDraft` + thinking 块，给 AI 流式打字。
+
+本项目只用它做 **`/watch` 记分板**（要表、要原地 `edit`）。列表、命令、状态要能划选复制，走普通消息。
+
+## 本仓库分流
+
+| 场景 | 通道 | 原因 |
 |---|---|---|
-| 新消息 | `sendRichMessage` | `rich_message.html` |
-| 原地更新 | `editMessageText` | 同一个 `rich_message`（**不能**改成普通 `text`） |
-| 顶上去 `/bump` | 再发一条 `sendRichMessage` | 内容仍是 rich html |
+| `/watch` 记分板、`/bump` 新卡片 | Rich：`sendRichMessage` / `editMessageText` + `rich_message` | 原生表，一条消息反复改 |
+| `/matches`、帮助、状态、错误、授权 | 普通：`sendMessage` + `parse_mode=HTML` | 好划选、好复制 `/watch id` |
+| 其它短通知 | 普通 `send_message` | 不强制 rich |
 
-`hltv_bot/telegram_api.py` 里的 `send_message` / `edit_message` 只是封装，内部同样走上面两条。  
-`plain_to_rich()` 会把无块级标签的短通知包成 `<p>` / `<br>`。
+**不要检查普通消息是不是 Rich。** 提交前测试只约束 watch 路径：编辑失败不得改成连发新卡片。
 
-**不要：**
+Watch 规则不变：默认只 edit 同一条；`not modified` 当成功；新卡片只有 `/bump`。普通消息和 rich **不能互相 edit 变形**。
 
-- 调 Bot API `sendMessage`
-- 用 `parse_mode` 当正文格式
-- 先发文字消息再想改成 rich（类型不同，改不了）
-- 把 `\n` 当块级换行塞进 rich（规范是块标签；行内用 `<br>`）
+## Watch 记分板怎么排
 
-## 本项目 HTML 子集
+Rich **没有 CSS**。单元格只能行内标签。不要用 h3/ul/footer 文章壳。
 
-只用规范里有的标签。记分板 / 列表常用：
+1. 比分条 `table bordered compact`
+2. 名单 `table bordered striped compact`（CT / T 分段）
+3. Log 表；3K+ 用 `<aside>`
+4. 未出分用 `–`，不要 0-0
 
-- 块：`<h3>` `<h4>` `<p>` `<ul>` `<li>` `<table bordered striped compact>` `<caption>` `<tr>` `<th>` `<td>` `<hr>` `<footer>` `<details>` `<summary>`
-- 行内：`<b>` `<i>` `<code>` `<mark>` `<a href>` `<br>`
-- 按钮：`<tg-button-row>` + `<tg-button type="url">`（不要 callback，除非加了 handler）
-
-限制：正文 ≤ 32768；块（含表格行、列表项）≤ 500；表 ≤ 20 列；嵌套 ≤ 16。
-
-`skip_entity_detection` 默认 **false**，让 `/watch` `/bump` 能被点。
-
-## HLTV 记分板怎么排
-
-对齐 HLTV 直播记分板，不要把两队球员揉成一张按 K 排序的表。
-
-1. `<h3>`：`LIVE · 地图`（可链到比赛页）
-2. `<p>`：`CT队 比分 – 比分 T队`，下一行 `R19` / 连接状态 `<mark>`
-3. 两张表：caption `CT · 队名 · 分`、`T · 队名 · 分`；列 Player / K / A / D / ADR，队内按 K 降序
-4. `<h4>Game log</h4>` + `<ul>`；击杀 `nick killed nick · AWP <mark>HS</mark> <mark>3K</mark>`
-5. 更早的 log 放 `<details><summary>Earlier</summary>`
-6. `<footer>/bump</footer>`，有 URL 再加 HLTV 按钮
-
-Scorebot 还没吐 `scoreboard` 时只用 `format_connecting_html`（队名 + connecting），**不要**画 0-0 空表。
-
-比赛列表：按赛事 `<h4>` + compact 表；LIVE 用 `<mark>LIVE</mark>`；`/watch {id}` 放在格子里（不要包 `<code>`，才能当命令点）。
-
-## 提交 / push 前必查
-
-每次 commit、push 之前跑：
-
-```bash
-python3 -m pytest tests/test_rich_message.py tests/test_format.py -q
-```
-
-这条测试会扫 `hltv_bot/`：源码里不能出现 Bot API 方法名 `"sendMessage"`。
-
-改了任何 Telegram 出站路径，再人工过一遍：
-
-- 新加的用户可见字符串是不是 rich html（或走 `send_message` → `plain_to_rich`）
-- `/watch` 编辑仍是 `edit_rich`，失败也只许简化 html 再 `edit_rich` / `send_rich`
-- 不要为了“兼容旧客户端”偷偷加回 `sendMessage`
-
-提示词见仓库根目录 `AGENTS.md`。
+限制（官方）：正文 ≤ 32768；块 ≤ 500；表 ≤ 20 列；嵌套 ≤ 16。

@@ -1,9 +1,5 @@
-from pathlib import Path
-
 from hltv_bot.format import format_connecting_html, format_rich_html, plain_to_rich
 from hltv_bot.telegram_api import Telegram
-
-ROOT = Path(__file__).resolve().parents[1] / "hltv_bot"
 
 
 def test_plain_to_rich_wraps_newlines():
@@ -17,7 +13,7 @@ def test_plain_to_rich_keeps_block_html():
     assert plain_to_rich(src) == src
 
 
-def test_telegram_send_and_edit_use_rich_api():
+def test_plain_send_message_uses_sendmessage_api():
     captured: list[tuple[str, dict]] = []
     tg = Telegram("token")
 
@@ -26,33 +22,38 @@ def test_telegram_send_and_edit_use_rich_api():
         return {"message_id": 9}
 
     tg._call = fake_call  # type: ignore[method-assign]
-    tg.send_message(1, "hello")
-    tg.edit_message(1, 9, "hello")
+    tg.send_message(1, "hello <code>/watch 1</code>")
+    assert captured[0][0] == "sendMessage"
+    assert captured[0][1]["parse_mode"] == "HTML"
+    assert "rich_message" not in captured[0][1]
+
+
+def test_watch_path_uses_rich_api():
+    captured: list[tuple[str, dict]] = []
+    tg = Telegram("token")
+
+    def fake_call(method, payload):
+        captured.append((method, payload))
+        return {"message_id": 9}
+
+    tg._call = fake_call  # type: ignore[method-assign]
+    tg.send_rich(1, "<table bordered compact></table>")
+    tg.edit_rich(1, 9, "<table bordered compact></table>")
     assert captured[0][0] == "sendRichMessage"
     assert captured[1][0] == "editMessageText"
-    for _, payload in captured:
-        assert "text" not in payload
-        assert "parse_mode" not in payload
-        assert payload["rich_message"]["html"].startswith("<p>")
+    assert "html" in captured[0][1]["rich_message"]
+    assert "html" in captured[1][1]["rich_message"]
 
 
-def test_source_never_calls_sendmessage_api():
-    hits = []
-    for path in ROOT.rglob("*.py"):
-        text = path.read_text(encoding="utf-8")
-        for i, line in enumerate(text.splitlines(), 1):
-            if "sendMessage" in line and "sendRichMessage" not in line:
-                hits.append(f"{path.relative_to(ROOT.parent)}:{i}:{line.strip()}")
-    assert hits == []
-
-
-def test_scoreboard_is_two_team_tables():
+def test_scoreboard_is_hltv_widget_tables():
     from test_format import SNAP
 
     rich = format_rich_html(SNAP)
-    assert rich.count("<table") == 2
-    assert "CT · Spirit" in rich
-    assert "T · G2" in rich
+    assert rich.count("<table") >= 2
+    assert "<mark>CT</mark>" in rich
+    assert "<mark>T</mark>" in rich
+    assert "<h3>" not in rich
+    assert "<ul>" not in rich
     assert "<mark>" in format_rich_html({**SNAP, "link": "disconnected"})
     assert "<caption>" in rich
     assert "compact" in rich
@@ -60,7 +61,7 @@ def test_scoreboard_is_two_team_tables():
 
 def test_connecting_has_no_fake_scoreboard():
     html = format_connecting_html(team1="G2", team2="Spirit", list_id="2396932")
-    assert "<table" not in html
     assert "G2" in html and "Spirit" in html
     assert "connecting" in html
     assert "0-0" not in html
+    assert "<h3>" not in html
