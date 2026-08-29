@@ -138,9 +138,10 @@ Origin: https://www.hltv.org
 
 | 请求 | 间隙 |
 |---|---|
-| poll 有事件后 | 至少 2s 再下一轮 GET |
-| poll 空包且秒回 | 补到 10s |
-| 长轮询 timeout（curl 28） | 已等 ~25–55s，再隔 2s |
+| poll 有事件后 | 至少 5s 再下一轮 GET |
+| poll 空包且秒回 | 补到 20s |
+| 长轮询 timeout（curl 28） | 已等 ~25–55s，再隔 5s |
+| poll HTTP 5xx | 同 sid 再等 30s，连 4 次仍 5xx 才重握手 |
 | 重连 / 502 | ≥15s，5xx 首次 ≥25s，退避到 180s |
 | `www.hltv.org` 列表/详情 | 两次 HTML 至少 3s；列表另有 45s 缓存 |
 | Telegram edit | 最少 1.8s（3K/ACE/回合结束可立刻推） |

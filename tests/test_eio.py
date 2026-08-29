@@ -1,5 +1,6 @@
 from hltv_bot.eio import decode_payload, encode_event, parse_event, parse_open
 from hltv_bot.scorebot import (
+    POLL_5XX_GAP,
     POLL_EMPTY_GAP,
     POLL_MIN_GAP,
     RECONNECT_5XX,
@@ -72,7 +73,10 @@ def test_http_502_is_http_error():
 
 
 def test_poll_gap_empty_vs_event_vs_timeout():
+    assert POLL_MIN_GAP >= 5.0
+    assert POLL_EMPTY_GAP >= 20.0
     assert poll_gap(0.4, got_event=False) == POLL_EMPTY_GAP - 0.4
     assert poll_gap(0.4, got_event=True) == POLL_MIN_GAP - 0.4
     assert poll_gap(30.0, got_event=False, timed_out=True) == POLL_MIN_GAP
     assert poll_gap(25.0, got_event=False) == 0.0
+    assert poll_gap(0.4, got_event=False, http_5xx=True) == POLL_5XX_GAP

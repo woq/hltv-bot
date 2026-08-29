@@ -55,6 +55,9 @@ def _players(side: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
     return out
 
 
+_ROUND_BREAK = frozenset({"round_start", "round_over", "round_over_ct", "round_over_t"})
+
+
 def _event_id(item: dict[str, Any]) -> str | None:
     for v in item.values():
         if isinstance(v, dict) and v.get("eventId") is not None:
@@ -64,6 +67,99 @@ def _event_id(item: dict[str, Any]) -> str | None:
 
 def _fallback_key(item: dict[str, Any]) -> str:
     return json.dumps(item, sort_keys=True, separators=(",", ":"), default=str)
+
+
+def _semantic_key(entry: dict[str, Any]) -> str | None:
+    """Stable identity for a log row, ignoring eventId / coordinates / flasher."""
+    typ = entry.get("type")
+    if typ == "kill":
+        return "|".join(
+            (
+                "k",
+                str(entry.get("killer") or ""),
+                str(entry.get("victim") or ""),
+                str(entry.get("weapon") or ""),
+                "1" if entry.get("headshot") else "0",
+            )
+        )
+    if typ == "bomb":
+        return "|".join(
+            (
+                "b",
+                str(entry.get("killer") or ""),
+                str(entry.get("detail") or entry.get("text") or ""),
+            )
+        )
+    if typ in {"round_over", "round_over_ct", "round_over_t"}:
+        return "|".join(
+            (
+                "e",
+                str(entry.get("detail") or entry.get("text") or ""),
+                str(entry.get("ct_score", "")),
+                str(entry.get("t_score", "")),
+            )
+        )
+    if typ == "round_start":
+        return None
+    text = str(entry.get("text") or "")
+    return f"o|{text}" if text else None
+
+
+def _kill_pair(entry: dict[str, Any]) -> tuple[str, str] | None:
+    if entry.get("type") != "kill":
+        return None
+    killer = str(entry.get("killer") or "")
+    victim = str(entry.get("victim") or "")
+    if killer and victim:
+        return killer, victim
+    return None
+
+
+def _this_round_entries(log: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for entry in log:
+        if entry.get("type") in _ROUND_BREAK:
+            break
+        out.append(entry)
+    return out
+
+
+def _pairs_this_round(log: list[dict[str, Any]]) -> set[tuple[str, str]]:
+    pairs: set[tuple[str, str]] = set()
+    for entry in _this_round_entries(log):
+        pair = _kill_pair(entry)
+        if pair:
+            pairs.add(pair)
+    return pairs
+
+
+def _coerce_round(board: dict[str, Any]) -> int | None:
+    raw = board.get("currentRound") if board else None
+    if raw is None:
+        raw = board.get("round") if board else None
+    try:
+        return int(raw)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+
+
+def mark_new_round(
+    feed: list[dict[str, Any]],
+    board: dict[str, Any],
+    prev_round: int | None,
+) -> tuple[list[dict[str, Any]], int | None]:
+    """Insert a round_start when scoreboard currentRound increases (half / next round)."""
+    n = _coerce_round(board)
+    if n is None:
+        return feed, prev_round
+    if prev_round is not None and n > prev_round:
+        if not feed or feed[0].get("type") != "round_start":
+            feed = [
+                {"type": "round_start", "killer": "回合", "text": "开始", "detail": "开始"},
+                *feed,
+            ]
+            live_log.debug("round marker %s -> %s", prev_round, n)
+    return feed, n
 
 
 def format_log_item(item: dict[str, Any]) -> dict[str, Any] | None:
@@ -111,7 +207,7 @@ def format_log_item(item: dict[str, Any]) -> dict[str, Any] | None:
             "text": "拆包",
             "detail": "拆包",
         }
-    if "RoundStart" in item or "RoundStarted" in item:
+    if "RoundStart" in item or "RoundStarted" in item or "Restart" in item:
         return {"type": "round_start", "killer": "回合", "text": "开始", "detail": "开始"}
     if "RoundEnd" in item:
         r = item["RoundEnd"]
@@ -162,49 +258,86 @@ def format_log_item(item: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
-def merge_log(existing: list[dict[str, Any]], incoming: Any) -> list[dict[str, Any]]:
-    """Append new log rows. First packet after connect is the full history;
-    reconnect sends that history again — skip already-seen eventId.
-    """
+def _log_items(incoming: Any) -> list[dict[str, Any]] | None:
     block = incoming
     if isinstance(incoming, dict) and "log" in incoming:
         block = incoming["log"]
-    items: list[dict[str, Any]]
     if isinstance(block, list):
-        items = [x for x in block if isinstance(x, dict)]
-    elif isinstance(block, dict):
-        items = [block]
-    else:
+        return [x for x in block if isinstance(x, dict)]
+    if isinstance(block, dict):
+        return [block]
+    return None
+
+
+def merge_log(existing: list[dict[str, Any]], incoming: Any) -> list[dict[str, Any]]:
+    """Append new log rows.
+
+    Connect / reconnect / half-time often re-send history in one packet.
+    Skip already-seen eventId; if ids reset, skip by semantic identity.
+    Same killer→victim cannot happen twice in one CS round.
+    """
+    items = _log_items(incoming)
+    if items is None:
         return existing
 
-    seen_ids = {str(x.get("event_id")) for x in existing if x.get("event_id")}
-    seen_fb = {str(x.get("_raw")) for x in existing if x.get("_raw")}
-    incoming_ids = [i for i in (_event_id(it) for it in items) if i]
-    if existing and incoming_ids and all(i in seen_ids for i in incoming_ids):
-        live_log.debug("log replay skipped n=%s", len(items))
-        return existing
-
-    out = list(existing)
-    added = 0
+    prepared: list[dict[str, Any]] = []
     for it in items:
         formatted = format_log_item(it)
         if not formatted:
             continue
         eid = formatted.get("event_id") or _event_id(it)
         if eid:
-            if eid in seen_ids:
-                continue
             formatted["event_id"] = eid
-            seen_ids.add(eid)
         elif formatted.get("type") != "round_start":
             # RoundStart 载荷经常是 {}，用 JSON 当 key 会把每回合开始并成一条。
-            fb = _fallback_key(it)
-            if fb in seen_fb:
-                continue
-            formatted["_raw"] = fb
-            seen_fb.add(fb)
+            formatted["_raw"] = _fallback_key(it)
+        prepared.append(formatted)
+
+    if not prepared:
+        return existing
+
+    seen_ids = {str(x.get("event_id")) for x in existing if x.get("event_id")}
+    seen_fb = {str(x.get("_raw")) for x in _this_round_entries(existing) if x.get("_raw")}
+    seen_sem = {k for x in existing if (k := _semantic_key(x))}
+    incoming_ids = [str(x.get("event_id")) for x in prepared if x.get("event_id")]
+    if existing and incoming_ids and all(i in seen_ids for i in incoming_ids):
+        live_log.debug("log replay skipped n=%s", len(prepared))
+        return existing
+
+    matched = sum(1 for x in prepared if (k := _semantic_key(x)) and k in seen_sem)
+    replay = bool(existing) and len(prepared) >= 4 and matched >= max(2, len(prepared) // 2)
+    if replay:
+        live_log.debug("log dump replay matched=%s n=%s", matched, len(prepared))
+
+    out = list(existing)
+    pairs = _pairs_this_round(out)
+    added = 0
+    for formatted in prepared:
+        eid = formatted.get("event_id")
+        if eid and eid in seen_ids:
+            continue
+        fb = formatted.get("_raw")
+        if fb and fb in seen_fb:
+            continue
+        sem = _semantic_key(formatted)
+        if replay and sem and sem in seen_sem:
+            continue
+        pair = _kill_pair(formatted)
+        if pair and pair in pairs:
+            continue
+        if eid:
+            seen_ids.add(str(eid))
+        if fb:
+            seen_fb.add(str(fb))
+        if sem:
+            seen_sem.add(sem)
         out.insert(0, formatted)
         added += 1
+        if formatted.get("type") in _ROUND_BREAK:
+            pairs = set()
+            seen_fb = set()
+        elif pair:
+            pairs.add(pair)
     if added:
         live_log.debug("log merged +%s total=%s", added, len(out))
     return out[:80]
@@ -212,15 +345,8 @@ def merge_log(existing: list[dict[str, Any]], incoming: Any) -> list[dict[str, A
 
 def patch_board_from_log(board: dict[str, Any], incoming: Any) -> dict[str, Any]:
     """RoundEnd carries the new map score; keep the board in sync if scoreboard is stale."""
-    block = incoming
-    if isinstance(incoming, dict) and "log" in incoming:
-        block = incoming["log"]
-    items: list[dict[str, Any]]
-    if isinstance(block, list):
-        items = [x for x in block if isinstance(x, dict)]
-    elif isinstance(block, dict):
-        items = [block]
-    else:
+    items = _log_items(incoming)
+    if items is None:
         return board
     last: dict[str, Any] | None = None
     for it in items:

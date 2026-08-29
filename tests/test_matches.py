@@ -1,4 +1,10 @@
-from hltv_bot.live import format_log_item, merge_log, patch_board_from_log, snapshot_from_scoreboard
+from hltv_bot.live import (
+    format_log_item,
+    mark_new_round,
+    merge_log,
+    patch_board_from_log,
+    snapshot_from_scoreboard,
+)
 from hltv_bot.matches import format_start_time, parse_match_list, parse_match_meta, pretty_name
 
 
@@ -96,6 +102,178 @@ def test_merge_log_skips_reconnect_replay():
     assert len(third) == 3
     assert third[0]["killer"] == "n1ssim"
     assert third[0]["event_id"] == "3"
+
+
+def test_merge_log_skips_half_dump_with_new_event_ids():
+    first_half = merge_log(
+        [],
+        {
+            "log": [
+                {
+                    "Kill": {
+                        "killerNick": "n1ssim",
+                        "victimNick": "kyousuke",
+                        "weapon": "ak47",
+                        "headShot": True,
+                        "eventId": 11,
+                    }
+                },
+                {
+                    "Kill": {
+                        "killerNick": "latto",
+                        "victimNick": "TeSeS",
+                        "weapon": "ak47",
+                        "headShot": False,
+                        "eventId": 12,
+                    }
+                },
+                {"RoundEnd": {"winner": "CT", "winType": "CTs_Win", "counterTerroristScore": 6, "terroristScore": 6}},
+                {"RoundStart": {}},
+            ]
+        },
+    )
+    dump = {
+        "log": [
+            {
+                "Kill": {
+                    "killerNick": "n1ssim",
+                    "victimNick": "kyousuke",
+                    "weapon": "ak47",
+                    "headShot": True,
+                    "eventId": 101,
+                }
+            },
+            {
+                "Kill": {
+                    "killerNick": "n1ssim",
+                    "victimNick": "kyousuke",
+                    "weapon": "ak47",
+                    "headShot": True,
+                    "eventId": 102,
+                }
+            },
+            {
+                "Kill": {
+                    "killerNick": "n1ssim",
+                    "victimNick": "kyousuke",
+                    "weapon": "ak47",
+                    "headShot": True,
+                    "eventId": 103,
+                }
+            },
+            {
+                "Kill": {
+                    "killerNick": "n1ssim",
+                    "victimNick": "kyousuke",
+                    "weapon": "ak47",
+                    "headShot": True,
+                    "eventId": 104,
+                }
+            },
+            {
+                "Kill": {
+                    "killerNick": "n1ssim",
+                    "victimNick": "kyousuke",
+                    "weapon": "ak47",
+                    "headShot": True,
+                    "eventId": 105,
+                }
+            },
+            {
+                "Kill": {
+                    "killerNick": "n1ssim",
+                    "victimNick": "kyousuke",
+                    "weapon": "ak47",
+                    "headShot": True,
+                    "eventId": 106,
+                }
+            },
+            {
+                "Kill": {
+                    "killerNick": "n1ssim",
+                    "victimNick": "kyousuke",
+                    "weapon": "glock",
+                    "headShot": False,
+                    "eventId": 201,
+                }
+            },
+            {
+                "Kill": {
+                    "killerNick": "m0NESY",
+                    "victimNick": "n1ssim",
+                    "weapon": "glock",
+                    "headShot": True,
+                    "eventId": 202,
+                }
+            },
+            {
+                "Kill": {
+                    "killerNick": "m0NESY",
+                    "victimNick": "latto",
+                    "weapon": "glock",
+                    "headShot": True,
+                    "eventId": 203,
+                }
+            },
+            {
+                "Kill": {
+                    "killerNick": "TeSeS",
+                    "victimNick": "try",
+                    "weapon": "glock",
+                    "headShot": True,
+                    "eventId": 204,
+                }
+            },
+        ]
+    }
+    merged = merge_log(first_half, dump)
+    ak = [x for x in merged if x.get("type") == "kill" and x.get("weapon") == "ak47" and x.get("killer") == "n1ssim"]
+    glocks = [x for x in merged if x.get("type") == "kill" and x.get("weapon") == "glock"]
+    assert len(ak) == 1
+    assert len(glocks) == 4
+    assert merged[0]["killer"] == "TeSeS"
+
+
+def test_merge_log_dedupes_same_pair_in_round():
+    raw = {
+        "log": [
+            {"Kill": {"killerNick": "n1ssim", "victimNick": "kyousuke", "weapon": "ak47", "headShot": True}},
+            {"Kill": {"killerNick": "n1ssim", "victimNick": "kyousuke", "weapon": "ak47", "headShot": True}},
+            {"Kill": {"killerNick": "n1ssim", "victimNick": "kyousuke", "weapon": "ak47", "headShot": True}},
+        ]
+    }
+    log = merge_log([], raw)
+    assert len(log) == 1
+    later = merge_log(
+        [{"type": "round_start", "killer": "回合", "text": "开始", "detail": "开始"}] + log,
+        {"log": [{"Kill": {"killerNick": "n1ssim", "victimNick": "kyousuke", "weapon": "ak47", "headShot": True}}]},
+    )
+    assert later[0]["killer"] == "n1ssim"
+    assert sum(1 for x in later if x.get("type") == "kill") == 2
+
+
+def test_merge_log_keeps_kill_and_assist_burst():
+    log = merge_log(
+        [],
+        {
+            "log": [
+                {"Kill": {"killerNick": "m0NESY", "victimNick": "arT", "weapon": "glock", "headShot": True, "eventId": 1}},
+                {"Assist": {"assisterNick": "dumau", "victimNick": "kyousuke"}},
+            ]
+        },
+    )
+    assert len(log) == 2
+
+
+def test_mark_new_round_inserts_start():
+    feed = [{"type": "kill", "killer": "a", "victim": "b", "weapon": "ak47"}]
+    out, n = mark_new_round(feed, {"currentRound": 13}, 12)
+    assert n == 13
+    assert out[0]["type"] == "round_start"
+    again, n2 = mark_new_round(out, {"currentRound": 13}, n)
+    assert n2 == 13
+    assert again[0]["type"] == "round_start"
+    assert sum(1 for x in again if x.get("type") == "round_start") == 1
 
 
 def test_patch_board_uses_last_round_end_score():

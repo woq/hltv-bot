@@ -20,7 +20,7 @@ from hltv_bot.format import (
     plain_to_rich,
 )
 from hltv_bot.http import CloudflareError
-from hltv_bot.live import merge_log, patch_board_from_log, snapshot_from_scoreboard
+from hltv_bot.live import mark_new_round, merge_log, patch_board_from_log, snapshot_from_scoreboard
 from hltv_bot.matches import fetch_match_meta, fetch_matches
 from hltv_bot.scorebot import iter_scorebot, scorebot_base
 from hltv_bot.ratelimit import Cooldown
@@ -482,6 +482,7 @@ class HltvTelegramBot:
     def _watch_loop(self, state: WatchState) -> None:
         board: dict = {}
         feed: list = []
+        round_seen: int | None = None
         try:
             stream = iter_scorebot(
                 self.session,
@@ -522,6 +523,7 @@ class HltvTelegramBot:
                     )
                 elif name == "scoreboard" and isinstance(payload, dict):
                     board = payload
+                    feed, round_seen = mark_new_round(feed, board, round_seen)
                     log.info("watch scoreboard %s", event_brief(name, payload))
                 elif name == "log":
                     before = len(feed)

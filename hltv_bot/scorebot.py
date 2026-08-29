@@ -29,8 +29,10 @@ RECONNECT_MAX = 180.0
 RECONNECT_5XX = 25.0
 # Engine.IO long-poll normally blocks ~25s. 400ms was RTT of HTTP 502 then
 # immediate next GET — not a configured interval. Floor every poll.
-POLL_MIN_GAP = 2.0
-POLL_EMPTY_GAP = 10.0
+POLL_MIN_GAP = 5.0
+POLL_EMPTY_GAP = 20.0
+POLL_5XX_GAP = 30.0
+POLL_5XX_MAX = 4
 UA = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
@@ -106,8 +108,16 @@ def next_backoff(backoff: float, *, http_5xx: bool = False) -> float:
     return min(cur * 2.0, RECONNECT_MAX)
 
 
-def poll_gap(elapsed: float, *, got_event: bool, timed_out: bool = False) -> float:
+def poll_gap(
+    elapsed: float,
+    *,
+    got_event: bool,
+    timed_out: bool = False,
+    http_5xx: bool = False,
+) -> float:
     """How long to wait after a poll GET before the next one."""
+    if http_5xx:
+        return POLL_5XX_GAP
     if timed_out:
         return POLL_MIN_GAP
     need = POLL_MIN_GAP if got_event else POLL_EMPTY_GAP
@@ -212,6 +222,7 @@ def iter_scorebot(
                 raise RuntimeError(f"scorebot readyForMatch HTTP {post_resp.status_code}")
 
             misses = 0
+            http_fails = 0
             while True:
                 t0 = time.monotonic()
                 timed_out = False
@@ -237,18 +248,34 @@ def iter_scorebot(
                 if resp.status_code in (403, 429):
                     raise CloudflareError(resp.status_code, str(resp.url))
                 if resp.status_code >= 400:
+                    http_fails += 1
                     log.warning(
-                        "poll http %s sid=%s elapsed=%.2fs bytes=%s body=%s",
+                        "poll http %s n=%s sid=%s elapsed=%.2fs bytes=%s body=%s",
                         resp.status_code,
+                        http_fails,
                         sid,
                         elapsed,
                         len(resp.content or b""),
                         clip((resp.content or b"")[:180], 180),
                     )
-                    raise RuntimeError(f"scorebot poll HTTP {resp.status_code}")
-                if misses:
+                    if http_fails >= POLL_5XX_MAX:
+                        raise RuntimeError(f"scorebot poll HTTP {resp.status_code}")
+                    gap = poll_gap(elapsed, got_event=False, http_5xx=True)
+                    yield (
+                        "status",
+                        {
+                            "state": "reconnect",
+                            "detail": f"poll HTTP {resp.status_code}",
+                            "wait": round(gap, 1),
+                        },
+                    )
+                    if gap:
+                        time.sleep(gap)
+                    continue
+                if misses or http_fails:
                     yield ("status", {"state": "connected"})
                 misses = 0
+                http_fails = 0
                 got = False
                 pkts = decode_payload(resp.content or b"")
                 log.debug(
