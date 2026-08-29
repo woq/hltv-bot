@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
+
+live_log = logging.getLogger("hltv_bot.live")
 
 
 def _as_player_list(raw: Any) -> list[dict[str, Any]]:
@@ -169,6 +172,14 @@ def snapshot_from_scoreboard(
     t_players = _side_players(
         board, "terroristTeam", "tPlayers", "terrorists", "TERRORIST", "t"
     )
+    if not ct_players and not t_players:
+        live_log.debug("scoreboard no players keys=%s", list(board.keys()))
+    else:
+        live_log.debug(
+            "scoreboard players ct=%s t=%s",
+            len(ct_players),
+            len(t_players),
+        )
     return {
         "live": True,
         "url": meta.get("url"),

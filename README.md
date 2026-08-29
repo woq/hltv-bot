@@ -1,8 +1,17 @@
 # hltv-bot
 
-HLTV **比赛列表 / 详情 / Scorebot 长连接（Game log）** + Telegram：先发一条消息再 `editMessageText`；讨论把消息刷下去时用 `/bump` 再发一条新的继续 edit。
+HLTV 比赛列表 / 详情 / Scorebot 长连接（Game log）+ Telegram Rich Message：先 `sendRichMessage` 再 `editMessageText`；讨论把消息刷下去时用 `/bump` 再发一条继续 edit。
 
 TLS 按 MCP 里 Chrome 134 的头伪装（`curl_cffi` impersonate + 抄来的 `sec-ch-ua` / UA / cookie）。
+
+## 文档
+
+| 文档 | |
+|---|---|
+| [docs/rich-message.md](docs/rich-message.md) | Telegram Rich Message：全部出站必须走这条；HLTV 记分板排版；提交前检查 |
+| [docs/hltv-api.md](docs/hltv-api.md) | 非官方 HLTV 接口：列表 HTML、详情 meta、Scorebot Engine.IO、事件字段 |
+| [docs/cloudflare.md](docs/cloudflare.md) | Cookie / TLS 伪装、403 处理、试过的方案 |
+| [deploy/chrome-session/README.md](deploy/chrome-session/README.md) | VPS 常驻真 Chrome（备用，内存要求高） |
 
 ## 安装
 
@@ -17,7 +26,7 @@ pip install -e .
 
 ## Cookie（从本机 Chrome / MCP）
 
-HttpOnly 的 `cf_clearance`、`__cf_bm` **不能** `document.cookie`。在 DevTools → Network 点一条 `scorebot-lb.hltv.org` 或 `www.hltv.org` 请求，复制 **Cookie** 整行：
+细节见 [docs/cloudflare.md](docs/cloudflare.md)。HttpOnly 的 `cf_clearance`、`__cf_bm` **不能** `document.cookie`。DevTools → Network 点 `www.hltv.org` 或 `scorebot-lb.hltv.org`，复制 Cookie 整行：
 
 ```bash
 cp data/session.example.json data/session.json
@@ -99,3 +108,7 @@ python3 -m hltv_bot bot
 限流：`/matches` 8s、`/watch` 6s、`/bump` 4s；live **edit 最少间隔 1.8s**（3K/ACE/回合结束立刻推）；HLTV 列表缓存 45s；Telegram 429 会按 `retry_after` 重试一次。
 
 采集和 bot **跑在和 Chrome 同一出口 IP 的 PC** 上。手机只开 Telegram。MCP 只用来烤 cookie / 调试，不要当 24h 进程。
+
+Bot 默认 `HLTV_LOG=DEBUG`，Scorebot / Telegram / HTTP 都会打到 stdout。改成 INFO：`HLTV_LOG=INFO python3 -m hltv_bot bot`。
+
+提交或 push 前：`python3 -m pytest tests/test_rich_message.py tests/test_format.py -q`（见 [docs/rich-message.md](docs/rich-message.md)）。

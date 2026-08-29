@@ -7,15 +7,19 @@ path verified with captured Chrome cookies. Same events: log / scoreboard.
 from __future__ import annotations
 
 import json
+import logging
 import time
 from typing import Any, Callable, Iterator
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
+from hltv_bot.debuglog import clip, event_brief
 from hltv_bot.eio import decode_payload, encode_event, encode_payload, parse_event, parse_open
 from hltv_bot.http import request
 from hltv_bot.session import BrowserSession
+
+log = logging.getLogger("hltv_bot.scorebot")
 
 SCOREBOT_DEFAULT = "https://scorebot-lb.hltv.org"
 UA = (
@@ -82,12 +86,10 @@ def iter_scorebot(
 
     Long-poll GET may wait ~pingInterval (25s) with no bytes; treat curl 28 as empty poll.
     """
-    import logging
-
     from curl_cffi.requests import Session
 
-    log = logging.getLogger("hltv_bot.scorebot")
     headers = sess.as_headers()
+    log.info("scorebot start listId=%s base=%s impersonate=%s", list_id, base, sess.impersonate)
     from hltv_bot.http import CloudflareError
 
     backoff = 1.0
@@ -98,10 +100,17 @@ def iter_scorebot(
             sid = None
             for attempt in range(4):
                 try:
-                    resp = client.get(_poll_url(base), headers=headers)
+                    url = _poll_url(base)
+                    log.debug("handshake GET %s attempt=%s", url, attempt)
+                    resp = client.get(url, headers=headers)
+                    log.debug(
+                        "handshake status=%s bytes=%s",
+                        resp.status_code,
+                        len(resp.content or b""),
+                    )
                 except Exception as e:
                     if _is_timeout(e) and attempt < 3:
-                        log.info("handshake timeout, retry %s", attempt + 1)
+                        log.info("handshake timeout, retry %s err=%s", attempt + 1, clip(e, 120))
                         yield ("status", {"state": "reconnect", "detail": "handshake timeout"})
                         time.sleep(1)
                         continue
@@ -112,8 +121,16 @@ def iter_scorebot(
                     opened = parse_open(pkt)
                     if opened and "sid" in opened:
                         sid = opened["sid"]
+                        log.debug(
+                            "handshake open sid=%s pingInterval=%s pingTimeout=%s upgrades=%s",
+                            sid,
+                            opened.get("pingInterval"),
+                            opened.get("pingTimeout"),
+                            opened.get("upgrades"),
+                        )
                     ev = parse_event(pkt)
                     if ev:
+                        log.debug("handshake event %s %s", ev[0], event_brief(ev[0], ev[1]))
                         yield ev
                 if sid:
                     break
@@ -128,11 +145,18 @@ def iter_scorebot(
             emit = encode_event("readyForMatch", ready_for_match_payload(list_id))
             post_headers = dict(headers)
             post_headers["content-type"] = "text/plain;charset=UTF-8"
-            client.post(
-                _poll_url(base, {"sid": sid}),
+            post_url = _poll_url(base, {"sid": sid})
+            log.debug("readyForMatch POST sid=%s listId=%s pkt=%s", sid, list_id, clip(emit, 200))
+            post_resp = client.post(
+                post_url,
                 data=encode_payload(emit),
                 headers=post_headers,
                 timeout=20,
+            )
+            log.debug(
+                "readyForMatch status=%s bytes=%s",
+                post_resp.status_code,
+                len(post_resp.content or b""),
             )
 
             misses = 0
@@ -157,11 +181,22 @@ def iter_scorebot(
                     yield ("status", {"state": "connected"})
                 misses = 0
                 got = False
-                for pkt in decode_payload(resp.content or b""):
+                pkts = decode_payload(resp.content or b"")
+                log.debug(
+                    "poll sid=%s status=%s bytes=%s packets=%s",
+                    sid,
+                    resp.status_code,
+                    len(resp.content or b""),
+                    len(pkts),
+                )
+                for pkt in pkts:
                     ev = parse_event(pkt)
                     if ev:
                         got = True
+                        log.debug("event %s %s", ev[0], event_brief(ev[0], ev[1]))
                         yield ev
+                    else:
+                        log.debug("packet %s", clip(pkt, 160))
                 if not got:
                     log.debug("poll empty sid=%s", sid)
                 yield ("tick", None)

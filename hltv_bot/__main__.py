@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
+import os
 import sys
 from pathlib import Path
 
@@ -82,17 +84,17 @@ def main(argv: list[str] | None = None) -> int:
             print(("LIVE " if row["live"] == "1" else "     ") + row["id"], row["title"])
         return 0
     if args.cmd == "bot":
-        import logging
-        import sys
-
         from hltv_bot.bot import bot_from_env
 
+        level_name = (os.environ.get("HLTV_LOG") or "DEBUG").upper()
+        level = getattr(logging, level_name, logging.DEBUG)
         logging.basicConfig(
-            level=logging.INFO,
+            level=level,
             format="%(asctime)s %(levelname)s %(name)s %(message)s",
             stream=sys.stdout,
             force=True,
         )
+        logging.getLogger("hltv_bot").info("log level=%s", level_name)
         bot_from_env().run()
         return 0
     return 1

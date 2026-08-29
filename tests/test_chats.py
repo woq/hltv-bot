@@ -16,8 +16,17 @@ def test_add_list_remove_group(tmp_path):
 
 
 class _Tg:
-    def send_message(self, chat_id, text):
+    def send_rich(self, chat_id, html, **kwargs):
         return {"message_id": 1}
+
+    def send_message(self, chat_id, text):
+        return self.send_rich(chat_id, text)
+
+    def chat_member_status(self, chat_id, user_id):
+        return ""
+
+    def chat_admin_user_ids(self, chat_id):
+        return set()
 
 
 def test_non_admin_cannot_allow(tmp_path):

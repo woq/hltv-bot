@@ -10,7 +10,15 @@ from pathlib import Path
 log = logging.getLogger("hltv_bot")
 
 from hltv_bot.chats import add_group, group_ids, list_groups, remove_group
-from hltv_bot.format import format_match_list, format_rich_html, format_telegram
+from hltv_bot.debuglog import clip, event_brief, snap_brief
+from hltv_bot.format import (
+    format_connecting_html,
+    format_kv_table,
+    format_match_list_rich,
+    format_rich_html,
+    h,
+    plain_to_rich,
+)
 from hltv_bot.http import CloudflareError
 from hltv_bot.live import merge_log, snapshot_from_scoreboard
 from hltv_bot.matches import fetch_match_meta, fetch_matches
@@ -23,18 +31,22 @@ from hltv_bot.telegram_api import Telegram
 DEFAULT_ADMIN_ID = 1442477170
 
 HELP = """\
-/matches — 今日比赛
-/watch — 实时观赛
-/bump — 顶到最新
-/stop — 停止观赛
-
-管理员：
-/allow — 授权本群
-/deny — 取消授权
-/groups — 已授权群
-/cookie — 更新 Cookie
-/status — 状态
-/debug — 调试（user/chat/admin）
+<h3>hltv-bot</h3>
+<ul>
+<li><code>/matches</code> — 今日比赛</li>
+<li><code>/watch</code> — 实时观赛</li>
+<li><code>/bump</code> — 顶到最新</li>
+<li><code>/stop</code> — 停止观赛</li>
+</ul>
+<h4>管理员</h4>
+<ul>
+<li><code>/allow</code> — 授权本群</li>
+<li><code>/deny</code> — 取消授权</li>
+<li><code>/groups</code> — 已授权群</li>
+<li><code>/cookie</code> — 更新 Cookie</li>
+<li><code>/status</code> — 状态</li>
+<li><code>/debug</code> — 调试（user/chat/admin）</li>
+</ul>
 """
 
 ADMIN_CMDS = frozenset(
@@ -229,9 +241,9 @@ class HltvTelegramBot:
         if not rows:
             self.tg.send_message(chat_id, "列表是空的（或解析失败）")
             return
-        self.tg.send_message(
-            chat_id, format_match_list(rows, starred_only=not all_mode)
-        )
+        html = format_match_list_rich(rows, starred_only=not all_mode)
+        log.debug("matches html_len=%s", len(html))
+        self._send_rich(chat_id, html)
 
     def _cmd_watch(self, chat_id: int, arg: str) -> None:
         if not arg:
@@ -249,17 +261,16 @@ class HltvTelegramBot:
             self.tg.send_message(chat_id, "没有 data-scorebot-id")
             return
         t1, t2 = meta.get("team1") or "?", meta.get("team2") or "?"
-        html = (
-            f"<h3>🔴 LIVE · 连接中</h3>"
-            f"<p><b>{t1}</b> — <b>{t2}</b></p>"
-            f"<p><code>{list_id}</code></p>"
+        html = format_connecting_html(
+            team1=str(t1),
+            team2=str(t2),
+            list_id=str(list_id),
+            url=meta.get("url"),
+            link="connecting",
         )
-        try:
-            msg = self.tg.send_rich(chat_id, html)
-        except Exception as e:
-            log.warning("sendRichMessage failed: %s", e)
-            msg = self.tg.send_message(chat_id, f"🔴 LIVE  {t1} — {t2}\n连接 {list_id}…")
-        text = f"LIVE {t1} {t2}"
+        log.info("watch start listId=%s %s vs %s url=%s", list_id, t1, t2, meta.get("url"))
+        msg = self._send_rich(chat_id, html)
+        text = html
         state = WatchState(
             chat_id=chat_id,
             list_id=str(list_id),
@@ -277,10 +288,8 @@ class HltvTelegramBot:
         if not w or w.chat_id != chat_id or not w.text:
             self.tg.send_message(chat_id, "没有正在 watch 的消息")
             return
-        try:
-            msg = self.tg.send_rich(chat_id, w.text)
-        except Exception:
-            msg = self.tg.send_message(chat_id, w.text)
+        log.info("bump chat=%s old_msg=%s", chat_id, w.message_id)
+        msg = self._send_rich(chat_id, w.text)
         w.message_id = msg["message_id"] if isinstance(msg, dict) else w.message_id
         w.last_bump = time.time()
 
@@ -296,17 +305,21 @@ class HltvTelegramBot:
             watch_line = f"watching {w.list_id} msg={w.message_id}"
         self.tg.send_message(
             chat_id,
-            "\n".join(
+            format_kv_table(
+                "Status",
                 [
-                    f"impersonate: {self.session.impersonate}",
-                    f"cf_clearance: {'yes' if self.session.has_clearance() else 'NO'}",
-                    f"cookies: {', '.join(names) or '(none)'}",
-                    f"session: {self.session.path}",
-                    watch_line,
-                    f"auto-bump: {self.bump_seconds}s" if self.bump_seconds else "auto-bump: off（用 /bump）",
-                    f"admins: {', '.join(str(i) for i in sorted(self.admin_ids))}",
-                    f"groups: {len(list_groups())}",
-                ]
+                    ("impersonate", h(self.session.impersonate)),
+                    ("cf_clearance", "yes" if self.session.has_clearance() else "NO"),
+                    ("cookies", h(", ".join(names) or "(none)")),
+                    ("session", h(str(self.session.path or ""))),
+                    ("watch", h(watch_line)),
+                    (
+                        "auto-bump",
+                        f"{self.bump_seconds}s" if self.bump_seconds else "off · /bump",
+                    ),
+                    ("admins", h(", ".join(str(i) for i in sorted(self.admin_ids)))),
+                    ("groups", str(len(list_groups()))),
+                ],
             ),
         )
 
@@ -349,35 +362,51 @@ class HltvTelegramBot:
     ) -> None:
         rows = list_groups()
         listed = int(chat_id) in group_ids()
-        lines = [
-            "<b>debug</b>",
-            f"user_id: <code>{user_id}</code>",
-            f"chat_id: <code>{chat_id}</code>",
-            f"chat_type: {chat_type or '?'}",
-            f"title: {chat_title or '-'}",
-            f"bot_admin: {self.is_admin(user_id)}",
-            f"can_setup: {self.can_setup_chat(chat_id, user_id, chat_type)}",
-            f"chat_listed: {listed}",
-            f"admins: {', '.join(str(i) for i in sorted(self.admin_ids))}",
-            "groups:",
-        ]
-        if rows:
-            for g in rows:
-                lines.append(f"  <code>{g.get('id')}</code> {g.get('title') or ''}")
-        else:
-            lines.append("  (empty)")
-        log.info("debug %s", " | ".join(lines))
-        self.tg.send_message(chat_id, "\n".join(lines))
+        group_html = (
+            "<br>".join(
+                f"<code>{h(g.get('id'))}</code> {h(g.get('title') or '')}" for g in rows
+            )
+            if rows
+            else "<i>empty</i>"
+        )
+        html = format_kv_table(
+            "debug",
+            [
+                ("user_id", f"<code>{h(user_id)}</code>"),
+                ("chat_id", f"<code>{h(chat_id)}</code>"),
+                ("chat_type", h(chat_type or "?")),
+                ("title", h(chat_title or "-")),
+                ("bot_admin", str(self.is_admin(user_id))),
+                ("can_setup", str(self.can_setup_chat(chat_id, user_id, chat_type))),
+                ("chat_listed", str(listed)),
+                ("admins", h(", ".join(str(i) for i in sorted(self.admin_ids)))),
+                ("groups", group_html),
+            ],
+        )
+        log.info(
+            "debug user=%s chat=%s type=%s listed=%s admin=%s groups=%s",
+            user_id,
+            chat_id,
+            chat_type,
+            listed,
+            self.is_admin(user_id),
+            len(rows),
+        )
+        self.tg.send_message(chat_id, html)
 
     def _cmd_groups(self, chat_id: int) -> None:
         rows = list_groups()
         if not rows:
             self.tg.send_message(chat_id, "还没有授权群。把 bot 拉进群后发 /allow")
             return
-        lines = ["授权群"]
-        for g in rows:
-            lines.append(f"<code>{g.get('id')}</code>  {g.get('title') or ''}")
-        self.tg.send_message(chat_id, "\n".join(lines))
+        body = "".join(
+            f"<tr><td><code>{h(g.get('id'))}</code></td><td>{h(g.get('title') or '')}</td></tr>"
+            for g in rows
+        )
+        self.tg.send_message(
+            chat_id,
+            f"<h3>授权群</h3><table bordered striped compact>{body}</table>",
+        )
 
     def handle_added_to_chat(self, upd: dict) -> None:
         member = upd.get("my_chat_member") or {}
@@ -404,7 +433,7 @@ class HltvTelegramBot:
         if self.can_setup_chat(int(cid), from_id, ctype):
             self.tg.send_message(
                 cid,
-                f"已进群 <b>{title}</b>\n发 /allow 加入推送名单",
+                f"<h3>已进群</h3><p><b>{h(title)}</b></p><p>发 /allow 加入推送名单</p>",
             )
             return
         log.info("added to chat but adder cannot /allow from=%s", from_id)
@@ -461,28 +490,65 @@ class HltvTelegramBot:
             )
             for name, payload in stream:
                 if state.stop.is_set() or self.watch is not state:
+                    log.info("watch stop listId=%s event=%s", state.list_id, name)
                     return
+                log.debug("watch event %s %s", name, event_brief(name, payload))
                 status_changed = False
                 if name == "status" and isinstance(payload, dict):
                     new_link = str(payload.get("state") or state.link)
                     status_changed = new_link != state.link
                     state.link = new_link
+                    log.info("watch link %s -> %s", "same" if not status_changed else new_link, state.link)
                 elif name == "scoreboard" and isinstance(payload, dict):
                     board = payload
+                    log.info("watch scoreboard %s", event_brief(name, payload))
                 elif name == "log":
+                    before = len(feed)
                     feed = merge_log(feed, payload)
+                    log.info("watch log %s feed %s -> %s", event_brief(name, payload), before, len(feed))
                 elif name == "tick":
                     if state.last_snap:
-                        self._flush_watch(state, format_rich_html(state.last_snap))
+                        html = (
+                            format_rich_html(state.last_snap)
+                            if board
+                            else format_connecting_html(
+                                team1=str(state.meta.get("team1") or "?"),
+                                team2=str(state.meta.get("team2") or "?"),
+                                list_id=state.list_id,
+                                url=state.meta.get("url"),
+                                link=state.link,
+                            )
+                        )
+                        self._flush_watch(state, html)
                     continue
                 else:
+                    log.debug("watch ignore event %s", name)
                     continue
-                snap = snapshot_from_scoreboard(board, meta=state.meta, log=feed)
-                snap["link"] = state.link
+                if board:
+                    snap = snapshot_from_scoreboard(board, meta=state.meta, log=feed)
+                    snap["link"] = state.link
+                    html = format_rich_html(snap)
+                else:
+                    snap = {
+                        "live": True,
+                        "url": state.meta.get("url"),
+                        "team1": {"name": state.meta.get("team1")},
+                        "team2": {"name": state.meta.get("team2")},
+                        "link": state.link,
+                        "log": feed,
+                        "teams": [],
+                    }
+                    html = format_connecting_html(
+                        team1=str(state.meta.get("team1") or "?"),
+                        team2=str(state.meta.get("team2") or "?"),
+                        list_id=state.list_id,
+                        url=state.meta.get("url"),
+                        link=state.link,
+                    )
                 fp = snapshot_fingerprint(snap) + "|" + state.link
                 if fp == state.fingerprint and not status_changed:
+                    log.debug("watch skip unchanged fp=%s", clip(fp, 120))
                     continue
-                html = format_rich_html(snap)
                 state.text = html
                 state.last_snap = snap
                 state.fingerprint = fp
@@ -490,10 +556,18 @@ class HltvTelegramBot:
                 force = (
                     name == "tick"
                     or status_changed
-                    or any(s in html for s in ("🔥 3K", "💥 4K", "⭐ ACE", "🏁"))
+                    or any(s in html for s in ("<mark>3K</mark>", "<mark>4K</mark>", "<mark>ACE</mark>", "回合结束"))
                 )
-                if now - state.last_edit < MIN_EDIT_INTERVAL and not force:
+                wait = now - state.last_edit
+                if wait < MIN_EDIT_INTERVAL and not force:
+                    log.debug(
+                        "watch skip interval wait=%.2fs force=%s %s",
+                        wait,
+                        force,
+                        snap_brief(snap),
+                    )
                     continue
+                log.debug("watch render %s html_len=%s %s", name, len(html), snap_brief(snap))
                 self._flush_watch(state, html)
                 continue
         except CloudflareError as e:
@@ -504,43 +578,46 @@ class HltvTelegramBot:
             if not state.stop.is_set():
                 log.info("watch ended: %s", e)
 
+    def _send_rich(self, chat_id: int, html: str) -> dict:
+        try:
+            return self.tg.send_rich(chat_id, html)
+        except Exception as e:
+            log.warning("sendRichMessage failed: %s html=%s", e, clip(html, 240))
+            return self.tg.send_rich(chat_id, plain_to_rich(html))
+
     def _flush_watch(self, state: WatchState, html: str) -> None:
         if not html:
             return
         now = time.time()
         snap = state.last_snap or {}
-        fallback = format_telegram(snap) if snap else html
         if (
             self.bump_seconds
             and state.message_id
             and now - state.last_bump >= self.bump_seconds
         ):
-            try:
-                msg = self.tg.send_rich(state.chat_id, html)
-            except Exception:
-                msg = self.tg.send_message(state.chat_id, fallback)
+            log.info("watch auto-bump chat=%s", state.chat_id)
+            msg = self._send_rich(state.chat_id, html)
             state.message_id = msg.get("message_id") if isinstance(msg, dict) else state.message_id
             state.last_bump = now
             state.last_edit = now
-            log.info("watch send chat=%s msg=%s", state.chat_id, state.message_id)
+            log.info("watch send chat=%s msg=%s %s", state.chat_id, state.message_id, snap_brief(snap))
             return
         if state.message_id:
             try:
                 self.tg.edit_rich(state.chat_id, state.message_id, html)
-                log.info("watch edit chat=%s msg=%s", state.chat_id, state.message_id)
+                log.info("watch edit chat=%s msg=%s %s", state.chat_id, state.message_id, snap_brief(snap))
             except Exception as e:
-                log.warning("watch edit_rich failed: %s", e)
+                log.warning("watch edit_rich failed: %s html=%s", e, clip(html, 240))
                 try:
-                    self.tg.edit_message(state.chat_id, state.message_id, fallback)
+                    self.tg.edit_rich(state.chat_id, state.message_id, plain_to_rich(html))
+                    log.info("watch edit simplified chat=%s msg=%s", state.chat_id, state.message_id)
                 except Exception as e2:
-                    log.warning("watch edit_message failed: %s", e2)
-                    try:
-                        msg = self.tg.send_rich(state.chat_id, html)
-                    except Exception:
-                        msg = self.tg.send_message(state.chat_id, fallback)
+                    log.warning("watch edit simplified failed: %s", e2)
+                    msg = self._send_rich(state.chat_id, html)
                     if isinstance(msg, dict) and msg.get("message_id"):
                         state.message_id = msg["message_id"]
                         state.last_bump = now
+                        log.info("watch resend chat=%s msg=%s", state.chat_id, state.message_id)
             state.last_edit = now
 
     def _mark_watch_down(self, state: WatchState, link: str) -> None:

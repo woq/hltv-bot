@@ -1,4 +1,9 @@
-from hltv_bot.format import format_match_list, format_rich_html, format_telegram
+from hltv_bot.format import (
+    format_match_list,
+    format_match_list_rich,
+    format_rich_html,
+    format_telegram,
+)
 from hltv_bot.profile import pick_impersonate
 from hltv_bot.scorebot import ready_for_match_payload, scorebot_base
 from hltv_bot.snapshot import snapshot_fingerprint
@@ -54,6 +59,8 @@ def test_format_contains_score_and_log():
     rich = format_rich_html(SNAP)
     assert "<table" in rich and "<ul>" in rich and "<h3>" in rich
     assert "AWP" in rich
+    assert rich.count("<table") == 2
+    assert "CT ·" in rich and "T ·" in rich
 
 
 def test_format_multikill_banner():
@@ -73,6 +80,9 @@ def test_format_multikill_banner():
     assert "3K" in text
     assert "sh1ro" in text
     assert "Game log" in text
+    rich = format_rich_html(snap)
+    assert "<mark>3K</mark>" in rich
+    assert "sh1ro" in rich
 
 
 def test_match_list_rich_text():
@@ -140,14 +150,41 @@ def test_match_list_rich_text():
         starred_only=False,
     )
     assert "/watch 9" in shown
+    rich_list = format_match_list_rich(
+        [
+            {
+                "id": "2396932",
+                "team1": "G2",
+                "team2": "Spirit",
+                "event": "BLAST Open Porto 2026",
+                "live": "1",
+                "stars": "5",
+                "time": "21:00",
+            }
+        ]
+    )
+    assert "<table" in rich_list
+    assert "<mark>LIVE</mark>" in rich_list
+    assert "/watch 2396932" in rich_list
+    assert "<h4>" in rich_list
 
 
 def test_html_escapes_nicks():
     snap = dict(SNAP)
-    snap["team1"] = {"name": "A<B"}
+    snap["teams"] = [
+        {
+            "name": "A<B",
+            "players": [{"nick": "x<y", "kills": 1, "assists": 0, "deaths": 0, "adr": 1}],
+        },
+        SNAP["teams"][1],
+    ]
     text = format_telegram(snap)
     assert "A&lt;B" in text
     assert "A<B" not in text
+    rich = format_rich_html(snap)
+    assert "A&lt;B" in rich
+    assert "x&lt;y" in rich
+    assert "A<B" not in rich
 
 
 def test_fingerprint_changes_with_log():

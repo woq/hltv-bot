@@ -7,9 +7,12 @@ class FakeTg:
         self.sent = []
         self.deleted = []
 
-    def send_message(self, chat_id, text):
-        self.sent.append(text)
+    def send_rich(self, chat_id, html, **kwargs):
+        self.sent.append(html)
         return {"message_id": 1}
+
+    def send_message(self, chat_id, text):
+        return self.send_rich(chat_id, text)
 
     def delete_message(self, chat_id, message_id):
         self.deleted.append(message_id)

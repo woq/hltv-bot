@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import logging
 import re
 from datetime import datetime, timedelta, timezone
 from html import unescape
 
 from hltv_bot.http import request
 from hltv_bot.session import BrowserSession
+
+log = logging.getLogger("hltv_bot.matches")
 
 MATCHES_URL = "https://www.hltv.org/matches"
 _MATCH_CACHE: dict = {"at": 0.0, "rows": []}
@@ -237,6 +240,7 @@ def fetch_matches(sess: BrowserSession, timeout: float = 20.0) -> list[dict[str,
 
     now = _time.monotonic()
     if _MATCH_CACHE["rows"] and now - _MATCH_CACHE["at"] < _MATCH_CACHE_TTL:
+        log.debug("matches cache hit n=%s age=%.1fs", len(_MATCH_CACHE["rows"]), now - _MATCH_CACHE["at"])
         return list(_MATCH_CACHE["rows"])
     _st, body, _ = request(
         sess,
@@ -251,6 +255,8 @@ def fetch_matches(sess: BrowserSession, timeout: float = 20.0) -> list[dict[str,
         },
     )
     rows = parse_match_list(body.decode("utf-8", "replace"))
+    live_n = sum(1 for r in rows if r.get("live") == "1")
+    log.info("matches fetched n=%s live=%s bytes=%s", len(rows), live_n, len(body))
     _MATCH_CACHE["at"] = now
     _MATCH_CACHE["rows"] = rows
     return list(rows)
@@ -271,4 +277,14 @@ def fetch_match_meta(sess: BrowserSession, url: str, timeout: float = 20.0) -> d
             "sec-fetch-site": "same-origin",
         },
     )
-    return parse_match_meta(body.decode("utf-8", "replace"), url=url)
+    meta = parse_match_meta(body.decode("utf-8", "replace"), url=url)
+    log.info(
+        "match meta url=%s scorebotId=%s scorebotUrl=%s team1=%s team2=%s bytes=%s",
+        meta.get("url"),
+        meta.get("scorebotId"),
+        meta.get("scorebotUrl"),
+        meta.get("team1"),
+        meta.get("team2"),
+        len(body),
+    )
+    return meta

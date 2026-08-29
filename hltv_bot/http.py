@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
+from hltv_bot.debuglog import clip
 from hltv_bot.session import BrowserSession
+
+log = logging.getLogger("hltv_bot.http")
 
 
 class CloudflareError(RuntimeError):
@@ -37,8 +41,26 @@ def request(
     if headers:
         extra.update(headers)
     with Session(**{k: v for k, v in kw.items() if k != "headers"}) as client:
+        log.debug("http %s %s timeout=%s impersonate=%s", method, url, timeout, sess.impersonate)
         resp = client.request(method, url, data=data, headers=extra)
         hdrs = {k.lower(): v for k, v in resp.headers.items()}
+        log.debug(
+            "http %s %s status=%s bytes=%s cf=%s server=%s",
+            method,
+            url,
+            resp.status_code,
+            len(resp.content or b""),
+            hdrs.get("cf-mitigated") or hdrs.get("cf-ray"),
+            hdrs.get("server"),
+        )
         if resp.status_code in (403, 429) or hdrs.get("cf-mitigated") == "challenge":
+            log.warning(
+                "http cloudflare %s %s status=%s hint=%s body=%s",
+                method,
+                url,
+                resp.status_code,
+                hdrs.get("cf-mitigated", ""),
+                clip((resp.content or b"")[:300], 300),
+            )
             raise CloudflareError(resp.status_code, url, hdrs.get("cf-mitigated", ""))
         return resp.status_code, resp.content, hdrs
