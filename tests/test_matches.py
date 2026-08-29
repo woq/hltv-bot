@@ -1,4 +1,4 @@
-from hltv_bot.live import format_log_item, merge_log, snapshot_from_scoreboard
+from hltv_bot.live import format_log_item, merge_log, patch_board_from_log, snapshot_from_scoreboard
 from hltv_bot.matches import format_start_time, parse_match_list, parse_match_meta, pretty_name
 
 
@@ -96,6 +96,36 @@ def test_merge_log_skips_reconnect_replay():
     assert len(third) == 3
     assert third[0]["killer"] == "n1ssim"
     assert third[0]["event_id"] == "3"
+
+
+def test_patch_board_uses_last_round_end_score():
+    board = patch_board_from_log(
+        {"currentRound": 3, "ctTeamScore": 1, "tTeamScore": 1},
+        {
+            "log": [
+                {
+                    "RoundEnd": {
+                        "winner": "CT",
+                        "winType": "CTs_Win",
+                        "counterTerroristScore": 2,
+                        "terroristScore": 1,
+                    }
+                }
+            ]
+        },
+    )
+    assert board["counterTerroristScore"] == 2
+    assert board["terroristScore"] == 1
+    assert board["currentRound"] == 3
+
+
+def test_format_log_bomb_has_nick_column():
+    item = format_log_item(
+        {"BombPlanted": {"playerNick": "donk", "bombSite": "A"}}
+    )
+    assert item["killer"] == "donk"
+    assert "安包" in item["detail"]
+    assert "A" in item["detail"]
 
 
 def test_snapshot_reads_ct_team_score_keys():

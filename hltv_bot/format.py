@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime, timedelta, timezone
 from html import escape
+
+CST = timezone(timedelta(hours=8))
 
 _ROUND_BREAK = frozenset(
     {"round_start", "round_over", "round_over_ct", "round_over_t"}
@@ -70,16 +73,26 @@ _STREAK_PLAIN = {
 }
 
 _LINK_LABEL = {
-    "connecting": ("connecting", True),
+    "connecting": ("连接中", True),
     "connected": ("", False),
     "idle": ("", False),
-    "reconnect": ("reconnecting", True),
-    "disconnected": ("disconnected", True),
+    "reconnect": ("重连", True),
+    "disconnected": ("断开", True),
 }
 
 
 def h(text: object) -> str:
     return escape(str(text), quote=False)
+
+
+def format_next_clock(ts: object) -> str:
+    try:
+        t = float(ts or 0)
+    except (TypeError, ValueError):
+        return ""
+    if t <= 0:
+        return ""
+    return datetime.fromtimestamp(t, CST).strftime("%H:%M:%S")
 
 
 _RICH_BLOCK_RE = re.compile(
@@ -261,6 +274,8 @@ def _score_board(
     url: str = "",
     status: str = "",
     hot: bool = False,
+    notice: str = "",
+    next_at: object = None,
 ) -> str:
     live_s = "LIVE" if live else "SCORE"
     if url:
@@ -272,59 +287,73 @@ def _score_board(
         cap.append(f"R{h(round_n)}")
     if status:
         cap.append(f"<mark>{h(status)}</mark>" if hot else f"<i>{h(status)}</i>")
+    rows = [
+        "<tr>"
+        f'<td align="left"><mark>{h(left_side)}</mark><br><b>{h(left_name)}</b></td>'
+        f'<td align="center"><b>{h(left_score)}</b> &ndash; <b>{h(right_score)}</b></td>'
+        f'<td align="right"><b>{h(right_side)}</b><br><b>{h(right_name)}</b></td>'
+        "</tr>"
+    ]
+    nxt = format_next_clock(next_at)
+    if notice or nxt:
+        bits = []
+        if notice:
+            bits.append(f"<mark>{h(notice)}</mark>" if hot else h(notice))
+        if nxt:
+            bits.append(f"下次 {h(nxt)}")
+        rows.append(f'<tr><td colspan="3">{" · ".join(bits)}</td></tr>')
     return (
         '<table bordered compact>'
         f"<caption>{' · '.join(cap)}</caption>"
-        "<tr>"
-        f'<td align="left"><b>{h(left_name)}</b><br>{h(left_side)}</td>'
-        f'<td align="center"><b>{h(left_score)}</b> &ndash; <b>{h(right_score)}</b></td>'
-        f'<td align="right"><b>{h(right_name)}</b><br>{h(right_side)}</td>'
-        "</tr>"
-        "</table>"
+        + "".join(rows)
+        + "</table>"
     )
 
 
-def _roster_table(ct_team: dict, t_team: dict) -> str:
-    rows: list[str] = []
-
-    def section(side: str, team: dict) -> None:
+def _side_table(side: str, team: dict, *, ct: bool) -> str:
+    name = h(team.get("name") or side)
+    badge = f"<mark>{h(side)}</mark>" if ct else f"<b>{h(side)}</b>"
+    rows = [
+        "<tr>"
+        '<th align="left">Player</th>'
+        '<th align="right">K</th>'
+        '<th align="right">A</th>'
+        '<th align="right">D</th>'
+        '<th align="right">ADR</th>'
+        "</tr>"
+    ]
+    players = _sorted_players(team)
+    if not players:
+        rows.append('<tr><td colspan="5"><i>—</i></td></tr>')
+    for p in players:
+        nick = h(p.get("nick") or "?")
+        nick_cell = f"<mark>{nick}</mark>" if ct else f"<b>{nick}</b>"
         rows.append(
             "<tr>"
-            f'<th align="left" colspan="5"><mark>{h(side)}</mark> {h(team.get("name") or side)}</th>'
+            f"<td>{nick_cell}</td>"
+            f'<td align="right">{int(p.get("kills") or 0)}</td>'
+            f'<td align="right">{int(p.get("assists") or 0)}</td>'
+            f'<td align="right">{int(p.get("deaths") or 0)}</td>'
+            f'<td align="right">{h(_adr_s(p.get("adr")))}</td>'
             "</tr>"
         )
-        rows.append(
-            "<tr>"
-            '<th align="left">Player</th>'
-            '<th align="right">K</th>'
-            '<th align="right">A</th>'
-            '<th align="right">D</th>'
-            '<th align="right">ADR</th>'
-            "</tr>"
-        )
-        players = _sorted_players(team)
-        if not players:
-            rows.append('<tr><td colspan="5"><i>—</i></td></tr>')
-            return
-        for p in players:
-            rows.append(
-                "<tr>"
-                f'<td>{h(p.get("nick") or "?")}</td>'
-                f'<td align="right">{int(p.get("kills") or 0)}</td>'
-                f'<td align="right">{int(p.get("assists") or 0)}</td>'
-                f'<td align="right">{int(p.get("deaths") or 0)}</td>'
-                f'<td align="right">{h(_adr_s(p.get("adr")))}</td>'
-                "</tr>"
-            )
-
-    section("CT", ct_team)
-    section("T", t_team)
-    return '<table bordered striped compact>' + "".join(rows) + "</table>"
+    return (
+        '<table bordered striped compact>'
+        f"<caption>{badge} {name}</caption>"
+        + "".join(rows)
+        + "</table>"
+    )
 
 
-def _log_table(log: list[dict], *, limit: int = 8) -> str:
+def _log_row(left: str, right: str, *, strong: bool = False) -> str:
+    if strong:
+        return f"<tr><td><b>{left}</b></td><td><b>{right}</b></td></tr>"
+    return f"<tr><td><b>{left}</b></td><td>{right}</td></tr>"
+
+
+def _log_table(log: list[dict], *, limit: int = 12) -> str:
     kill_ns = round_kill_counts(log)
-    rows: list[str] = ['<tr><th align="left" colspan="2">Log</th></tr>']
+    rows: list[str] = ['<tr><th align="left">Who</th><th align="left">Event</th></tr>']
     n = 0
     for entry in log:
         typ = entry.get("type")
@@ -337,32 +366,36 @@ def _log_table(log: list[dict], *, limit: int = 8) -> str:
             if entry.get("headshot"):
                 extra.append("<mark>HS</mark>")
             kn = kill_ns.get(id(entry), 0)
-            if kn >= 2:
-                extra.append(f"<mark>{h(_STREAK_PLAIN.get(min(kn, 5), 'ACE'))}</mark>")
+            if 2 <= kn <= 5:
+                extra.append(f"<mark>{h(_STREAK_PLAIN.get(kn, 'ACE'))}</mark>")
             detail = "killed " + h(victim)
             if weap:
                 detail += f" · {h(weap)}"
             if extra:
                 detail += " " + " ".join(extra)
-            rows.append(f"<tr><td><b>{h(killer)}</b></td><td>{detail}</td></tr>")
+            rows.append(_log_row(h(killer), detail))
         elif typ in _ROUND_BREAK and typ != "round_start":
-            rows.append(
-                f'<tr><td colspan="2"><b>{h(entry.get("text") or "回合结束")}</b></td></tr>'
-            )
+            rows.append(_log_row("回合结束", h(entry.get("detail") or entry.get("text") or "结束"), strong=True))
         elif typ == "round_start":
-            rows.append('<tr><td colspan="2"><i>回合开始</i></td></tr>')
+            rows.append(_log_row("回合", "开始", strong=True))
         elif typ == "bomb" or "plant" in (entry.get("text") or "").lower():
-            rows.append(f'<tr><td colspan="2"><b>{h(entry.get("text") or "")}</b></td></tr>')
+            nick = h(entry.get("killer") or "")
+            action = h(entry.get("detail") or entry.get("text") or "")
+            if not nick and action:
+                parts = str(entry.get("text") or "").split(" ", 1)
+                nick = h(parts[0] if parts else "")
+                action = h(parts[1] if len(parts) > 1 else action)
+            rows.append(_log_row(nick, action))
         else:
             text = entry.get("text") or ""
             if not text:
                 continue
-            rows.append(f"<tr><td colspan=\"2\">{h(text)}</td></tr>")
+            rows.append(_log_row("·", h(text)))
         n += 1
         if n >= limit:
             break
     if n == 0:
-        rows.append('<tr><td colspan="2"><i>—</i></td></tr>')
+        rows.append(_log_row("·", "<i>—</i>"))
     return '<table striped compact>' + "".join(rows) + "</table>"
 
 
@@ -373,6 +406,8 @@ def format_connecting_html(
     list_id: str = "",
     url: str | None = None,
     link: str = "connecting",
+    notice: str = "",
+    next_at: object = None,
 ) -> str:
     status, hot = _LINK_LABEL.get(link, (link, True))
     if list_id and not status:
@@ -388,6 +423,8 @@ def format_connecting_html(
         url=url or "",
         status=status or str(list_id),
         hot=hot,
+        notice=notice,
+        next_at=next_at,
     )
 
 
@@ -406,7 +443,7 @@ def _mono(nick: str, k, a, d, adr, width: int = 12) -> str:
     return f"{n} {int(k or 0):>2} {int(a or 0):>2} {int(d or 0):>2} {adr_s:>4}"
 
 
-def format_rich_html(snap: dict, *, log_limit: int = 8) -> str:
+def format_rich_html(snap: dict, *, log_limit: int = 12) -> str:
     """HLTV live widget: score strip + one roster + log table (no article chrome)."""
     teams = list(snap.get("teams") or [])
     ct_team = teams[0] if teams else {"name": (snap.get("team2") or {}).get("name") or "CT", "players": []}
@@ -433,15 +470,13 @@ def format_rich_html(snap: dict, *, log_limit: int = 8) -> str:
             url=url,
             status=status,
             hot=hot,
+            notice=str(snap.get("notice") or ""),
+            next_at=snap.get("next_at"),
         )
     ]
     if _sorted_players(ct_team) or _sorted_players(t_team):
-        blocks.append(_roster_table(ct_team, t_team))
-    mk = round_multikills(snap.get("log") or [])
-    if mk and mk[0][1] >= 3:
-        nick, n = mk[0]
-        label = _STREAK_PLAIN.get(n, f"{n}K")
-        blocks.append(f"<aside><b>{h(nick)}</b> {h(label)}</aside>")
+        blocks.append(_side_table("CT", ct_team, ct=True))
+        blocks.append(_side_table("T", t_team, ct=False))
     blocks.append(_log_table(snap.get("log") or [], limit=log_limit))
     return "".join(blocks)
 

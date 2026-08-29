@@ -4,9 +4,14 @@ import logging
 from typing import Any
 
 from hltv_bot.debuglog import clip
+from hltv_bot.ratelimit import Gap
 from hltv_bot.session import BrowserSession
 
 log = logging.getLogger("hltv_bot.http")
+
+# www.hltv.org HTML (list + match page). Not used by scorebot.
+_HTML_GAP = Gap()
+HTML_MIN_GAP = 3.0
 
 
 class CloudflareError(RuntimeError):
@@ -36,6 +41,9 @@ def request(
 ) -> tuple[int, bytes, dict[str, str]]:
     from curl_cffi.requests import Session
 
+    waited = _HTML_GAP.sleep(HTML_MIN_GAP)
+    if waited:
+        log.debug("html gap slept %.2fs", waited)
     kw = _session_kwargs(sess, timeout)
     extra = dict(kw["headers"])
     if headers:

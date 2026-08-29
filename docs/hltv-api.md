@@ -130,6 +130,23 @@ Origin: https://www.hltv.org
 
 `sid` 之后所有请求都带 `sid=`。长轮询空闲约 `pingInterval`（25s）无字节，curl 报 28 当空闲，不要当断线。
 
+`scorebot-lb` **HTTP 502** 多半是 Cloudflare/nginx 够不到 origin，或同一 IP 握手太密。错误页大约几百字节 HTML，不是比赛事件。
+
+日志里 **400ms 一轮** 不是设定值，是 502 立刻返回后马上又 GET 的 RTT。正常 Engine.IO 长轮询应堵约 25s。
+
+间隙：
+
+| 请求 | 间隙 |
+|---|---|
+| poll 有事件后 | 至少 2s 再下一轮 GET |
+| poll 空包且秒回 | 补到 10s |
+| 长轮询 timeout（curl 28） | 已等 ~25–55s，再隔 2s |
+| 重连 / 502 | ≥15s，5xx 首次 ≥25s，退避到 180s |
+| `www.hltv.org` 列表/详情 | 两次 HTML 至少 3s；列表另有 45s 缓存 |
+| Telegram edit | 最少 1.8s（3K/ACE/回合结束可立刻推） |
+
+403/429 仍停等 `/cookie`，不重连死磕。
+
 ### 3.2 订阅一场
 
 客户端发 Socket.IO 事件 `readyForMatch`：

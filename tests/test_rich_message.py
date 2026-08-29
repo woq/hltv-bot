@@ -51,7 +51,8 @@ def test_scoreboard_is_hltv_widget_tables():
     rich = format_rich_html(SNAP)
     assert rich.count("<table") >= 2
     assert "<mark>CT</mark>" in rich
-    assert "<mark>T</mark>" in rich
+    assert "<b>T</b>" in rich
+    assert "<aside>" not in rich
     assert "<h3>" not in rich
     assert "<ul>" not in rich
     assert "<mark>" in format_rich_html({**SNAP, "link": "disconnected"})
@@ -62,6 +63,6 @@ def test_scoreboard_is_hltv_widget_tables():
 def test_connecting_has_no_fake_scoreboard():
     html = format_connecting_html(team1="G2", team2="Spirit", list_id="2396932")
     assert "G2" in html and "Spirit" in html
-    assert "connecting" in html
+    assert "连接中" in html
     assert "0-0" not in html
     assert "<h3>" not in html

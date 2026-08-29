@@ -20,7 +20,7 @@ from hltv_bot.format import (
     plain_to_rich,
 )
 from hltv_bot.http import CloudflareError
-from hltv_bot.live import merge_log, snapshot_from_scoreboard
+from hltv_bot.live import merge_log, patch_board_from_log, snapshot_from_scoreboard
 from hltv_bot.matches import fetch_match_meta, fetch_matches
 from hltv_bot.scorebot import iter_scorebot, scorebot_base
 from hltv_bot.ratelimit import Cooldown
@@ -106,6 +106,8 @@ class WatchState:
     link: str = "connecting"
     pending: bool = False
     sent_html: str = ""
+    notice: str = ""
+    next_at: float = 0.0
 
 
 class HltvTelegramBot:
@@ -494,15 +496,39 @@ class HltvTelegramBot:
                 status_changed = False
                 if name == "status" and isinstance(payload, dict):
                     new_link = str(payload.get("state") or state.link)
-                    status_changed = new_link != state.link
+                    detail = str(payload.get("detail") or "").strip()
+                    wait = payload.get("wait")
                     state.link = new_link
-                    log.info("watch link %s -> %s", "same" if not status_changed else new_link, state.link)
+                    if new_link in ("connected", "idle"):
+                        state.notice = ""
+                        state.next_at = 0.0
+                    else:
+                        state.notice = detail or {
+                            "connecting": "连接中",
+                            "reconnect": "重连",
+                            "disconnected": "断开",
+                        }.get(new_link, new_link)
+                        if wait not in (None, ""):
+                            try:
+                                state.next_at = time.time() + float(wait)
+                            except (TypeError, ValueError):
+                                pass
+                    status_changed = True
+                    log.info(
+                        "watch link %s notice=%s next_at=%.0f",
+                        new_link,
+                        state.notice,
+                        state.next_at,
+                    )
                 elif name == "scoreboard" and isinstance(payload, dict):
                     board = payload
                     log.info("watch scoreboard %s", event_brief(name, payload))
                 elif name == "log":
                     before = len(feed)
-                    feed = merge_log(feed, payload)
+                    new_feed = merge_log(feed, payload)
+                    if new_feed is not feed:
+                        board = patch_board_from_log(board, payload)
+                    feed = new_feed
                     log.info("watch log %s feed %s -> %s", event_brief(name, payload), before, len(feed))
                 elif name == "tick":
                     if state.pending and state.text:
@@ -513,26 +539,31 @@ class HltvTelegramBot:
                     continue
                 if board:
                     snap = snapshot_from_scoreboard(board, meta=state.meta, log=feed)
-                    snap["link"] = state.link
-                    html = format_rich_html(snap)
                 else:
                     snap = {
                         "live": True,
                         "url": state.meta.get("url"),
                         "team1": {"name": state.meta.get("team1")},
                         "team2": {"name": state.meta.get("team2")},
-                        "link": state.link,
                         "log": feed,
                         "teams": [],
                     }
+                snap["link"] = state.link
+                snap["notice"] = state.notice
+                snap["next_at"] = state.next_at
+                if board:
+                    html = format_rich_html(snap)
+                else:
                     html = format_connecting_html(
                         team1=str(state.meta.get("team1") or "?"),
                         team2=str(state.meta.get("team2") or "?"),
                         list_id=state.list_id,
                         url=state.meta.get("url"),
                         link=state.link,
+                        notice=state.notice,
+                        next_at=state.next_at,
                     )
-                fp = snapshot_fingerprint(snap) + "|" + state.link
+                fp = snapshot_fingerprint(snap) + "|" + state.link + "|" + state.notice + "|" + str(int(state.next_at or 0))
                 if fp == state.fingerprint and not status_changed:
                     log.debug("watch skip unchanged fp=%s", clip(fp, 120))
                     continue
@@ -542,7 +573,15 @@ class HltvTelegramBot:
                 state.pending = True
                 now = time.time()
                 force = status_changed or any(
-                    s in html for s in ("<mark>3K</mark>", "<mark>4K</mark>", "<mark>ACE</mark>", "回合结束")
+                    s in html
+                    for s in (
+                        "<mark>3K</mark>",
+                        "<mark>4K</mark>",
+                        "<mark>ACE</mark>",
+                        "回合结束",
+                        "回合开始",
+                        ">开始<",
+                    )
                 )
                 wait = now - state.last_edit
                 if wait < MIN_EDIT_INTERVAL and not force:
@@ -557,9 +596,11 @@ class HltvTelegramBot:
                 self._flush_watch(state, html)
                 continue
         except CloudflareError as e:
+            state.notice = f"Cloudflare {e.status} · /cookie"
+            state.next_at = 0.0
             self._mark_watch_down(state, "disconnected")
-            self.tg.send_message(state.chat_id, f"Scorebot Cloudflare：{e}\n/cookie 更新后 /watch")
         except Exception as e:
+            state.notice = str(e)[:80] or "ended"
             self._mark_watch_down(state, "disconnected")
             if not state.stop.is_set():
                 log.info("watch ended: %s", e)
@@ -610,6 +651,8 @@ class HltvTelegramBot:
         state.link = link
         snap = dict(state.last_snap or {"live": True, "teams": [], "log": []})
         snap["link"] = link
+        snap["notice"] = state.notice
+        snap["next_at"] = state.next_at
         try:
             html = format_rich_html(snap)
             state.text = html

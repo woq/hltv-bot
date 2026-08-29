@@ -62,9 +62,24 @@ def test_format_contains_score_and_log():
     assert "<ul>" not in rich
     assert "<footer>" not in rich
     assert "AWP" in rich
-    assert rich.count("<table") >= 2
+    assert rich.count("<table") >= 3
     assert "<mark>CT</mark>" in rich
-    assert "<mark>T</mark>" in rich
+    assert "<b>T</b>" in rich
+    assert "<aside>" not in rich
+
+
+def test_scoreboard_notice_and_next_clock():
+    from hltv_bot.format import format_next_clock
+
+    snap = dict(SNAP)
+    snap["link"] = "reconnect"
+    snap["notice"] = "HTTP 502"
+    snap["next_at"] = 1_783_000_000
+    rich = format_rich_html(snap)
+    assert "HTTP 502" in rich
+    assert "下次" in rich
+    assert format_next_clock(1_783_000_000)
+    assert "重连" in rich
 
 
 def test_format_multikill_banner():
@@ -87,6 +102,21 @@ def test_format_multikill_banner():
     rich = format_rich_html(snap)
     assert "<mark>3K</mark>" in rich
     assert "sh1ro" in rich
+    assert "<aside>" not in rich
+
+
+def test_log_bomb_and_round_are_two_columns():
+    snap = dict(SNAP)
+    snap["log"] = [
+        {"type": "bomb", "killer": "donk", "text": "安包 A", "detail": "安包 A"},
+        {"type": "round_over_ct", "killer": "回合结束", "text": "CT 胜 · 歼灭", "detail": "CT 胜 · 歼灭"},
+        {"type": "round_start", "killer": "回合", "text": "开始", "detail": "开始"},
+    ]
+    rich = format_rich_html(snap)
+    assert "<td><b>donk</b></td><td>安包 A</td>" in rich
+    assert "<td><b>回合结束</b></td>" in rich
+    assert "CT 胜" in rich
+    assert "<td><b>回合</b></td><td><b>开始</b></td>" in rich
 
 
 def test_match_list_rich_text():

@@ -93,18 +93,26 @@ def format_log_item(item: dict[str, Any]) -> dict[str, Any] | None:
         }
     if "BombPlanted" in item:
         b = item["BombPlanted"]
-        site = b.get("bombSite") or ""
+        site = str(b.get("bombSite") or "").strip()
         nick = b.get("playerNick") or b.get("playerName") or ""
+        action = f"安包 {site}".strip()
         return {
             "type": "bomb",
-            "text": f"{nick} 安包 {site}".strip(),
+            "killer": nick,
+            "text": action,
+            "detail": action,
         }
     if "BombDefused" in item:
         b = item["BombDefused"]
         nick = b.get("playerNick") or b.get("playerName") or ""
-        return {"type": "bomb", "text": f"{nick} 拆包"}
+        return {
+            "type": "bomb",
+            "killer": nick,
+            "text": "拆包",
+            "detail": "拆包",
+        }
     if "RoundStart" in item or "RoundStarted" in item:
-        return {"type": "round_start", "text": "回合开始"}
+        return {"type": "round_start", "killer": "回合", "text": "开始", "detail": "开始"}
     if "RoundEnd" in item:
         r = item["RoundEnd"]
         winner = r.get("winner") or ""
@@ -117,9 +125,19 @@ def format_log_item(item: dict[str, Any]) -> dict[str, Any] | None:
             "CTs_Win": "歼灭",
             "Terrorists_Win": "歼灭",
         }.get(str(win_type), str(win_type))
-        text = "回合结束 " + " · ".join(x for x in (label, reason) if x)
+        detail = " · ".join(x for x in (label, reason) if x) or "结束"
         side = "ct" if str(winner).upper() in ("CT", "CTS") else "t"
-        return {"type": "round_over_ct" if side == "ct" else "round_over_t", "text": text}
+        out = {
+            "type": "round_over_ct" if side == "ct" else "round_over_t",
+            "killer": "回合结束",
+            "text": detail,
+            "detail": detail,
+        }
+        if r.get("counterTerroristScore") is not None:
+            out["ct_score"] = r.get("counterTerroristScore")
+        if r.get("terroristScore") is not None:
+            out["t_score"] = r.get("terroristScore")
+        return out
     if "Suicide" in item:
         s = item["Suicide"]
         nick = s.get("playerNick") or s.get("nick") or ""
@@ -190,6 +208,35 @@ def merge_log(existing: list[dict[str, Any]], incoming: Any) -> list[dict[str, A
     if added:
         live_log.debug("log merged +%s total=%s", added, len(out))
     return out[:80]
+
+
+def patch_board_from_log(board: dict[str, Any], incoming: Any) -> dict[str, Any]:
+    """RoundEnd carries the new map score; keep the board in sync if scoreboard is stale."""
+    block = incoming
+    if isinstance(incoming, dict) and "log" in incoming:
+        block = incoming["log"]
+    items: list[dict[str, Any]]
+    if isinstance(block, list):
+        items = [x for x in block if isinstance(x, dict)]
+    elif isinstance(block, dict):
+        items = [block]
+    else:
+        return board
+    last: dict[str, Any] | None = None
+    for it in items:
+        r = it.get("RoundEnd") if isinstance(it, dict) else None
+        if isinstance(r, dict):
+            last = r
+    if not last:
+        return board
+    patched = dict(board) if board else {}
+    if last.get("counterTerroristScore") is not None:
+        patched["counterTerroristScore"] = last.get("counterTerroristScore")
+        patched["ctTeamScore"] = last.get("counterTerroristScore")
+    if last.get("terroristScore") is not None:
+        patched["terroristScore"] = last.get("terroristScore")
+        patched["tTeamScore"] = last.get("terroristScore")
+    return patched
 
 
 def snapshot_from_scoreboard(
