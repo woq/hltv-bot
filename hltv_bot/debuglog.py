@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from typing import Any
+
+CST = timezone(timedelta(hours=8))
+TRACE_MAX = 24
 
 
 def clip(text: object, n: int = 400) -> str:
@@ -53,6 +57,23 @@ def event_brief(name: str, payload: Any) -> str:
     if name == "tick":
         return "tick"
     return clip(payload, 240)
+
+
+def append_trace(lines: list[str], text: object) -> bool:
+    """Append a clocked line. Skip empties and consecutive duplicates. Return True if added."""
+    body = clip(text, 160).strip()
+    if not body:
+        return False
+    if lines:
+        prev = lines[-1]
+        if prev.split(" ", 1)[-1] == body:
+            return False
+    clock = datetime.now(CST).strftime("%H:%M:%S")
+    lines.append(f"{clock} {body}")
+    extra = len(lines) - TRACE_MAX
+    if extra > 0:
+        del lines[:extra]
+    return True
 
 
 def snap_brief(snap: dict[str, Any] | None) -> str:

@@ -1,6 +1,7 @@
 from hltv_bot.live import (
     format_log_item,
     mark_new_round,
+    mark_round_over,
     merge_log,
     patch_board_from_log,
     snapshot_from_scoreboard,
@@ -258,11 +259,23 @@ def test_merge_log_keeps_kill_and_assist_burst():
         {
             "log": [
                 {"Kill": {"killerNick": "m0NESY", "victimNick": "arT", "weapon": "glock", "headShot": True, "eventId": 1}},
+                {"Assist": {"assisterNick": "dumau", "victimNick": "arT", "killEventId": 1}},
+            ]
+        },
+    )
+    assert len(log) == 1
+    assert log[0]["assister"] == "dumau"
+    loose = merge_log(
+        [],
+        {
+            "log": [
+                {"Kill": {"killerNick": "m0NESY", "victimNick": "arT", "weapon": "glock", "headShot": True}},
                 {"Assist": {"assisterNick": "dumau", "victimNick": "kyousuke"}},
             ]
         },
     )
-    assert len(log) == 2
+    assert [x.get("type") for x in loose] == ["assist", "kill"]
+    assert loose[0]["killer"] == "dumau"
 
 
 def test_merge_log_live_burst_not_replayed_against_prior_round():
@@ -320,6 +333,49 @@ def test_mark_new_round_inserts_start():
     )
     assert n3 == 1
     assert mapped[0]["type"] == "round_start"
+    assert mapped[0]["text"] == "start"
+
+
+def test_mark_round_over_inserts_when_score_ticks():
+    feed, ct, t = mark_round_over([], {"counterTerroristScore": 4, "terroristScore": 2}, None, None)
+    assert feed == []
+    assert (ct, t) == (4, 2)
+    nxt, ct2, t2 = mark_round_over(
+        feed,
+        {
+            "counterTerroristScore": 5,
+            "terroristScore": 2,
+            "ctMatchHistory": {
+                "firstHalf": [{"type": "CTs_Win", "roundOrdinal": 7, "survivingPlayers": 3}]
+            },
+        },
+        ct,
+        t,
+    )
+    assert (ct2, t2) == (5, 2)
+    assert nxt[0]["type"] == "round_over_ct"
+    assert "Round over" in nxt[0]["text"]
+    assert "elimination" in nxt[0]["text"]
+    again, _, _ = mark_round_over(nxt, {"counterTerroristScore": 5, "terroristScore": 2}, ct2, t2)
+    assert sum(1 for x in again if str(x.get("type") or "").startswith("round_over")) == 1
+
+
+def test_format_log_round_end_english():
+    item = format_log_item(
+        {
+            "RoundEnd": {
+                "winner": "TERRORIST",
+                "winType": "Target_Bombed",
+                "counterTerroristScore": 3,
+                "terroristScore": 4,
+            }
+        }
+    )
+    assert item["type"] == "round_over_t"
+    assert item["killer"] == "Round"
+    assert "Round over" in item["text"]
+    assert "bomb" in item["text"]
+    assert item["ct_score"] == 3
 
 
 def test_patch_board_uses_last_round_end_score():
@@ -348,7 +404,7 @@ def test_format_log_bomb_has_nick_column():
         {"BombPlanted": {"playerNick": "donk", "bombSite": "A"}}
     )
     assert item["killer"] == "donk"
-    assert "安包" in item["detail"]
+    assert "planted" in item["detail"]
     assert "A" in item["detail"]
 
 
@@ -365,3 +421,35 @@ def test_snapshot_reads_ct_team_score_keys():
     )
     assert snap["scoreText"] == "4-2"
     assert snap["roundText"].startswith("7")
+
+
+def test_snapshot_includes_round_history():
+    snap = snapshot_from_scoreboard(
+        {
+            "ctTeamName": "Spirit",
+            "terroristTeamName": "G2",
+            "counterTerroristScore": 2,
+            "terroristScore": 1,
+            "currentRound": 4,
+            "mapName": "de_dust2",
+            "ctMatchHistory": {
+                "firstHalf": [
+                    {"type": "CTs_Win", "roundOrdinal": 1, "survivingPlayers": 3},
+                    {"type": "lost", "roundOrdinal": 2, "survivingPlayers": 0},
+                    {"type": "CTs_Win", "roundOrdinal": 3, "survivingPlayers": 2},
+                ]
+            },
+            "terroristMatchHistory": {
+                "firstHalf": [
+                    {"type": "lost", "roundOrdinal": 1, "survivingPlayers": 0},
+                    {"type": "Target_Bombed", "roundOrdinal": 2, "survivingPlayers": 2},
+                    {"type": "lost", "roundOrdinal": 3, "survivingPlayers": 0},
+                ]
+            },
+        }
+    )
+    assert [(x["n"], x["winner"]) for x in snap["history"]] == [
+        (1, "CT"),
+        (2, "T"),
+        (3, "CT"),
+    ]

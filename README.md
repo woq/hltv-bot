@@ -10,6 +10,7 @@ TLS 按 MCP 里 Chrome 134 的头伪装（`curl_cffi` impersonate + 抄来的 `s
 |---|---|
 | [docs/rich-message.md](docs/rich-message.md) | Rich 只用在 `/watch`；`/matches` 等普通消息；官方它解决什么 |
 | [docs/hltv-api.md](docs/hltv-api.md) | 非官方 HLTV 接口：列表 HTML、详情 meta、Scorebot Engine.IO、事件字段 |
+| [docs/scorebot-data.md](docs/scorebot-data.md) | Scorebot / snapshot / log 归一化数据结构（全面） |
 | [docs/cloudflare.md](docs/cloudflare.md) | Cookie / TLS 伪装、403 处理、试过的方案 |
 | [deploy/chrome-session/README.md](deploy/chrome-session/README.md) | VPS 常驻真 Chrome（备用，内存要求高） |
 
@@ -99,13 +100,13 @@ python3 -m hltv_bot bot
 
 把 bot 拉进私有群后，用该账号发 `/allow`。直播命令只在已授权群生效；`/allow` `/deny` `/groups` `/cookie` `/status` 仅管理员。
 
-Watch 默认只 `edit` 同一条消息。新卡片只有手动 `/bump`。
+Watch **全局一场**：任意授权群 `/watch id` 都是同一场 Scorebot。每个群各自一条 Rich 消息，更新时分别 `edit`。新卡片只有该群手动 `/bump`。
 
 ## 建议跑在哪
 
 启动时会调用 Telegram `setMyCommands`：群里是 matches/watch/bump/stop，私聊管理员额外有 allow/deny/groups/cookie/status。点输入框 `/` 就能看到。若群里 bot 收不到命令，去 @BotFather → /setprivacy → Disable。
 
-限流：`/matches` 8s、`/watch` 6s、`/bump` 4s；live **edit 最少间隔 1.8s**（3K/ACE/回合结束立刻推）；HLTV 列表缓存 45s；Telegram 429 会按 `retry_after` 重试一次。
+限流：`/matches` 8s、`/watch` 6s、`/bump` 4s；live **edit 最少间隔 1.8s**（3K/ACE/Round over 立刻推）；HLTV 列表缓存 45s；Telegram 429 会按 `retry_after` 重试一次。
 
 采集和 bot **跑在和 Chrome 同一出口 IP 的 PC** 上。手机只开 Telegram。MCP 只用来烤 cookie / 调试，不要当 24h 进程。
 

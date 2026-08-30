@@ -1,4 +1,9 @@
-from hltv_bot.format import format_connecting_html, format_rich_html, plain_to_rich
+from hltv_bot.format import (
+    format_connecting_html,
+    format_rich_html,
+    format_watch_debug_html,
+    plain_to_rich,
+)
 from hltv_bot.telegram_api import Telegram
 
 
@@ -63,6 +68,21 @@ def test_scoreboard_is_hltv_widget_tables():
 def test_connecting_has_no_fake_scoreboard():
     html = format_connecting_html(team1="G2", team2="Spirit", list_id="2396932")
     assert "G2" in html and "Spirit" in html
-    assert "连接中" in html
+    assert "connecting" in html
     assert "0-0" not in html
     assert "<h3>" not in html
+    assert html.rfind("connecting") > html.find("</table>")
+
+
+def test_debug_watch_card_has_no_article_chrome():
+    html = format_watch_debug_html(
+        team1="G2",
+        team2="Spirit",
+        list_id="1",
+        link="disconnected",
+        lines=["ws connect failed"],
+    )
+    assert "<h3>" not in html
+    assert "<ul>" not in html
+    assert "<footer>" not in html
+    assert "<pre>" in html

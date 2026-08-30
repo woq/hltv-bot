@@ -26,9 +26,12 @@ Watch 规则不变：默认只 edit 同一条；`not modified` 当成功；新�
 
 Rich **没有 CSS**。单元格只能行内标签。不要用 h3/ul/footer 文章壳。
 
-1. 比分条 `table bordered compact`
-2. 名单 `table bordered striped compact`（CT / T 分段）
-3. Log 表；3K+ 用 `<aside>`
-4. 未出分用 `–`，不要 0-0
+1. `<details>` 战绩（默认折叠）：回合史一行 + 名单表 CT / T
+2. 比分条 `table bordered compact`
+3. Log 表（两列：选手 / 事件；无 Who 表头；文案英语）
+4. 最下一行链接状态：`<p><i>connected</i></p>` 之类
+5. 未出分用 `–`，不要 0-0
+
+连不上或拿不到记分板/log（connecting / reconnect / disconnected / 60s 无数据）时，**同一条卡片**改成 DEBUG：`pre` 里最近运输层痕迹。数据回来再 edit 回上面的记分板。不要另发新消息。
 
 限制（官方）：正文 ≤ 32768；块 ≤ 500；表 ≤ 20 列；嵌套 ≤ 16。

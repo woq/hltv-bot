@@ -1,4 +1,11 @@
-from hltv_bot.eio import decode_payload, encode_event, parse_event, parse_open
+from hltv_bot.eio import (
+    classify_eio,
+    decode_payload,
+    encode_event,
+    parse_event,
+    parse_open,
+    split_ws_packets,
+)
 from hltv_bot.scorebot import (
     POLL_5XX_GAP,
     POLL_EMPTY_GAP,
@@ -8,9 +15,13 @@ from hltv_bot.scorebot import (
     RECONNECT_MIN,
     _is_http_error,
     _is_timeout,
+    _ws_url,
+    http_to_ws,
     is_poll_5xx,
+    iter_ws_events,
     next_backoff,
     poll_gap,
+    probe_upgrade,
     reconnect_wait,
 )
 
@@ -86,3 +97,80 @@ def test_poll_gap_empty_vs_event_vs_timeout():
     assert poll_gap(30.0, got_event=False, timed_out=True) == POLL_MIN_GAP
     assert poll_gap(25.0, got_event=False) == 0.0
     assert poll_gap(0.4, got_event=False, http_5xx=True) == POLL_5XX_GAP
+
+
+def test_ws_url_uses_wss_and_sid():
+    assert http_to_ws("https://scorebot-lb.hltv.org") == "wss://scorebot-lb.hltv.org"
+    url = _ws_url("https://scorebot-lb.hltv.org", {"sid": "abc"})
+    assert url.startswith("wss://scorebot-lb.hltv.org/socket.io/?")
+    assert "transport=websocket" in url
+    assert "sid=abc" in url
+    assert "EIO=3" in url
+
+
+def test_classify_eio_packets():
+    assert classify_eio("2") == ("ping", "2")
+    assert classify_eio("2probe")[0] == "ping"
+    assert classify_eio("3probe")[0] == "pong"
+    kind, payload = classify_eio('42["log",{"log":[]}]')
+    assert kind == "event"
+    assert payload[0] == "log"
+    assert classify_eio("1")[0] == "close"
+
+
+def test_split_ws_v4_separator():
+    assert split_ws_packets("2\x1e3") == ["2", "3"]
+
+
+class _FakeWS:
+    def __init__(self, incoming: list[str]):
+        self.incoming = list(incoming)
+        self.sent: list[str] = []
+
+    def send_str(self, s: str) -> None:
+        self.sent.append(s)
+
+    def recv_str(self) -> str:
+        if not self.incoming:
+            raise TimeoutError("timed out")
+        return self.incoming.pop(0)
+
+
+def test_probe_upgrade_sends_2probe_then_5():
+    ws = _FakeWS(["3probe"])
+    extra = probe_upgrade(ws)
+    assert extra == []
+    assert ws.sent == ["2probe", "5"]
+
+
+def test_probe_upgrade_keeps_early_events():
+    pkt = '42["scoreboard",{"mapName":"de_dust2"}]'
+    ws = _FakeWS([pkt, "3probe"])
+    extra = probe_upgrade(ws)
+    assert extra == [pkt]
+    assert ws.sent[-1] == "5"
+
+
+def test_iter_ws_events_pong_and_log():
+    log_pkt = '42["log","{\\"log\\":[{\\"Kill\\":{\\"killerNick\\":\\"donk\\"}}]}"]'
+    ws = _FakeWS([log_pkt, "2"])
+    out = []
+    try:
+        for ev in iter_ws_events(ws):
+            out.append(ev)
+            if len(out) >= 4:
+                break
+    except TimeoutError:
+        pass
+    names = [n for n, _ in out]
+    assert "log" in names
+    assert "tick" in names
+    assert ws.sent == ["3"]
+    log_ev = next(p for n, p in out if n == "log")
+    assert log_ev["log"][0]["Kill"]["killerNick"] == "donk"
+
+
+def test_ready_event_is_not_xhr_framed():
+    s = encode_event("readyForMatch", '{"token":"","listId":"1"}')
+    assert s.startswith("42[")
+    assert not s.startswith("\x00")

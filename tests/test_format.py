@@ -3,6 +3,7 @@ from hltv_bot.format import (
     format_match_list_rich,
     format_rich_html,
     format_telegram,
+    format_watch_debug_html,
 )
 from hltv_bot.profile import pick_impersonate
 from hltv_bot.scorebot import ready_for_match_payload, scorebot_base
@@ -55,7 +56,7 @@ def test_format_contains_score_and_log():
     assert "<pre>" in text
     snap_down = dict(SNAP)
     snap_down["link"] = "disconnected"
-    assert "断开" in format_telegram(snap_down)
+    assert "disconnected" in format_telegram(snap_down)
     rich = format_rich_html(SNAP)
     assert "<table" in rich
     assert "<h3>" not in rich
@@ -66,6 +67,10 @@ def test_format_contains_score_and_log():
     assert "<mark>CT</mark>" in rich
     assert "<b>T</b>" in rich
     assert "<aside>" not in rich
+    assert rich.startswith("<details>")
+    assert "<summary>Stats" in rich
+    assert rich.index("<details>") < rich.index("killed")
+    assert "<i>connected</i>" in rich
 
 
 def test_scoreboard_notice_and_next_clock():
@@ -77,9 +82,28 @@ def test_scoreboard_notice_and_next_clock():
     snap["next_at"] = 1_783_000_000
     rich = format_rich_html(snap)
     assert "HTTP 502" in rich
-    assert "下次" in rich
+    assert "next" in rich
     assert format_next_clock(1_783_000_000)
-    assert "重连" in rich
+    assert "reconnect" in rich
+    assert rich.rfind("reconnect") > rich.find("</table>")
+
+
+def test_watch_debug_card_is_traces_not_scoreboard():
+    html = format_watch_debug_html(
+        team1="G2",
+        team2="Spirit",
+        list_id="2396932",
+        link="reconnect",
+        notice="HTTP 502",
+        lines=["12:00:01 handshake HTTP 502", "12:00:20 error retry 25s"],
+    )
+    assert "<caption>DEBUG</caption>" in html
+    assert "<pre>" in html
+    assert "handshake HTTP 502" in html
+    assert "0-0" not in html
+    assert "cf_clearance" not in html
+    assert "reconnect" in html
+    assert "/watch 2396932" in html
 
 
 def test_format_multikill_banner():
@@ -108,15 +132,52 @@ def test_format_multikill_banner():
 def test_log_bomb_and_round_are_two_columns():
     snap = dict(SNAP)
     snap["log"] = [
-        {"type": "bomb", "killer": "donk", "text": "安包 A", "detail": "安包 A"},
-        {"type": "round_over_ct", "killer": "回合结束", "text": "CT 胜 · 歼灭", "detail": "CT 胜 · 歼灭"},
-        {"type": "round_start", "killer": "回合", "text": "开始", "detail": "开始"},
+        {"type": "bomb", "killer": "donk", "text": "planted A", "detail": "planted A"},
+        {
+            "type": "round_over_ct",
+            "killer": "Round",
+            "text": "Round over · CT · elimination",
+            "detail": "Round over · CT · elimination",
+        },
+        {"type": "round_start", "killer": "Round", "text": "start", "detail": "start"},
+        {"type": "assist", "killer": "huNter-", "victim": "donk", "detail": "assist donk"},
     ]
     rich = format_rich_html(snap)
-    assert "<td><b>donk</b></td><td>安包 A</td>" in rich
-    assert "<td><b>回合结束</b></td>" in rich
-    assert "CT 胜" in rich
-    assert "<td><b>回合</b></td><td><b>开始</b></td>" in rich
+    assert "<td><b>donk</b></td><td>planted A</td>" in rich
+    assert "<td><b>Round</b></td>" in rich
+    assert "Round over · CT · elimination" in rich
+    assert "<td><b>Round</b></td><td><b>start</b></td>" in rich
+    assert "<td><b>huNter-</b></td><td>assist donk</td>" in rich
+    assert ">Who<" not in rich
+    assert "回合" not in rich
+    plus = dict(SNAP)
+    plus["log"] = [
+        {
+            "type": "kill",
+            "killer": "sh1ro",
+            "victim": "donk",
+            "weapon": "awp",
+            "event_id": "9",
+            "assister": "huNter-",
+        }
+    ]
+    plus_rich = format_rich_html(plus)
+    assert "+ huNter-" in plus_rich
+    assert "killed donk" in plus_rich
+
+
+def test_stats_collapsed_and_history_on_top():
+    snap = dict(SNAP)
+    snap["history"] = [
+        {"n": 1, "winner": "CT", "winType": "CTs_Win"},
+        {"n": 2, "winner": "T", "winType": "Target_Bombed"},
+    ]
+    rich = format_rich_html(snap)
+    assert rich.startswith("<details>")
+    assert "R1 CT elim" in rich
+    assert "R2 T bomb" in rich
+    assert rich.index("<details>") < rich.index("<table bordered compact>")
+    assert rich.rfind("<p><i>") > rich.rfind("<table")
 
 
 def test_match_list_rich_text():

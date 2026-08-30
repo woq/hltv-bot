@@ -104,11 +104,11 @@ DOM 全量抽取（Chrome MCP / evaluate）见 `hltv_bot/extract.js`：`python3 
 
 ---
 
-## 3. Scorebot（Engine.IO v3 polling）
+## 3. Scorebot（Engine.IO v3 → WebSocket）
 
-基址默认 `https://scorebot-lb.hltv.org`。握手返回 `upgrades: ["websocket"]`，本项目走 **xhr-polling**（已用 Chrome Cookie 验证）。
+基址默认 `https://scorebot-lb.hltv.org`。和浏览器一样：polling **只用来握手拿 sid**，随后立刻升级到 **WebSocket**。事件、心跳、`readyForMatch` 都走 WS，不再长轮询 GET。
 
-必须 **复用同一条 TLS 会话**，否则 Engine.IO 的 `io` cookie 对不上。
+必须 **复用同一条 TLS 会话**（`curl_cffi` Session：握手 GET 的 `io` cookie 带到 WS upgrade）。
 
 ### 3.1 握手
 
@@ -128,23 +128,18 @@ Origin: https://www.hltv.org
 }
 ```
 
-`sid` 之后所有请求都带 `sid=`。长轮询空闲约 `pingInterval`（25s）无字节，curl 报 28 当空闲，不要当断线。
+`sid` 之后升级：
 
-`scorebot-lb` **HTTP 502** 多半是 Cloudflare/nginx 够不到 origin，或同一 IP 握手太密。错误页大约几百字节 HTML，不是比赛事件。
+```
+wss://scorebot-lb.hltv.org/socket.io/?EIO=3&transport=websocket&sid={sid}
+2probe  →  3probe  →  5
+然后 WS 文本帧发 42["readyForMatch", "..."]
+服务端 Engine.IO ping 是帧 `2`，回 `3`（不要跟 WS 协议层 ping 搞混）
+```
 
-日志里 **400ms 一轮** 不是设定值，是 502 立刻返回后马上又 GET 的 RTT。正常 Engine.IO 长轮询应堵约 25s。
+WS 上每个帧一条 Engine.IO 包，**不要**再套 xhr 的 `\x00…\xff` 长度帧。
 
-间隙：
-
-| 请求 | 间隙 |
-|---|---|
-| poll 有事件后 | 至少 5s 再下一轮 GET |
-| poll 空包且秒回 | 补到 20s |
-| 长轮询 timeout（curl 28） | 已等 ~25–55s，再隔 5s |
-| poll HTTP 5xx | 同 sid 再等 30s，连 4 次仍 5xx 才重握手 |
-| 重连 / 502 | ≥15s，5xx 首次 ≥25s，退避到 180s |
-| `www.hltv.org` 列表/详情 | 两次 HTML 至少 3s；列表另有 45s 缓存 |
-| Telegram edit | 最少 1.8s（3K/ACE/回合结束可立刻推） |
+握手 GET 仍可能 502（CF 到源站）。那是一次性握手，不是每几秒一轮 poll。断线指数退避：≥15s，5xx 首次 ≥25s，到 180s。`www.hltv.org` HTML 两次至少 3s。Telegram edit 最少 1.8s。
 
 403/429 仍停等 `/cookie`，不重连死磕。
 
@@ -158,27 +153,13 @@ Origin: https://www.hltv.org
 
 `token` 抓包里通常是空串。`listId` = 详情页 `data-scorebot-id`。
 
-Engine.IO 编码：
+Socket.IO 事件（WS 文本帧，无 xhr 外壳）：
 
-1. Socket.IO 事件：`42` + `JSON.stringify(["readyForMatch", "<上面那段 JSON 字符串>"])`
-2. 整包再套 Engine.IO v3 xhr 帧：`\x00` + 十进制长度各位（每字节一个数字）+ `\xff` + UTF-8 包体
-
-```
-POST {base}/socket.io/?EIO=3&transport=polling&t={ms}&sid={sid}
-Content-Type: text/plain;charset=UTF-8
-```
-
-body = 上面编码后的 bytes。
+`42` + `JSON.stringify(["readyForMatch", "<上面那段 JSON 字符串>"])`
 
 ### 3.3 收事件
 
-之后反复：
-
-```
-GET {base}/socket.io/?EIO=3&transport=polling&t={ms}&sid={sid}
-```
-
-解码 payload → 每个 packet 若匹配 `42[...]` 就是事件。事件名在数组第 0 项，第 1 项经常是 **再套一层 JSON 字符串**。
+升级完成后 `ws.recv`。帧若匹配 `42[...]` 就是事件。事件名在数组第 0 项，第 1 项经常是 **再套一层 JSON 字符串**。
 
 本项目 `iter_scorebot()` 还会 yield 内部状态（不是 HLTV 发的）：
 
@@ -187,9 +168,9 @@ GET {base}/socket.io/?EIO=3&transport=polling&t={ms}&sid={sid}
 | `scoreboard` | 服务端 | 当前回合、比分、两侧球员 |
 | `log` | 服务端 | Game log 增量 |
 | `status` | 客户端 | `connecting` / `connected` / `idle` / `reconnect` / `disconnected` |
-| `tick` | 客户端 | 一次 poll 结束，用来刷新 Telegram |
+| `tick` | 客户端 | 一帧处理完，用来刷新 Telegram |
 
-断线指数退避重连（1s → 20s）。Cloudflare 403/429 直接抛 `CloudflareError`。
+Cloudflare 403/429 直接抛 `CloudflareError`。
 
 ```python
 from hltv_bot.scorebot import iter_scorebot, scorebot_base
@@ -220,7 +201,9 @@ for name, payload in iter_scorebot(sess, list_id, base=scorebot_base(meta["score
 
 球员：`nick` / `name` / `dbName` / `playerName`；`kills` 或 `score`；`assists`；`deaths`；ADR 用 `damagePrRound` / `adr` / `damage`。
 
-归一化后的 snapshot：
+完整原始字段、归一化 log、snapshot、回合结束为何会丢，见 [scorebot-data.md](scorebot-data.md)。
+
+归一化后的 snapshot（摘要）：
 
 ```json
 {
@@ -262,23 +245,23 @@ for name, payload in iter_scorebot(sess, list_id, base=scorebot_base(meta["score
 
 | 原始键 | 归一化 `type` | 说明 |
 |---|---|---|
-| `Kill` | `kill` | `killer` / `victim` / `weapon` / `headshot` |
-| `BombPlanted` | `bomb` | 安包 + site |
-| `BombDefused` | `bomb` | 拆包 |
-| `RoundStart` / `RoundStarted` | `round_start` | |
-| `RoundEnd` | `round_over_ct` / `round_over_t` | `winner`: `CT` / `TERRORIST`；`winType` 见下 |
-| `Suicide` | `suicide` | |
-| `Assist` | 忽略（击杀行自己带） | |
+| `Kill` | `kill` | `killer` / `victim` / `weapon` / `headshot`；助攻合并为 `assister` |
+| `Assist` | 并入击杀，或 `assist` | `killEventId` → 击杀行 `+ nick` |
+| `BombPlanted` | `bomb` | `planted A` |
+| `BombDefused` | `bomb` | `defused` |
+| `RoundStart` / `RoundStarted` | `round_start` | `Round` / `start`；scoreboard 换回合也会补 |
+| `RoundEnd` | `round_over_ct` / `round_over_t` | `Round over · CT · elimination · 8-11`；分变了但没 log 时合成 |
+| `Suicide` | `suicide` | 不展示 |
 | `PlayerJoin` / `PlayerQuit` / `MatchStarted` / `MatchOver` / `Reconnect` / `Disconnect` | 忽略 | |
 
-`RoundEnd.winType`：
+`RoundEnd.winType` 展示（英语）：
 
 | 值 | 展示 |
 |---|---|
-| `Bomb_Defused` | 拆包 |
-| `Target_Bombed` | 爆炸 |
-| `Target_Saved` | 时间 |
-| `CTs_Win` / `Terrorists_Win` | 歼灭 |
+| `Bomb_Defused` | defuse |
+| `Target_Bombed` | bomb |
+| `Target_Saved` | time |
+| `CTs_Win` / `Terrorists_Win` | elimination |
 
 `Kill.weapon` 是 CS 内部名（`awp`、`ak47`、`m4a1_silencer`…），展示层在 `hltv_bot/format.py` 映射。
 

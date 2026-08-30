@@ -73,3 +73,34 @@ def encode_event(name: str, data: Any) -> str:
     if not isinstance(data, str):
         data = json.dumps(data, separators=(",", ":"))
     return "42" + json.dumps([name, data], separators=(",", ":"))
+
+
+def split_ws_packets(message: str) -> list[str]:
+    """One Engine.IO packet per WS frame; v4 may join with 0x1e."""
+    if not message:
+        return []
+    if "\x1e" in message:
+        return [p for p in message.split("\x1e") if p]
+    return [message]
+
+
+def classify_eio(packet: str) -> tuple[str, Any]:
+    """Classify a single Engine.IO v3 packet (WS: one packet per message)."""
+    p = packet if packet is not None else ""
+    if p == "2" or p == "2probe":
+        return "ping", p
+    if p == "3" or p == "3probe":
+        return "pong", p
+    if p == "5":
+        return "upgrade", p
+    if p == "6":
+        return "noop", p
+    if p.startswith("1"):
+        return "close", p
+    opened = parse_open(p)
+    if opened is not None:
+        return "open", opened
+    ev = parse_event(p)
+    if ev is not None:
+        return "event", ev
+    return "unknown", p
