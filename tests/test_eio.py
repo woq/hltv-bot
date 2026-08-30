@@ -23,6 +23,7 @@ from hltv_bot.scorebot import (
     iter_ws_events,
     merged_ws_cookies,
     next_backoff,
+    ws_upgrade_refused,
     poll_gap,
     probe_upgrade,
     reconnect_wait,
@@ -108,6 +109,16 @@ def test_merged_ws_cookies_keep_io_over_header():
     assert out["io"] == "sid-from-jar"
     assert out["cf_clearance"] == "x"
     assert out["foo"] == "1"
+    from_hdr = merged_ws_cookies("", "cf_clearance=abc; foo=1", {"io": "sid"})
+    assert from_hdr["cf_clearance"] == "abc"
+    assert from_hdr["io"] == "sid"
+
+
+def test_ws_upgrade_refused():
+    assert ws_upgrade_refused(
+        RuntimeError("Failed to perform, curl: (22) Refused WebSocket upgrade: 403")
+    )
+    assert not ws_upgrade_refused(RuntimeError("scorebot poll HTTP 502"))
 
 
 def test_ws_headers_drop_cookie_and_priority():

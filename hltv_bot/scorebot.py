@@ -1,7 +1,7 @@
-"""HLTV Scorebot via Engine.IO 3: polling handshake, then WebSocket upgrade.
+"""HLTV Scorebot via Engine.IO 3.
 
-Browser path: GET polling → sid, then wss://…/socket.io/?transport=websocket&sid=
-with 2probe / 3probe / 5. Events and readyForMatch stay on the WS.
+Prefer WebSocket after the polling handshake. Cloudflare often 403s the
+upgrade from curl_cffi; then stay on xhr-polling with the same sid.
 """
 
 from __future__ import annotations
@@ -20,6 +20,7 @@ from hltv_bot.eio import (
     classify_eio,
     decode_payload,
     encode_event,
+    encode_payload,
     parse_event,
     parse_open,
     split_ws_packets,
@@ -125,7 +126,7 @@ def _parse_cookie_pairs(raw: object) -> dict[str, str]:
 
 
 def merged_ws_cookies(session_cookie: str, *sources: object) -> dict[str, str]:
-    """Polling Set-Cookie (`io`) must ride on the WS upgrade; header Cookie can clobber it."""
+    """Merge session Cookie with handshake Set-Cookie (`io`, `__cflb`, …)."""
     out = _parse_cookie_pairs(session_cookie)
     for src in sources:
         if src is None:
@@ -140,8 +141,18 @@ def merged_ws_cookies(session_cookie: str, *sources: object) -> dict[str, str]:
     return out
 
 
-def _ws_headers(headers: dict[str, str]) -> dict[str, str]:
-    """Chrome WS upgrade is HTTP/1.1; drop H2-only / cookie header (cookies= instead)."""
+def cookie_header(pairs: dict[str, str]) -> str:
+    return "; ".join(f"{k}={v}" for k, v in pairs.items() if k)
+
+
+def ws_upgrade_refused(exc: BaseException) -> bool:
+    code = _http_status_from_exc(exc)
+    msg = str(exc).lower()
+    return code == 403 or "refused websocket upgrade" in msg
+
+
+def _ws_headers(headers: dict[str, str], *, cookie: str = "") -> dict[str, str]:
+    """Chrome WS upgrade is HTTP/1.1; drop H2-only `priority`."""
     keep = {
         "origin",
         "referer",
@@ -158,6 +169,8 @@ def _ws_headers(headers: dict[str, str]) -> dict[str, str]:
     h["sec-fetch-site"] = "same-site"
     h["cache-control"] = "no-cache"
     h["pragma"] = "no-cache"
+    if cookie:
+        h["cookie"] = cookie
     return h
 
 
@@ -319,6 +332,105 @@ def _http_status_from_exc(exc: BaseException) -> int | None:
         return None
 
 
+def iter_poll_events(
+    client: Any,
+    *,
+    base: str,
+    headers: dict[str, str],
+    sid: str,
+    list_id: str | int,
+    timeout: float,
+) -> Iterator[tuple[str, Any]]:
+    """Engine.IO xhr-polling after handshake (same sid)."""
+    from hltv_bot.http import CloudflareError
+
+    emit = encode_event("readyForMatch", ready_for_match_payload(list_id))
+    post_headers = dict(headers)
+    post_headers["content-type"] = "text/plain;charset=UTF-8"
+    post_url = _poll_url(base, {"sid": sid})
+    post_resp = client.post(
+        post_url,
+        data=encode_payload(emit),
+        headers=post_headers,
+        timeout=20,
+    )
+    if post_resp.status_code in (403, 429):
+        raise CloudflareError(post_resp.status_code, post_url)
+    if post_resp.status_code >= 400:
+        raise RuntimeError(f"scorebot readyForMatch HTTP {post_resp.status_code}")
+    yield _trace("polling readyForMatch")
+    yield ("status", {"state": "connected"})
+    yield ("tick", None)
+    misses = 0
+    http_fails = 0
+    while True:
+        t0 = time.monotonic()
+        try:
+            resp = client.get(
+                _poll_url(base, {"sid": sid}),
+                headers=headers,
+                timeout=timeout,
+            )
+        except Exception as e:
+            if _is_timeout(e):
+                misses += 1
+                http_fails = 0
+                log.info("poll timeout n=%s (idle ok)", misses)
+                if misses == 1 or misses % 5 == 0:
+                    yield ("status", {"state": "idle", "misses": misses})
+                gap = poll_gap(time.monotonic() - t0, got_event=False, timed_out=True)
+                if gap:
+                    time.sleep(gap)
+                yield ("tick", None)
+                continue
+            raise
+        elapsed = time.monotonic() - t0
+        if resp.status_code in (403, 429):
+            raise CloudflareError(resp.status_code, str(resp.url))
+        if resp.status_code >= 400:
+            if not is_poll_5xx(resp.status_code):
+                raise RuntimeError(f"scorebot poll HTTP {resp.status_code}")
+            http_fails += 1
+            log.warning(
+                "poll http %s n=%s sid=%s elapsed=%.2fs",
+                resp.status_code,
+                http_fails,
+                sid,
+                elapsed,
+            )
+            yield _trace(f"poll HTTP {resp.status_code} n={http_fails}")
+            if http_fails >= POLL_5XX_MAX:
+                raise RuntimeError(f"scorebot poll HTTP {resp.status_code}")
+            gap = poll_gap(elapsed, got_event=False, http_5xx=True)
+            yield (
+                "status",
+                {
+                    "state": "reconnect",
+                    "detail": f"poll HTTP {resp.status_code}",
+                    "wait": round(gap, 1),
+                },
+            )
+            if gap:
+                time.sleep(gap)
+            continue
+        if misses or http_fails:
+            yield ("status", {"state": "connected"})
+        misses = 0
+        http_fails = 0
+        got = False
+        pkts = decode_payload(resp.content or b"")
+        for pkt in pkts:
+            ev = parse_event(pkt)
+            if ev:
+                got = True
+                log.debug("event %s %s", ev[0], event_brief(ev[0], ev[1]))
+                yield ev
+        yield ("tick", None)
+        gap = poll_gap(elapsed, got_event=got, timed_out=False)
+        if gap:
+            time.sleep(gap)
+
+
 def iter_scorebot(
     sess: BrowserSession,
     list_id: str | int,
@@ -412,12 +524,14 @@ def iter_scorebot(
             log.debug("ws connect %s", ws_url)
             cookies = merged_ws_cookies(
                 sess.cookie,
+                headers.get("cookie") or headers.get("Cookie"),
                 getattr(client, "cookies", None),
                 getattr(resp, "cookies", None),
             )
             if sid and "io" not in cookies:
                 cookies["io"] = str(sid)
-            yield _trace("ws cookies=" + ",".join(sorted(cookies)[:12]))
+            ck_hdr = cookie_header(cookies)
+            yield _trace("ws cookies=" + ",".join(sorted(cookies)[:16]))
             from curl_cffi.const import CurlHttpVersion
 
             ws_err: Exception | None = None
@@ -426,7 +540,7 @@ def iter_scorebot(
                     yield _trace(f"ws connect {label}")
                     ws = client.ws_connect(
                         ws_url,
-                        headers=_ws_headers(headers),
+                        headers=_ws_headers(headers, cookie=ck_hdr),
                         cookies=cookies,
                         impersonate=sess.impersonate,
                         timeout=None,
@@ -442,10 +556,21 @@ def iter_scorebot(
                     log.warning("ws connect %s failed: %s", label, clip(e, 160))
             if ws is None:
                 assert ws_err is not None
+                if ws_upgrade_refused(ws_err):
+                    yield _trace("ws 403, fallback polling")
+                    log.info("scorebot ws 403, polling sid=%s", sid)
+                    backoff = RECONNECT_MIN
+                    for ev in iter_poll_events(
+                        client,
+                        base=base,
+                        headers=headers,
+                        sid=str(sid),
+                        list_id=list_id,
+                        timeout=timeout,
+                    ):
+                        yield ev
+                    raise RuntimeError("scorebot poll ended")
                 code = _http_status_from_exc(ws_err)
-                # Polling already 200: WS 403 is upgrade/WAF, not a dead cookie.
-                if code in (403, 429) and not cookies:
-                    raise CloudflareError(code, ws_url) from ws_err
                 if code and is_poll_5xx(code):
                     raise RuntimeError(f"scorebot ws HTTP {code}") from ws_err
                 raise RuntimeError(f"scorebot ws connect: {ws_err}") from ws_err

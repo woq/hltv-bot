@@ -102,6 +102,8 @@ python3 -m hltv_bot bot
 
 Watch **全局一场** Scorebot。默认**只给发了 `/watch` 的群**发卡片；其它群自己 `/watch`（可无 id）加入。新卡片只有该群手动 `/bump`。`/stop` 退出本群，`/stop all` 停全部。
 
+普通回复和用户命令（**除 `/watch`**）30 秒后自动删，避免刷屏；观赛卡片一直留着。
+
 ## 建议跑在哪
 
 启动时会调用 Telegram `setMyCommands`：群里是 matches/watch/bump/stop，私聊管理员额外有 allow/deny/groups/cookie/status。点输入框 `/` 就能看到。若群里 bot 收不到命令，去 @BotFather → /setprivacy → Disable。

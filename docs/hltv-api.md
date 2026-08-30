@@ -128,7 +128,7 @@ Origin: https://www.hltv.org
 }
 ```
 
-`sid` 之后升级（**HTTP/1.1**，带上握手 `Set-Cookie` 的 `io`，不要用 HTTP/2 的 `priority` 头）：
+`sid` 之后先升级 WebSocket（**HTTP/1.1**，Cookie 含握手 `io`）。Cloudflare 常对 curl 的 Upgrade 回 **403**（polling GET 仍 200）；此时**同一 sid 回退 xhr-polling**，不要空转重握手。
 
 ```
 wss://scorebot-lb.hltv.org/socket.io/?EIO=3&transport=websocket&sid={sid}

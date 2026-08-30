@@ -7,6 +7,7 @@ class _Tg:
     def __init__(self):
         self.sent = []
         self.edited = []
+        self.deleted = []
         self.fail_edit = False
 
     def send_rich(self, chat_id, html, **kwargs):
@@ -15,6 +16,9 @@ class _Tg:
 
     def send_message(self, chat_id, text):
         return self.send_rich(chat_id, text)
+
+    def delete_message(self, chat_id, message_id):
+        self.deleted.append((chat_id, message_id))
 
     def edit_rich(self, chat_id, message_id, html, **kwargs):
         if self.fail_edit:
@@ -37,6 +41,35 @@ def _state(**kwargs):
     if cards is not None:
         st.cards = cards
     return st
+
+
+def test_non_watch_messages_auto_delete():
+    import time
+
+    bot = _bot()
+    bot.msg_ttl = 0.05
+    bot.handle_text(1, "/help", user_id=1, message_id=50)
+    time.sleep(0.2)
+    assert (1, 50) in bot.tg.deleted
+    assert bot.tg.deleted  # bot reply too
+
+
+def test_watch_user_command_is_kept(monkeypatch):
+    scheduled: list[tuple[int, int]] = []
+    bot = _bot()
+    bot.msg_ttl = 30
+    bot._schedule_delete = lambda c, m: scheduled.append((c, m))  # type: ignore[method-assign]
+    bot.handle_text(1, "/help", user_id=1, message_id=50)
+    assert (1, 50) in scheduled
+    scheduled.clear()
+    monkeypatch.setattr(
+        "hltv_bot.bot.fetch_match_meta",
+        lambda sess, raw: {"scorebotId": "9", "team1": "A", "team2": "B", "url": "https://x"},
+    )
+    monkeypatch.setattr("hltv_bot.bot.iter_scorebot", lambda *a, **k: iter(()))
+    monkeypatch.setattr("hltv_bot.bot.scorebot_base", lambda url: "https://scorebot")
+    bot.handle_text(1, "/watch 9", user_id=1, message_id=77)
+    assert (1, 77) not in scheduled
 
 
 def test_flush_edits_in_place_never_sends():

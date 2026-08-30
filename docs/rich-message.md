@@ -15,7 +15,7 @@ Rich Message 把一条消息当成**小文档**：标题、表格、列表、引
 | 场景 | 通道 | 原因 |
 |---|---|---|
 | `/watch` 记分板、`/bump` 新卡片 | Rich：`sendRichMessage` / `editMessageText` + `rich_message` | 原生表，一条消息反复改 |
-| `/matches`、帮助、状态、错误、授权 | 普通：`sendMessage` + `parse_mode=HTML` | 好划选、好复制 `/watch id` |
+| `/matches`、帮助、状态、错误、授权 | 普通：`sendMessage` + `parse_mode=HTML` | 好划选、好复制 `/watch id`；30s 后自动删 |
 | 其它短通知 | 普通 `send_message` | 不强制 rich |
 
 **不要检查普通消息是不是 Rich。** 提交前测试只约束 watch 路径：编辑失败不得改成连发新卡片。

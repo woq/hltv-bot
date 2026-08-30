@@ -22,6 +22,9 @@ class _Tg:
     def send_message(self, chat_id, text):
         return self.send_rich(chat_id, text)
 
+    def delete_message(self, chat_id, message_id):
+        return None
+
     def chat_member_status(self, chat_id, user_id):
         return ""
 

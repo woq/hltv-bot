@@ -81,7 +81,9 @@ CMD_COOLDOWN = {
 DEFAULT_CMD_COOLDOWN = 1.2
 MIN_EDIT_INTERVAL = 1.8
 WATCH_STALE = 60.0
+MSG_TTL = 30.0
 _LIVE_LINKS = frozenset({"connected", "idle"})
+_KEEP_USER_CMDS = frozenset({"/watch"})
 
 USER_BOT_COMMANDS = [
     {"command": "matches", "description": "今日比赛"},
@@ -169,6 +171,7 @@ class HltvTelegramBot:
         self._thread: threading.Thread | None = None
         self._await_cookie: set[int] = set()
         self._cool = Cooldown()
+        self.msg_ttl = MSG_TTL
 
     def is_admin(self, user_id: int | None) -> bool:
         return user_id is not None and int(user_id) in self.admin_ids
@@ -223,7 +226,7 @@ class HltvTelegramBot:
         if cmd in {"/allow", "/deny"}:
             if not self.can_setup_chat(chat_id, user_id, chat_type):
                 log.info("deny setup cmd %s user=%s chat=%s", cmd, user_id, chat_id)
-                self.tg.send_message(
+                self._reply(
                     chat_id,
                     f"无权限授权本群\n你的 id: <code>{user_id}</code>\nchat: <code>{chat_id}</code>",
                 )
@@ -231,7 +234,7 @@ class HltvTelegramBot:
         elif cmd in ADMIN_CMDS and not self.is_admin(user_id):
             log.info("deny admin cmd %s user=%s chat=%s", cmd, user_id, chat_id)
             if cmd in {"/debug", "/status", "/groups", "/cookie"}:
-                self.tg.send_message(
+                self._reply(
                     chat_id,
                     f"无权限\n你的 id: <code>{user_id}</code>",
                 )
@@ -239,18 +242,24 @@ class HltvTelegramBot:
         if cmd not in ADMIN_CMDS | {"/start", "/help"} and not listed and not self.is_admin(user_id):
             log.info("skip cmd=%s chat=%s not in allow-list", cmd, chat_id)
             return
+        if (
+            cmd.startswith("/")
+            and cmd not in _KEEP_USER_CMDS
+            and message_id is not None
+        ):
+            self._schedule_delete(chat_id, int(message_id))
         if cmd.startswith("/") and user_id is not None:
             interval = CMD_COOLDOWN.get(cmd, DEFAULT_CMD_COOLDOWN)
             key = f"{user_id}:{cmd}"
             if not self._cool.allow(key, interval):
                 wait = self._cool.remaining(key, interval)
                 if cmd in {"/matches", "/matchs", "/match", "/watch", "/bump"}:
-                    self.tg.send_message(chat_id, f"稍等 {wait:.0f}s")
+                    self._reply(chat_id, f"稍等 {wait:.0f}s")
                 return
         if cmd in ("/start", "/help"):
             self._await_cookie.discard(chat_id)
             if self.is_admin(user_id) or self.chat_allowed(chat_id, user_id=user_id):
-                self.tg.send_message(chat_id, HELP)
+                self._reply(chat_id, HELP)
         elif cmd == "/allow":
             self._cmd_allow(chat_id, arg, chat_title=chat_title, chat_type=chat_type)
         elif cmd == "/deny":
@@ -282,14 +291,14 @@ class HltvTelegramBot:
         try:
             rows = fetch_matches(self.session)
         except CloudflareError as e:
-            self.tg.send_message(chat_id, f"Cloudflare 拦了列表页：{e}\n发 /cookie 更新 Cookie")
+            self._reply(chat_id, f"Cloudflare 拦了列表页：{e}\n发 /cookie 更新 Cookie")
             return
         if not rows:
-            self.tg.send_message(chat_id, "列表是空的（或解析失败）")
+            self._reply(chat_id, "列表是空的（或解析失败）")
             return
         text = format_match_list(rows, starred_only=not all_mode)
         log.debug("matches text_len=%s", len(text))
-        self.tg.send_message(chat_id, text)
+        self._reply(chat_id, text)
 
     def _watch_hint(self, list_id: str) -> str:
         return (
@@ -302,14 +311,14 @@ class HltvTelegramBot:
         html = state.text or self._watch_card_html(state, board=None, feed=[])
         card = state.cards.get(int(chat_id))
         if card and card.message_id:
-            self.tg.send_message(
+            self._reply(
                 chat_id,
                 "本群已在观赛。/bump 顶到最新 · /stop 退出本群",
             )
             return
         log.info("watch join chat=%s listId=%s", chat_id, state.list_id)
         self._flush_watch(state, html, send_new=True, chat_id=chat_id)
-        self.tg.send_message(chat_id, self._watch_hint(state.list_id))
+        self._reply(chat_id, self._watch_hint(state.list_id))
 
     def _put_watch_card(self, state: WatchState, chat_id: int, html: str) -> None:
         card = state.card(chat_id)
@@ -329,7 +338,7 @@ class HltvTelegramBot:
             if live and w is not None:
                 self._join_watch(w, chat_id)
                 return
-            self.tg.send_message(
+            self._reply(
                 chat_id,
                 "用法: /watch 2396932\n已有观赛时本群发 /watch 即可加入",
             )
@@ -337,11 +346,11 @@ class HltvTelegramBot:
         try:
             meta = fetch_match_meta(self.session, raw)
         except CloudflareError as e:
-            self.tg.send_message(chat_id, f"详情页 Cloudflare：{e}\n发 /cookie 更新 Cookie")
+            self._reply(chat_id, f"详情页 Cloudflare：{e}\n发 /cookie 更新 Cookie")
             return
         list_id = meta.get("scorebotId") or "".join(ch for ch in raw if ch.isdigit())
         if not list_id:
-            self.tg.send_message(chat_id, "没有 data-scorebot-id")
+            self._reply(chat_id, "没有 data-scorebot-id")
             return
         list_id = str(list_id)
         if live and w is not None and w.list_id == list_id:
@@ -369,12 +378,12 @@ class HltvTelegramBot:
         self.watch = state
         self._thread = threading.Thread(target=self._watch_loop, args=(state,), daemon=True)
         self._thread.start()
-        self.tg.send_message(chat_id, self._watch_hint(list_id))
+        self._reply(chat_id, self._watch_hint(list_id))
 
     def _cmd_bump(self, chat_id: int) -> None:
         w = self.watch
         if not w or w.stop.is_set() or not w.text:
-            self.tg.send_message(chat_id, "没有正在 watch 的消息")
+            self._reply(chat_id, "没有正在 watch 的消息")
             return
         card = w.cards.get(int(chat_id))
         log.info(
@@ -387,21 +396,21 @@ class HltvTelegramBot:
     def _cmd_stop(self, chat_id: int, arg: str = "") -> None:
         w = self.watch
         if not w or w.stop.is_set():
-            self.tg.send_message(chat_id, "没有正在 watch")
+            self._reply(chat_id, "没有正在 watch")
             return
         if arg.strip().lower() in {"all", "全部", "*"}:
             n = len(w.cards)
             self._stop_watch()
-            self.tg.send_message(chat_id, f"已停止全部（{n} 个群）")
+            self._reply(chat_id, f"已停止全部（{n} 个群）")
             return
         card = w.cards.pop(int(chat_id), None)
         if not w.cards:
             self._stop_watch()
-            self.tg.send_message(chat_id, "已停止")
+            self._reply(chat_id, "已停止")
             return
         log.info("watch leave chat=%s remaining=%s", chat_id, list(w.cards))
         extra = "" if card else "（本群本来没有卡片）"
-        self.tg.send_message(
+        self._reply(
             chat_id,
             f"本群已退出{extra}。其它群仍在观赛。全部停止发 /stop all",
         )
@@ -415,7 +424,7 @@ class HltvTelegramBot:
                 f"{c.chat_id}:{c.message_id}" for c in w.cards.values()
             ) or "-"
             watch_line = f"watching {w.list_id} cards={cards}"
-        self.tg.send_message(
+        self._reply(
             chat_id,
             format_kv_table(
                 "Status",
@@ -441,11 +450,11 @@ class HltvTelegramBot:
         elif chat_type in ("group", "supergroup"):
             gid = int(chat_id)
         else:
-            self.tg.send_message(chat_id, "在目标群里发 /allow，或 /allow -100xxxxxxxxxx")
+            self._reply(chat_id, "在目标群里发 /allow，或 /allow -100xxxxxxxxxx")
             return
         added = add_group(gid, title)
         log.info("allow chat=%s title=%s added=%s", gid, title, added)
-        self.tg.send_message(
+        self._reply(
             chat_id,
             ("已加入" if added else "已在名单里") + f" <code>{gid}</code> {title}".rstrip(),
         )
@@ -457,9 +466,9 @@ class HltvTelegramBot:
         else:
             gid = int(chat_id)
         if remove_group(gid):
-            self.tg.send_message(chat_id, f"已移除 <code>{gid}</code>")
+            self._reply(chat_id, f"已移除 <code>{gid}</code>")
         else:
-            self.tg.send_message(chat_id, f"名单里没有 <code>{gid}</code>")
+            self._reply(chat_id, f"名单里没有 <code>{gid}</code>")
 
     def _cmd_debug(
         self,
@@ -501,18 +510,18 @@ class HltvTelegramBot:
             self.is_admin(user_id),
             len(rows),
         )
-        self.tg.send_message(chat_id, html)
+        self._reply(chat_id, html)
 
     def _cmd_groups(self, chat_id: int) -> None:
         rows = list_groups()
         if not rows:
-            self.tg.send_message(chat_id, "还没有授权群。把 bot 拉进群后发 /allow")
+            self._reply(chat_id, "还没有授权群。把 bot 拉进群后发 /allow")
             return
         body = "".join(
             f"<tr><td><code>{h(g.get('id'))}</code></td><td>{h(g.get('title') or '')}</td></tr>"
             for g in rows
         )
-        self.tg.send_message(
+        self._reply(
             chat_id,
             f"<h3>授权群</h3><table bordered striped compact>{body}</table>",
         )
@@ -540,7 +549,7 @@ class HltvTelegramBot:
         if cid is None:
             return
         if self.can_setup_chat(int(cid), from_id, ctype):
-            self.tg.send_message(
+            self._reply(
                 cid,
                 f"<h3>已进群</h3><p><b>{h(title)}</b></p><p>发 /allow 加入推送名单</p>",
             )
@@ -555,7 +564,7 @@ class HltvTelegramBot:
             self._apply_cookie(chat_id, arg, message_id=message_id)
             return
         self._await_cookie.add(chat_id)
-        self.tg.send_message(
+        self._reply(
             chat_id,
             "把 DevTools → Network → Cookie 整行贴过来（可带 Cookie: 前缀）。\n"
             "发完后会尽量删掉你的消息。取消请发 /status。",
@@ -568,14 +577,14 @@ class HltvTelegramBot:
         self.session = load_session(path)
         names = self.session.cookie_names()
         if not names:
-            self.tg.send_message(chat_id, "Cookie 是空的，没写入有效内容")
+            self._reply(chat_id, "Cookie 是空的，没写入有效内容")
             return
         if message_id is not None:
             self.tg.delete_message(chat_id, message_id)
         extra = ""
         if self.watch and not self.watch.stop.is_set():
             extra = "\n正在 watch：新 cookie 下一轮请求会用上；仍 403 就 /stop 再 /watch。"
-        self.tg.send_message(
+        self._reply(
             chat_id,
             "Cookie 已更新\n"
             f"cf_clearance: {'yes' if self.session.has_clearance() else 'NO（请贴完整头）'}\n"
@@ -730,6 +739,28 @@ class HltvTelegramBot:
             self._mark_watch_down(state, "disconnected")
             if not state.stop.is_set():
                 log.info("watch ended: %s", e)
+
+    def _schedule_delete(self, chat_id: int, message_id: int) -> None:
+        delay = float(self.msg_ttl or 0)
+        if delay <= 0 or not message_id:
+            return
+
+        def _run() -> None:
+            try:
+                self.tg.delete_message(chat_id, message_id)
+            except Exception:
+                log.debug("delete_message chat=%s msg=%s failed", chat_id, message_id)
+
+        t = threading.Timer(delay, _run)
+        t.daemon = True
+        t.start()
+
+    def _reply(self, chat_id: int, text: str) -> dict:
+        msg = self.tg.send_message(chat_id, text)
+        mid = msg.get("message_id") if isinstance(msg, dict) else None
+        if mid is not None:
+            self._schedule_delete(chat_id, int(mid))
+        return msg
 
     def _send_rich(self, chat_id: int, html: str) -> dict:
         try:
@@ -948,7 +979,7 @@ class HltvTelegramBot:
                 except Exception as e:
                     log.exception("handle_text chat=%s", cid)
                     try:
-                        self.tg.send_message(cid, f"错误: {e}")
+                        self._reply(cid, f"错误: {e}")
                     except Exception:
                         pass
 
