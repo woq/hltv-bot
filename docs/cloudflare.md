@@ -56,4 +56,7 @@ python3 -m hltv_bot import-cookie -o data/session.json
 5. 无头但保存 profile → 仍难点 JS challenge
 6. VPS 真 Chrome + Xvfb + noVNC 常驻 → 最稳，但约 1GB 无 Swap 跑不起（unit 仍在 `deploy/chrome-session/`）
 7. 换更小浏览器 → JS challenge 还是要完整浏览器
-8. 同 IP + Cookie + TLS 伪装 → **现在这套**
+8. 同 IP + Cookie + TLS 伪装 → **现在这套（poll）**
+9. WebKitGTK / WPE 内容拦截 + 页内 WS → Turnstile 过不了（WebKit 指纹、无 GPU），已放弃
+
+过程与日志级结论见 [scorebot-transport.md](scorebot-transport.md)。

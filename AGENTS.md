@@ -22,3 +22,4 @@ python3 -m pytest tests/test_rich_message.py tests/test_format.py tests/test_wat
 - `docs/hltv-api.md` — HLTV 非官方接口
 - `docs/scorebot-data.md` — Scorebot / snapshot / 归一化 log 字段
 - `docs/cloudflare.md` — Cookie / TLS
+- `docs/scorebot-transport.md` — 传输层试过什么、为什么停在 poll

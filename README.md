@@ -12,6 +12,7 @@ TLS 按 MCP 里 Chrome 134 的头伪装（`curl_cffi` impersonate + 抄来的 `s
 | [docs/hltv-api.md](docs/hltv-api.md) | 非官方 HLTV 接口：列表 HTML、详情 meta、Scorebot Engine.IO、事件字段 |
 | [docs/scorebot-data.md](docs/scorebot-data.md) | Scorebot / snapshot / log 归一化数据结构（全面） |
 | [docs/cloudflare.md](docs/cloudflare.md) | Cookie / TLS 伪装、403 处理、试过的方案 |
+| [docs/scorebot-transport.md](docs/scorebot-transport.md) | 为什么停在 poll；WS 403、Lightpanda、WebKit 实验结论 |
 | [deploy/chrome-session/README.md](deploy/chrome-session/README.md) | VPS 常驻真 Chrome（备用，内存要求高） |
 
 ## 安装
