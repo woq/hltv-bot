@@ -127,6 +127,7 @@ class WatchState:
     trace: list[str] = field(default_factory=list)
     last_data_at: float = 0.0
     debug_view: bool = True
+    transport: str = ""
 
     def card(self, chat_id: int) -> WatchCard:
         c = self.cards.get(int(chat_id))
@@ -400,19 +401,19 @@ class HltvTelegramBot:
             return
         if arg.strip().lower() in {"all", "全部", "*"}:
             n = len(w.cards)
-            self._stop_watch()
+            self._stop_watch(delete_cards=True)
             self._reply(chat_id, f"已停止全部（{n} 个群）")
             return
-        card = w.cards.pop(int(chat_id), None)
+        self._delete_watch_cards(w, chat_id=int(chat_id))
+        w.cards.pop(int(chat_id), None)
         if not w.cards:
             self._stop_watch()
             self._reply(chat_id, "已停止")
             return
         log.info("watch leave chat=%s remaining=%s", chat_id, list(w.cards))
-        extra = "" if card else "（本群本来没有卡片）"
         self._reply(
             chat_id,
-            f"本群已退出{extra}。其它群仍在观赛。全部停止发 /stop all",
+            "本群已退出。其它群仍在观赛。全部停止发 /stop all",
         )
 
     def _cmd_status(self, chat_id: int) -> None:
@@ -593,8 +594,30 @@ class HltvTelegramBot:
             + extra,
         )
 
-    def _stop_watch(self) -> None:
+    def _delete_watch_cards(self, state: WatchState, *, chat_id: int | None = None) -> None:
+        cards = (
+            [state.cards[int(chat_id)]]
+            if chat_id is not None and int(chat_id) in state.cards
+            else list(state.cards.values())
+        )
+        for card in cards:
+            if not card.message_id:
+                continue
+            try:
+                self.tg.delete_message(card.chat_id, card.message_id)
+                log.info("watch delete chat=%s msg=%s", card.chat_id, card.message_id)
+            except Exception:
+                log.debug(
+                    "watch delete failed chat=%s msg=%s",
+                    card.chat_id,
+                    card.message_id,
+                )
+            card.message_id = None
+
+    def _stop_watch(self, *, delete_cards: bool = False) -> None:
         if self.watch:
+            if delete_cards:
+                self._delete_watch_cards(self.watch)
             self.watch.stop.set()
         self.watch = None
 
@@ -623,6 +646,8 @@ class HltvTelegramBot:
                     detail = str(payload.get("detail") or "").strip()
                     wait = payload.get("wait")
                     state.link = new_link
+                    if payload.get("transport"):
+                        state.transport = str(payload.get("transport") or "")
                     if new_link in ("connected", "idle"):
                         state.notice = ""
                         state.next_at = 0.0
@@ -869,6 +894,7 @@ class HltvTelegramBot:
             snap["link"] = state.link
             snap["notice"] = state.notice
             snap["next_at"] = state.next_at
+            snap["transport"] = state.transport
             return format_rich_html(snap)
         return format_connecting_html(
             team1=str(state.meta.get("team1") or "?"),
@@ -904,6 +930,7 @@ class HltvTelegramBot:
         snap["link"] = state.link
         snap["notice"] = state.notice
         snap["next_at"] = state.next_at
+        snap["transport"] = state.transport
         html = self._watch_card_html(state, board=board, feed=feed, debug=debug)
         return html, snap, debug
 

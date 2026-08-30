@@ -312,19 +312,67 @@ def _score_board(
     )
 
 
+_STATUS_MAX = 68  # ~2 wraps on a phone; keep one compact footer
+
+
+def _alive_pair(teams: list) -> str:
+    if len(teams) < 2:
+        return ""
+    nums: list[str] = []
+    for team in teams[:2]:
+        players = list(team.get("players") or [])
+        if not players or all(p.get("alive") is None for p in players):
+            return ""
+        nums.append(str(sum(1 for p in players if p.get("alive"))))
+    return f"{nums[0]}v{nums[1]}"
+
+
+def _fit_status(bits: list[str], *, keep: int = 2, limit: int = _STATUS_MAX) -> str:
+    out = [b for b in bits if b]
+    while len(out) > keep and len(" · ".join(out)) > limit:
+        out.pop()
+    text = " · ".join(out)
+    if len(text) > limit:
+        text = text[: limit - 1] + "…"
+    return text
+
+
 def _status_line(
     link: str = "connected",
     notice: str = "",
     next_at: object = None,
+    snap: dict | None = None,
 ) -> str:
     label = _LINK_LABEL.get(link, link or "connected")
-    bits = [label]
+    core = [label]
     if notice and notice.lower() != label.lower():
-        bits.append(str(notice))
+        core.append(str(notice).replace("\n", " ")[:40])
     nxt = format_next_clock(next_at)
     if nxt:
-        bits.append(f"next {nxt}")
-    return f"<p><i>{h(' · '.join(bits))}</i></p>"
+        core.append(f"next {nxt}")
+    extra: list[str] = []
+    if snap:
+        tr = str(snap.get("transport") or "").lower()
+        if tr in ("ws", "poll"):
+            extra.append(tr)
+        if snap.get("frozen"):
+            extra.append("freeze")
+        st = str(snap.get("roundState") or "").strip().lower()
+        if st and st not in {"", "live", "normal"} and st not in {x.lower() for x in extra}:
+            extra.append(st.replace("_", " ")[:12])
+        if snap.get("bombPlanted"):
+            extra.append("bomb")
+        alive = _alive_pair(list(snap.get("teams") or []))
+        if alive:
+            extra.append(alive)
+        map_name, round_n = _map_and_round(snap)
+        if round_n:
+            extra.append(f"R{round_n}")
+        if map_name:
+            extra.append(str(map_name).replace(" ", "")[:10])
+        extra.append(datetime.now(CST).strftime("%H:%M:%S"))
+    bits = core + extra
+    return f"<p><i>{h(_fit_status(bits, keep=max(1, len(core))))}</i></p>"
 
 
 def _side_table(side: str, team: dict, *, ct: bool) -> str:
@@ -593,6 +641,7 @@ def format_rich_html(snap: dict, *, log_limit: int = 12) -> str:
             str(snap.get("link") or "connected"),
             str(snap.get("notice") or ""),
             snap.get("next_at"),
+            snap=snap,
         )
     )
     return "".join(blocks)

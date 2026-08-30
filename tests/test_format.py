@@ -70,7 +70,8 @@ def test_format_contains_score_and_log():
     assert rich.startswith("<details>")
     assert "<summary>Stats" in rich
     assert rich.index("<details>") < rich.index("killed")
-    assert "<i>connected</i>" in rich
+    assert "connected" in rich
+    assert "R19" in rich
 
 
 def test_scoreboard_notice_and_next_clock():
@@ -86,6 +87,40 @@ def test_scoreboard_notice_and_next_clock():
     assert format_next_clock(1_783_000_000)
     assert "reconnect" in rich
     assert rich.rfind("reconnect") > rich.find("</table>")
+
+
+def test_status_line_packs_match_bits():
+    from hltv_bot.format import _status_line
+
+    snap = dict(SNAP)
+    snap["frozen"] = True
+    snap["bombPlanted"] = True
+    snap["teams"] = [
+        {
+            "name": "Spirit",
+            "players": [
+                {"nick": "a", "kills": 1, "assists": 0, "deaths": 0, "adr": 1, "alive": True},
+                {"nick": "b", "kills": 0, "assists": 0, "deaths": 1, "adr": 1, "alive": False},
+            ],
+        },
+        {
+            "name": "G2",
+            "players": [
+                {"nick": "c", "kills": 1, "assists": 0, "deaths": 0, "adr": 1, "alive": True},
+                {"nick": "d", "kills": 1, "assists": 0, "deaths": 0, "adr": 1, "alive": True},
+            ],
+        },
+    ]
+    snap["transport"] = "poll"
+    line = _status_line("connected", "", None, snap=snap)
+    assert "connected" in line
+    assert "poll" in line
+    assert "freeze" in line
+    assert "bomb" in line
+    assert "1v2" in line
+    assert "R19" in line
+    visible = line.replace("<p><i>", "").replace("</i></p>", "")
+    assert len(visible) <= 68
 
 
 def test_watch_debug_card_is_traces_not_scoreboard():

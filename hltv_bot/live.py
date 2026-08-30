@@ -50,6 +50,7 @@ def _players(side: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
                 "assists": int(_num(p, "assists", "assistsUnconfirmed")),
                 "deaths": int(_num(p, "deaths")),
                 "adr": float(_num(p, "damagePrRound", "adr", "damage")),
+                "alive": bool(p["alive"]) if "alive" in p else None,
             }
         )
     return out
@@ -663,5 +664,6 @@ def snapshot_from_scoreboard(
         "history": match_history(board),
         "bombPlanted": bool(board.get("bombPlanted")),
         "frozen": bool(board.get("frozen")),
+        "roundState": str(board.get("currentRoundState") or board.get("roundState") or "").strip(),
         "log": log or [],
     }

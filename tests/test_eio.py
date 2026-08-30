@@ -7,6 +7,7 @@ from hltv_bot.eio import (
     split_ws_packets,
 )
 from hltv_bot.scorebot import (
+    WS_RETRY_EVERY,
     POLL_5XX_GAP,
     POLL_EMPTY_GAP,
     POLL_MIN_GAP,
@@ -112,6 +113,10 @@ def test_merged_ws_cookies_keep_io_over_header():
     from_hdr = merged_ws_cookies("", "cf_clearance=abc; foo=1", {"io": "sid"})
     assert from_hdr["cf_clearance"] == "abc"
     assert from_hdr["io"] == "sid"
+
+
+def test_ws_retry_interval_is_bounded():
+    assert 15.0 <= WS_RETRY_EVERY <= 60.0
 
 
 def test_ws_upgrade_refused():

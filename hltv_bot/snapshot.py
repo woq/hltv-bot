@@ -24,5 +24,14 @@ def snapshot_fingerprint(snap: dict) -> str:
             str(log0.get("type") or ""),
             hist_s,
             ",".join(kad),
+            str(snap.get("transport") or ""),
+            "b1" if snap.get("bombPlanted") else "b0",
+            "f1" if snap.get("frozen") else "f0",
+            ",".join(
+                "1" if p.get("alive") else "0"
+                for t in teams
+                for p in (t.get("players") or [])
+                if p.get("alive") is not None
+            ),
         ]
     )

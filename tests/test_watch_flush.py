@@ -173,11 +173,15 @@ def test_watch_sends_only_command_chat(tmp_path, monkeypatch):
         assert list(bot.watch.cards) == [-100]
         bot.handle_text(-200, "/watch", user_id=2, chat_type="supergroup")
         assert -200 in bot.watch.cards
+        mid200 = bot.watch.cards[-200].message_id
         bot.handle_text(-200, "/stop", user_id=2, chat_type="supergroup")
         assert -200 not in bot.watch.cards
         assert -100 in bot.watch.cards
+        assert (-200, mid200) in bot.tg.deleted
+        mid100 = bot.watch.cards[-100].message_id
         bot.handle_text(-100, "/stop all", user_id=1, chat_type="supergroup")
         assert bot.watch is None
+        assert (-100, mid100) in bot.tg.deleted
     finally:
         os.chdir(old)
 

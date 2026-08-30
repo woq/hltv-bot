@@ -128,7 +128,7 @@ Origin: https://www.hltv.org
 }
 ```
 
-`sid` 之后先升级 WebSocket（**HTTP/1.1**，Cookie 含握手 `io`）。Cloudflare 常对 curl 的 Upgrade 回 **403**（polling GET 仍 200）；此时**同一 sid 回退 xhr-polling**，不要空转重握手。
+握手后先 **polling `readyForMatch`**（和浏览器一样），立刻尝试 WS 升级。403 则继续 poll，**每 30s 以及 poll 5xx 时再试升级**；成功就切到 WS，底部状态会显示 `ws` / `poll`。
 
 ```
 wss://scorebot-lb.hltv.org/socket.io/?EIO=3&transport=websocket&sid={sid}

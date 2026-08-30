@@ -29,7 +29,7 @@ Rich **没有 CSS**。单元格只能行内标签。不要用 h3/ul/footer 文�
 1. `<details>` 战绩（默认折叠）：回合史一行 + 名单表 CT / T
 2. 比分条 `table bordered compact`
 3. Log 表（两列：选手 / 事件；无 Who 表头；文案英语）
-4. 最下一行链接状态：`<p><i>connected</i></p>` 之类
+4. 最下一行链接状态（手机约 68 字）：`connected · freeze · bomb · 3v5 · R19 · Inferno · 18:32:05`；异常时带 notice / next
 5. 未出分用 `–`，不要 0-0
 
 连不上或拿不到记分板/log（connecting / reconnect / disconnected / 60s 无数据）时，**同一条卡片**改成 DEBUG：`pre` 里最近运输层痕迹。数据回来再 edit 回上面的记分板。不要另发新消息。

@@ -40,6 +40,7 @@ POLL_EMPTY_GAP = 20.0
 POLL_5XX_GAP = 30.0
 POLL_5XX_MAX = 4
 WS_PROBE_TIMEOUT = 15.0
+WS_RETRY_EVERY = 30.0
 UA = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
@@ -332,6 +333,44 @@ def _http_status_from_exc(exc: BaseException) -> int | None:
         return None
 
 
+def try_open_ws(
+    client: Any,
+    *,
+    ws_url: str,
+    headers: dict[str, str],
+    cookies: dict[str, str],
+    impersonate: str,
+) -> tuple[Any, list[str], Exception | None]:
+    """Probe-upgrade. Returns (ws, extra, None) or (None, [], err)."""
+    from curl_cffi.const import CurlHttpVersion
+
+    ck_hdr = cookie_header(cookies)
+    last: Exception | None = None
+    for default_hdrs in (True, False):
+        ws = None
+        try:
+            ws = client.ws_connect(
+                ws_url,
+                headers=_ws_headers(headers, cookie=ck_hdr),
+                cookies=cookies,
+                impersonate=impersonate,
+                timeout=None,
+                verify=True,
+                default_headers=default_hdrs,
+                http_version=CurlHttpVersion.V1_1,
+            )
+            extra = probe_upgrade(ws, timeout=WS_PROBE_TIMEOUT)
+            return ws, extra, None
+        except Exception as e:
+            last = e
+            if ws is not None:
+                try:
+                    ws.close()
+                except Exception:
+                    pass
+    return None, [], last
+
+
 def iter_poll_events(
     client: Any,
     *,
@@ -340,30 +379,48 @@ def iter_poll_events(
     sid: str,
     list_id: str | int,
     timeout: float,
+    skip_ready: bool = False,
+    ws_factory: Any | None = None,
+    ws_retry_every: float = WS_RETRY_EVERY,
 ) -> Iterator[tuple[str, Any]]:
-    """Engine.IO xhr-polling after handshake (same sid)."""
+    """Engine.IO xhr-polling after handshake (same sid). Retries WS upgrade."""
     from hltv_bot.http import CloudflareError
 
-    emit = encode_event("readyForMatch", ready_for_match_payload(list_id))
-    post_headers = dict(headers)
-    post_headers["content-type"] = "text/plain;charset=UTF-8"
-    post_url = _poll_url(base, {"sid": sid})
-    post_resp = client.post(
-        post_url,
-        data=encode_payload(emit),
-        headers=post_headers,
-        timeout=20,
-    )
-    if post_resp.status_code in (403, 429):
-        raise CloudflareError(post_resp.status_code, post_url)
-    if post_resp.status_code >= 400:
-        raise RuntimeError(f"scorebot readyForMatch HTTP {post_resp.status_code}")
-    yield _trace("polling readyForMatch")
-    yield ("status", {"state": "connected"})
-    yield ("tick", None)
+    if not skip_ready:
+        emit = encode_event("readyForMatch", ready_for_match_payload(list_id))
+        post_headers = dict(headers)
+        post_headers["content-type"] = "text/plain;charset=UTF-8"
+        post_url = _poll_url(base, {"sid": sid})
+        post_resp = client.post(
+            post_url,
+            data=encode_payload(emit),
+            headers=post_headers,
+            timeout=20,
+        )
+        if post_resp.status_code in (403, 429):
+            raise CloudflareError(post_resp.status_code, post_url)
+        if post_resp.status_code >= 400:
+            raise RuntimeError(f"scorebot readyForMatch HTTP {post_resp.status_code}")
+        yield _trace("polling readyForMatch")
+        yield ("status", {"state": "connected", "transport": "poll"})
+        yield ("tick", None)
+    next_ws = 0.0
     misses = 0
     http_fails = 0
     while True:
+        now = time.monotonic()
+        if ws_factory and now >= next_ws:
+            yield _trace("retry websocket")
+            ws, extra, err = ws_factory()
+            if ws is not None:
+                yield _trace("ws upgraded")
+                yield ("status", {"state": "connected", "transport": "ws"})
+                yield ("tick", None)
+                for ev in iter_ws_events(ws, extra=extra):
+                    yield ev
+                return
+            yield _trace(f"ws retry {clip(err, 80)}")
+            next_ws = now + ws_retry_every
         t0 = time.monotonic()
         try:
             resp = client.get(
@@ -377,7 +434,7 @@ def iter_poll_events(
                 http_fails = 0
                 log.info("poll timeout n=%s (idle ok)", misses)
                 if misses == 1 or misses % 5 == 0:
-                    yield ("status", {"state": "idle", "misses": misses})
+                    yield ("status", {"state": "idle", "misses": misses, "transport": "poll"})
                 gap = poll_gap(time.monotonic() - t0, got_event=False, timed_out=True)
                 if gap:
                     time.sleep(gap)
@@ -401,6 +458,7 @@ def iter_poll_events(
             yield _trace(f"poll HTTP {resp.status_code} n={http_fails}")
             if http_fails >= POLL_5XX_MAX:
                 raise RuntimeError(f"scorebot poll HTTP {resp.status_code}")
+            next_ws = 0.0
             gap = poll_gap(elapsed, got_event=False, http_5xx=True)
             yield (
                 "status",
@@ -408,13 +466,14 @@ def iter_poll_events(
                     "state": "reconnect",
                     "detail": f"poll HTTP {resp.status_code}",
                     "wait": round(gap, 1),
+                    "transport": "poll",
                 },
             )
             if gap:
                 time.sleep(gap)
             continue
         if misses or http_fails:
-            yield ("status", {"state": "connected"})
+            yield ("status", {"state": "connected", "transport": "poll"})
         misses = 0
         http_fails = 0
         got = False
@@ -517,11 +576,6 @@ def iter_scorebot(
                 time.sleep(RECONNECT_MIN)
             if not sid:
                 raise RuntimeError("scorebot handshake: no sid")
-            log.info("scorebot sid=%s listId=%s upgrading websocket", sid, list_id)
-            yield _trace(f"sid={sid} upgrading websocket")
-
-            ws_url = _ws_url(base, {"sid": str(sid)})
-            log.debug("ws connect %s", ws_url)
             cookies = merged_ws_cookies(
                 sess.cookie,
                 headers.get("cookie") or headers.get("Cookie"),
@@ -530,70 +584,31 @@ def iter_scorebot(
             )
             if sid and "io" not in cookies:
                 cookies["io"] = str(sid)
-            ck_hdr = cookie_header(cookies)
-            yield _trace("ws cookies=" + ",".join(sorted(cookies)[:16]))
-            from curl_cffi.const import CurlHttpVersion
+            ws_url = _ws_url(base, {"sid": str(sid)})
+            yield _trace(f"sid={sid} cookies=" + ",".join(sorted(cookies)[:16]))
 
-            ws_err: Exception | None = None
-            for label, default_hdrs in (("h1", True), ("h1-min", False)):
-                try:
-                    yield _trace(f"ws connect {label}")
-                    ws = client.ws_connect(
-                        ws_url,
-                        headers=_ws_headers(headers, cookie=ck_hdr),
-                        cookies=cookies,
-                        impersonate=sess.impersonate,
-                        timeout=None,
-                        verify=True,
-                        default_headers=default_hdrs,
-                        http_version=CurlHttpVersion.V1_1,
-                    )
-                    ws_err = None
-                    break
-                except Exception as e:
-                    ws_err = e
-                    yield _trace(f"ws {label} {clip(e, 100)}")
-                    log.warning("ws connect %s failed: %s", label, clip(e, 160))
-            if ws is None:
-                assert ws_err is not None
-                if ws_upgrade_refused(ws_err):
-                    yield _trace("ws 403, fallback polling")
-                    log.info("scorebot ws 403, polling sid=%s", sid)
-                    backoff = RECONNECT_MIN
-                    for ev in iter_poll_events(
-                        client,
-                        base=base,
-                        headers=headers,
-                        sid=str(sid),
-                        list_id=list_id,
-                        timeout=timeout,
-                    ):
-                        yield ev
-                    raise RuntimeError("scorebot poll ended")
-                code = _http_status_from_exc(ws_err)
-                if code and is_poll_5xx(code):
-                    raise RuntimeError(f"scorebot ws HTTP {code}") from ws_err
-                raise RuntimeError(f"scorebot ws connect: {ws_err}") from ws_err
+            def _ws_factory() -> tuple[Any, list[str], Exception | None]:
+                return try_open_ws(
+                    client,
+                    ws_url=ws_url,
+                    headers=headers,
+                    cookies=cookies,
+                    impersonate=sess.impersonate,
+                )
 
-            extra = probe_upgrade(ws, timeout=WS_PROBE_TIMEOUT)
-            yield _trace("ws probe ok")
-            emit = encode_event("readyForMatch", ready_for_match_payload(list_id))
-            send_eio(ws, emit)
-            log.info(
-                "scorebot ws ready sid=%s pingInterval=%s extra=%s",
-                sid,
-                opened.get("pingInterval"),
-                len(extra),
-            )
-            yield _trace(
-                f"ws ready pingInterval={opened.get('pingInterval')} extra={len(extra)}"
-            )
-            yield ("status", {"state": "connected"})
-            yield ("tick", None)
+            log.info("scorebot sid=%s listId=%s polling then ws", sid, list_id)
             backoff = RECONNECT_MIN
-            for name, payload in iter_ws_events(ws, extra=extra):
-                yield (name, payload)
-            raise RuntimeError("scorebot ws ended")
+            for ev in iter_poll_events(
+                client,
+                base=base,
+                headers=headers,
+                sid=str(sid),
+                list_id=list_id,
+                timeout=timeout,
+                ws_factory=_ws_factory,
+            ):
+                yield ev
+            raise RuntimeError("scorebot session ended")
         except CloudflareError as e:
             yield (
                 "status",
