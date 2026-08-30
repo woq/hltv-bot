@@ -4,7 +4,46 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from typing import Any
+
+# engine.io-client `yeast` (EIO=3 `t=` query). Not unix milliseconds.
+_YEAST_ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-_"
+
+
+def yeast_encode(num: int) -> str:
+    n = max(0, int(num))
+    out: list[str] = []
+    base = len(_YEAST_ALPHABET)
+    while True:
+        out.append(_YEAST_ALPHABET[n % base])
+        n //= base
+        if n <= 0:
+            break
+    return "".join(reversed(out))
+
+
+class Yeast:
+    def __init__(self) -> None:
+        self._seed = 0
+        self._prev = ""
+
+    def next(self, now_ms: int | None = None) -> str:
+        encoded = yeast_encode(int(time.time() * 1000) if now_ms is None else now_ms)
+        if encoded != self._prev:
+            self._seed = 0
+            self._prev = encoded
+            return encoded
+        token = encoded + "." + yeast_encode(self._seed)
+        self._seed += 1
+        return token
+
+
+_yeast = Yeast()
+
+
+def eio_t(now_ms: int | None = None) -> str:
+    return _yeast.next(now_ms)
 
 
 def decode_payload(data: bytes) -> list[str]:

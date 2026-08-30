@@ -19,6 +19,7 @@ from hltv_bot.debuglog import clip, event_brief
 from hltv_bot.eio import (
     classify_eio,
     decode_payload,
+    eio_t,
     encode_event,
     encode_payload,
     parse_event,
@@ -41,6 +42,7 @@ POLL_5XX_GAP = 30.0
 POLL_5XX_MAX = 4
 WS_PROBE_TIMEOUT = 15.0
 WS_RETRY_EVERY = 30.0
+WS_ATTEMPT_GAP = 1.0
 UA = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
@@ -83,7 +85,7 @@ OnEvent = Callable[[str, Any], None]
 
 
 def _poll_url(base: str, extra: dict[str, str] | None = None) -> str:
-    q = {"EIO": "3", "transport": "polling", "t": str(int(time.time() * 1000))}
+    q = {"EIO": "3", "transport": "polling", "t": eio_t()}
     if extra:
         q.update(extra)
     return f"{base.rstrip('/')}/socket.io/?{urlencode(q)}"
@@ -99,7 +101,7 @@ def http_to_ws(base: str) -> str:
 
 
 def _ws_url(base: str, extra: dict[str, str] | None = None) -> str:
-    q = {"EIO": "3", "transport": "websocket", "t": str(int(time.time() * 1000))}
+    q = {"EIO": "3", "transport": "websocket", "t": eio_t()}
     if extra:
         q.update(extra)
     return f"{http_to_ws(base)}/socket.io/?{urlencode(q)}"
@@ -142,8 +144,28 @@ def merged_ws_cookies(session_cookie: str, *sources: object) -> dict[str, str]:
     return out
 
 
+_COOKIE_FIRST = (
+    "io",
+    "_cfuvid",
+    "__cflb",
+    "cf_clearance",
+    "__cf_bm",
+)
+
+
 def cookie_header(pairs: dict[str, str]) -> str:
-    return "; ".join(f"{k}={v}" for k, v in pairs.items() if k)
+    """Prefer Chrome's CF cookie order; keep the rest as merged."""
+    seen: set[str] = set()
+    parts: list[str] = []
+    for name in _COOKIE_FIRST:
+        if name in pairs and pairs[name] and name not in seen:
+            parts.append(f"{name}={pairs[name]}")
+            seen.add(name)
+    for k, v in pairs.items():
+        if k and v and k not in seen:
+            parts.append(f"{k}={v}")
+            seen.add(k)
+    return "; ".join(parts)
 
 
 def ws_upgrade_refused(exc: BaseException) -> bool:
@@ -153,7 +175,11 @@ def ws_upgrade_refused(exc: BaseException) -> bool:
 
 
 def _ws_headers(headers: dict[str, str], *, cookie: str = "") -> dict[str, str]:
-    """Chrome WS upgrade is HTTP/1.1; drop H2-only `priority`."""
+    """Chrome WS upgrade is HTTP/1.1; drop H2-only `priority`.
+
+    Do not advertise permessage-deflate or Accept-Encoding: curl_cffi then
+    WS_RECVs empty (curl 52) after a successful 101.
+    """
     keep = {
         "origin",
         "referer",
@@ -346,7 +372,11 @@ def try_open_ws(
 
     ck_hdr = cookie_header(cookies)
     last: Exception | None = None
-    for default_hdrs in (True, False):
+    for i, default_hdrs in enumerate((True, False)):
+        if i and last is not None:
+            if ws_upgrade_refused(last):
+                return None, [], last
+            time.sleep(WS_ATTEMPT_GAP)
         ws = None
         try:
             ws = client.ws_connect(
@@ -407,19 +437,24 @@ def iter_poll_events(
     next_ws = 0.0
     misses = 0
     http_fails = 0
+    ws_fails = 0
     while True:
         now = time.monotonic()
         if ws_factory and now >= next_ws:
             yield _trace("retry websocket")
             ws, extra, err = ws_factory()
             if ws is not None:
+                ws_fails = 0
                 yield _trace("ws upgraded")
                 yield ("status", {"state": "connected", "transport": "ws"})
                 yield ("tick", None)
                 for ev in iter_ws_events(ws, extra=extra):
                     yield ev
                 return
-            yield _trace(f"ws retry {clip(err, 80)}")
+            ws_fails += 1
+            brief = clip(err, 80)
+            yield _trace(f"ws retry {brief}")
+            yield ("ws_fail", {"error": clip(err, 120), "n": ws_fails})
             next_ws = now + ws_retry_every
         t0 = time.monotonic()
         try:
@@ -463,7 +498,7 @@ def iter_poll_events(
             yield (
                 "status",
                 {
-                    "state": "reconnect",
+                    "state": "connected",
                     "detail": f"poll HTTP {resp.status_code}",
                     "wait": round(gap, 1),
                     "transport": "poll",

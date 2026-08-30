@@ -83,7 +83,7 @@ def build_headers(
         "dnt": dnt,
         "sec-ch-ua-mobile": sec_ch_ua_mobile,
         "accept": accept,
-        "accept-encoding": "gzip, deflate, br",
+        "accept-encoding": "gzip, deflate, br, zstd",
         "accept-language": accept_language,
         "origin": origin,
         "priority": "u=1, i",

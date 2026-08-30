@@ -12,7 +12,8 @@ log = logging.getLogger("hltv_bot.matches")
 
 MATCHES_URL = "https://www.hltv.org/matches"
 _MATCH_CACHE: dict = {"at": 0.0, "rows": []}
-_MATCH_CACHE_TTL = 45.0
+MATCH_CACHE_TTL = 45.0
+_MATCH_CACHE_TTL = MATCH_CACHE_TTL
 MATCH_HREF = re.compile(r'href="(/matches/(\d+)/([^"]+))"')
 TEAM_NAME = re.compile(
     r'class="[^"]*matchTeamName[^"]*"[^>]*>(?:<[^>]+>)*\s*([^<]+)',

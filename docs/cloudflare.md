@@ -38,7 +38,7 @@ python3 -m hltv_bot import-cookie -o data/session.json
 5. `dnt: 1`
 6. `sec-ch-ua-mobile: ?0`
 7. `accept: */*`
-8. `accept-encoding: gzip, deflate, br`
+8. `accept-encoding: gzip, deflate, br, zstd`
 9. `accept-language: zh-CN,zh;q=0.9,zh-TW;q=0.8`
 10. `origin: https://www.hltv.org`
 11. `priority: u=1, i`

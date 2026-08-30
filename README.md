@@ -114,4 +114,4 @@ Watch **全局一场** Scorebot。默认**只给发了 `/watch` 的群**发卡�
 
 Bot 默认 `HLTV_LOG=DEBUG`，Scorebot / Telegram / HTTP 都会打到 stdout。改成 INFO：`HLTV_LOG=INFO python3 -m hltv_bot bot`。
 
-提交或 push 前：`python3 -m pytest tests/test_rich_message.py tests/test_format.py tests/test_watch_flush.py -q`（见 [docs/rich-message.md](docs/rich-message.md)）。
+提交或 push 前：`python3 -m pytest tests/test_rich_message.py tests/test_format.py tests/test_watch_flush.py tests/test_gaps.py -q`（见 [docs/rich-message.md](docs/rich-message.md)）。

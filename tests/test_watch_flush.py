@@ -1,4 +1,10 @@
-from hltv_bot.bot import HltvTelegramBot, WatchCard, WatchState, watch_debug_mode
+from hltv_bot.bot import (
+    HltvTelegramBot,
+    WatchCard,
+    WatchState,
+    WsFailDigest,
+    watch_debug_mode,
+)
 from hltv_bot.session import BrowserSession
 from hltv_bot.telegram_api import is_not_modified
 
@@ -130,12 +136,15 @@ def test_bump_is_the_only_new_send():
 def test_watch_debug_mode_healthy_vs_down():
     now = 1000.0
     assert watch_debug_mode("connecting", has_board=False, last_data_at=0, now=now)
-    assert watch_debug_mode("reconnect", has_board=True, last_data_at=now, now=now)
+    assert watch_debug_mode("disconnected", has_board=True, last_data_at=now, now=now)
     assert watch_debug_mode("connected", has_board=False, last_data_at=0, now=now)
     assert watch_debug_mode("connected", has_board=True, last_data_at=0, now=now)
     assert watch_debug_mode("connected", has_board=True, last_data_at=now - 90, now=now)
+    assert watch_debug_mode("reconnect", has_board=True, last_data_at=now - 90, now=now)
     assert not watch_debug_mode("connected", has_board=True, last_data_at=now - 5, now=now)
     assert not watch_debug_mode("idle", has_board=True, last_data_at=now - 5, now=now)
+    assert not watch_debug_mode("reconnect", has_board=True, last_data_at=now, now=now)
+    assert not watch_debug_mode("connecting", has_board=True, last_data_at=now - 5, now=now)
 
 
 def test_watch_sends_only_command_chat(tmp_path, monkeypatch):
@@ -184,6 +193,64 @@ def test_watch_sends_only_command_chat(tmp_path, monkeypatch):
         assert (-100, mid100) in bot.tg.deleted
     finally:
         os.chdir(old)
+
+
+def test_ws_fail_digest_batches():
+    d = WsFailDigest(min_fails=2, every=300)
+    assert not d.note("403", 0.0)
+    assert d.note("403", 30.0)
+    info = d.consume(30.0)
+    assert info["n"] == 2
+    assert info["total"] == 2
+    assert info["error"] == "403"
+    assert not d.note("403", 40.0)
+    assert not d.note("403", 329.0)
+    assert d.note("502", 331.0)
+    info = d.consume(331.0)
+    assert info["n"] == 3
+    assert info["total"] == 5
+    assert info["error"] == "502"
+    d.reset()
+    assert d.n == 0
+    assert not d.note("x", 400.0)
+
+
+def test_ws_fail_notifies_admin_not_watch_chat(monkeypatch):
+    bot = _bot()
+    times = iter([100.0, 130.0, 140.0, 432.0])
+    monkeypatch.setattr("hltv_bot.bot.time.monotonic", lambda: next(times))
+    st = _state()
+    st.meta = {"team1": "G2", "team2": "NaVi"}
+    bot._on_ws_fail(st, {"error": "upgrade: 403"})
+    assert bot.tg.sent == []
+    bot._on_ws_fail(st, {"error": "upgrade: 403"})
+    assert len(bot.tg.sent) == 1
+    chat, text = bot.tg.sent[0]
+    assert chat == 1
+    assert "403" in text
+    assert "G2" in text
+    assert "poll" in text
+    bot._on_ws_fail(st, {"error": "upgrade: 403"})
+    assert len(bot.tg.sent) == 1
+    bot._on_ws_fail(st, {"error": "upgrade: 502"})
+    assert len(bot.tg.sent) == 2
+    assert "502" in bot.tg.sent[1][1]
+    assert "本批 2 次" in bot.tg.sent[1][1]
+
+
+def test_ws_ok_resets_digest_so_next_burst_can_notify(monkeypatch):
+    bot = _bot()
+    times = iter([10.0, 40.0, 50.0, 80.0])
+    monkeypatch.setattr("hltv_bot.bot.time.monotonic", lambda: next(times))
+    st = _state()
+    bot._on_ws_fail(st, {"error": "403"})
+    bot._on_ws_fail(st, {"error": "403"})
+    assert len(bot.tg.sent) == 1
+    bot._ws_fail.reset()
+    bot._on_ws_fail(st, {"error": "403"})
+    assert len(bot.tg.sent) == 1
+    bot._on_ws_fail(st, {"error": "403"})
+    assert len(bot.tg.sent) == 2
 
 
 def test_mark_watch_down_edits_debug_card():

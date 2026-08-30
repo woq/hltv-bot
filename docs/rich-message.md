@@ -32,6 +32,6 @@ Rich **没有 CSS**。单元格只能行内标签。不要用 h3/ul/footer 文�
 4. 最下一行链接状态（手机约 68 字）：`connected · freeze · bomb · 3v5 · R19 · Inferno · 18:32:05`；异常时带 notice / next
 5. 未出分用 `–`，不要 0-0
 
-连不上或拿不到记分板/log（connecting / reconnect / disconnected / 60s 无数据）时，**同一条卡片**改成 DEBUG：`pre` 里最近运输层痕迹。数据回来再 edit 回上面的记分板。不要另发新消息。
+拿不到可用记分板时（从未出分、`disconnected`、或 60s 无 scoreboard/log）**同一条卡片**改成 DEBUG：`pre` 里最近运输层痕迹（握手 / WS / poll HTTP，不含 Kill 行）。瞬时 poll 5xx、握手重试时，有新数据就留记分板，只在底栏带 notice / next。数据回来再 edit 回记分板。不要另发新消息。
 
 限制（官方）：正文 ≤ 32768；块 ≤ 500；表 ≤ 20 列；嵌套 ≤ 16。

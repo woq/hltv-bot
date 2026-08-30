@@ -29,7 +29,7 @@ from hltv_bot.live import (
     snapshot_from_scoreboard,
 )
 from hltv_bot.matches import fetch_match_meta, fetch_matches
-from hltv_bot.scorebot import iter_scorebot, scorebot_base
+from hltv_bot.scorebot import WS_RETRY_EVERY, iter_scorebot, scorebot_base
 from hltv_bot.ratelimit import Cooldown
 from hltv_bot.session import BrowserSession, load_session, save_cookie
 from hltv_bot.snapshot import snapshot_fingerprint
@@ -82,7 +82,11 @@ DEFAULT_CMD_COOLDOWN = 1.2
 MIN_EDIT_INTERVAL = 1.8
 WATCH_STALE = 60.0
 MSG_TTL = 30.0
-_LIVE_LINKS = frozenset({"connected", "idle"})
+GET_UPDATES_FAIL_SLEEP = 3.0
+TG_COMMANDS_GAP = 0.4
+# WS retries every 30s on poll; ping admin after 2 fails, then batch every 5m.
+ADMIN_WS_FAIL_MIN = 2
+ADMIN_WS_FAIL_EVERY = 300.0
 _KEEP_USER_CMDS = frozenset({"/watch"})
 
 USER_BOT_COMMANDS = [
@@ -137,6 +141,56 @@ class WatchState:
         return c
 
 
+@dataclass
+class WsFailDigest:
+    """Batch consecutive WS upgrade failures so Telegram is not spammed."""
+
+    min_fails: int = ADMIN_WS_FAIL_MIN
+    every: float = ADMIN_WS_FAIL_EVERY
+    n: int = 0
+    pending: int = 0
+    last_err: str = ""
+    started: float = 0.0
+    last_sent: float = 0.0
+
+    def reset(self) -> None:
+        self.n = 0
+        self.pending = 0
+        self.last_err = ""
+        self.started = 0.0
+        self.last_sent = 0.0
+
+    def note(self, err: str, now: float) -> bool:
+        self.n += 1
+        self.pending += 1
+        self.last_err = str(err or "")[:160]
+        if self.started <= 0:
+            self.started = now
+        if self.n < self.min_fails:
+            return False
+        if self.last_sent <= 0:
+            return True
+        return (now - self.last_sent) >= self.every
+
+    def consume(self, now: float) -> dict:
+        out = {
+            "n": self.pending,
+            "total": self.n,
+            "error": self.last_err,
+            "elapsed": max(0.0, now - self.started) if self.started else 0.0,
+        }
+        self.pending = 0
+        self.last_sent = now
+        return out
+
+
+def _fmt_span(seconds: float) -> str:
+    s = max(0.0, float(seconds or 0))
+    if s < 90:
+        return f"{s:.0f}s"
+    return f"{s / 60:.1f}m"
+
+
 def watch_debug_mode(
     link: str,
     *,
@@ -145,8 +199,11 @@ def watch_debug_mode(
     now: float,
     stale: float = WATCH_STALE,
 ) -> bool:
-    """True when the watch card should show transport traces instead of the board."""
-    if str(link or "") not in _LIVE_LINKS:
+    """DEBUG only when the session is dead or the board is missing/stale.
+
+    Transient poll 5xx / handshake retry must not replace a live scoreboard.
+    """
+    if str(link or "") == "disconnected":
         return True
     if not has_board or last_data_at <= 0:
         return True
@@ -172,6 +229,7 @@ class HltvTelegramBot:
         self._thread: threading.Thread | None = None
         self._await_cookie: set[int] = set()
         self._cool = Cooldown()
+        self._ws_fail = WsFailDigest()
         self.msg_ttl = MSG_TTL
 
     def is_admin(self, user_id: int | None) -> bool:
@@ -363,6 +421,7 @@ class HltvTelegramBot:
         self._stop_watch()
         t1, t2 = meta.get("team1") or "?", meta.get("team2") or "?"
         log.info("watch start listId=%s %s vs %s url=%s", list_id, t1, t2, meta.get("url"))
+        self._ws_fail.reset()
         state = WatchState(
             list_id=list_id,
             meta=meta,
@@ -620,6 +679,7 @@ class HltvTelegramBot:
                 self._delete_watch_cards(self.watch)
             self.watch.stop.set()
         self.watch = None
+        self._ws_fail.reset()
 
     def _watch_loop(self, state: WatchState) -> None:
         board: dict = {}
@@ -641,6 +701,9 @@ class HltvTelegramBot:
                 status_changed = False
                 if name == "trace" and isinstance(payload, dict):
                     append_trace(state.trace, payload.get("text") or "")
+                elif name == "ws_fail" and isinstance(payload, dict):
+                    self._on_ws_fail(state, payload)
+                    continue
                 elif name == "status" and isinstance(payload, dict):
                     new_link = str(payload.get("state") or state.link)
                     detail = str(payload.get("detail") or "").strip()
@@ -648,11 +711,12 @@ class HltvTelegramBot:
                     state.link = new_link
                     if payload.get("transport"):
                         state.transport = str(payload.get("transport") or "")
-                    if new_link in ("connected", "idle"):
+                        if state.transport == "ws":
+                            self._ws_fail.reset()
+                    if new_link in ("connected", "idle") and not detail:
                         state.notice = ""
                         state.next_at = 0.0
                     else:
-                        state.last_data_at = 0.0
                         state.notice = detail or {
                             "connecting": "connecting",
                             "reconnect": "reconnect",
@@ -676,7 +740,6 @@ class HltvTelegramBot:
                     feed, round_seen = mark_new_round(feed, board, round_seen)
                     feed, prev_ct, prev_t = mark_round_over(feed, board, prev_ct, prev_t)
                     state.last_data_at = time.time()
-                    append_trace(state.trace, event_brief(name, payload))
                     log.info("watch scoreboard %s", event_brief(name, payload))
                 elif name == "log":
                     before = len(feed)
@@ -685,7 +748,6 @@ class HltvTelegramBot:
                         board = patch_board_from_log(board, payload)
                     feed = new_feed
                     state.last_data_at = time.time()
-                    append_trace(state.trace, f"log {event_brief(name, payload)} feed {before}->{len(feed)}")
                     log.info("watch log %s feed %s -> %s", event_brief(name, payload), before, len(feed))
                 elif name == "tick":
                     now = time.time()
@@ -765,6 +827,38 @@ class HltvTelegramBot:
             self._mark_watch_down(state, "disconnected")
             if not state.stop.is_set():
                 log.info("watch ended: %s", e)
+
+    def _notify_admins(self, text: str) -> None:
+        """Plain HTML to admin DMs. No auto-delete; not a watch card."""
+        for aid in sorted(self.admin_ids):
+            try:
+                self.tg.send_message(aid, text)
+            except Exception:
+                log.exception("notify admin %s", aid)
+
+    def _on_ws_fail(self, state: WatchState, payload: dict) -> None:
+        err = str(payload.get("error") or "websocket failed")
+        now = time.monotonic()
+        if not self._ws_fail.note(err, now):
+            log.debug("ws fail queued n=%s pending=%s", self._ws_fail.n, self._ws_fail.pending)
+            return
+        info = self._ws_fail.consume(now)
+        t1 = str(state.meta.get("team1") or "?")
+        t2 = str(state.meta.get("team2") or "?")
+        text = (
+            f"<b>scorebot WS 持续失败</b> ×{info['total']} / {_fmt_span(info['elapsed'])}\n"
+            f"listId=<code>{h(state.list_id)}</code> {h(t1)} vs {h(t2)}\n"
+            f"本批 {info['n']} 次 · 仍走 poll · 每 {int(WS_RETRY_EVERY)}s 再试\n"
+            f"last: <code>{h(info['error'])}</code>"
+        )
+        log.info(
+            "ws fail admin n=%s total=%s listId=%s last=%s",
+            info["n"],
+            info["total"],
+            state.list_id,
+            clip(info["error"], 80),
+        )
+        self._notify_admins(text)
 
     def _schedule_delete(self, chat_id: int, message_id: int) -> None:
         delay = float(self.msg_ttl or 0)
@@ -950,16 +1044,22 @@ class HltvTelegramBot:
             pass
 
     def register_commands(self) -> None:
-        self.tg.set_my_commands(USER_BOT_COMMANDS)
-        self.tg.set_my_commands(USER_BOT_COMMANDS, {"type": "all_group_chats"})
-        self.tg.set_my_commands(ADMIN_BOT_COMMANDS, {"type": "all_private_chats"})
-        for aid in self.admin_ids:
+        jobs: list[tuple[list[dict], dict | None]] = [
+            (USER_BOT_COMMANDS, None),
+            (USER_BOT_COMMANDS, {"type": "all_group_chats"}),
+            (ADMIN_BOT_COMMANDS, {"type": "all_private_chats"}),
+        ]
+        for aid in sorted(self.admin_ids):
+            jobs.append((ADMIN_BOT_COMMANDS, {"type": "chat", "chat_id": aid}))
+        for i, (cmds, scope) in enumerate(jobs):
+            if i:
+                time.sleep(TG_COMMANDS_GAP)
             try:
-                self.tg.set_my_commands(
-                    ADMIN_BOT_COMMANDS, {"type": "chat", "chat_id": aid}
-                )
+                self.tg.set_my_commands(cmds, scope)
             except Exception:
-                pass
+                if scope and scope.get("type") == "chat":
+                    continue
+                raise
 
     def run(self) -> None:
         log.info("bot start admins=%s", sorted(self.admin_ids))
@@ -974,7 +1074,7 @@ class HltvTelegramBot:
                 updates = self.tg.get_updates(offset=offset, timeout=25)
             except Exception:
                 log.exception("getUpdates failed")
-                time.sleep(3)
+                time.sleep(GET_UPDATES_FAIL_SLEEP)
                 continue
             if updates:
                 log.info("updates n=%s", len(updates))

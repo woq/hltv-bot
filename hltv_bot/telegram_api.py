@@ -12,9 +12,20 @@ from hltv_bot.format import plain_to_rich
 
 log = logging.getLogger("hltv_bot.tg")
 
+TG_RETRY_AFTER_CAP = 15.0
+
 
 def is_not_modified(exc: BaseException) -> bool:
     return "not modified" in str(exc).lower()
+
+
+def retry_after_seconds(raw: str, default: float = 3.0, cap: float = TG_RETRY_AFTER_CAP) -> float:
+    wait = default
+    try:
+        wait = float(json.loads(raw).get("parameters", {}).get("retry_after") or default)
+    except (json.JSONDecodeError, TypeError, ValueError, AttributeError):
+        pass
+    return min(max(wait, 1.0), cap)
 
 
 class Telegram:
@@ -54,12 +65,7 @@ class Telegram:
                 raw = e.read().decode("utf-8", "replace")
                 log.warning("tg %s HTTP %s attempt=%s body=%s", method, e.code, attempt, clip(raw, 400))
                 if e.code == 429:
-                    wait = 3
-                    try:
-                        wait = int(json.loads(raw).get("parameters", {}).get("retry_after") or 3)
-                    except json.JSONDecodeError:
-                        pass
-                    time.sleep(min(max(wait, 1), 15))
+                    time.sleep(retry_after_seconds(raw))
                     last_err = e
                     continue
                 raise RuntimeError(f"telegram {method} HTTP {e.code}: {raw[:200]}") from e
@@ -87,15 +93,27 @@ class Telegram:
                 "allowed_updates": json.dumps(["message", "my_chat_member"]),
             }
         )
-        req = Request(f"{self.base}/getUpdates?{q}")
-        with urlopen(req, timeout=timeout + 10) as resp:
-            body = json.loads(resp.read().decode("utf-8"))
-        if not body.get("ok"):
-            log.warning("getUpdates failed body=%s", clip(body, 400))
-            raise RuntimeError(f"telegram getUpdates failed: {body}")
-        rows = body.get("result") or []
-        log.debug("getUpdates n=%s offset=%s", len(rows), offset)
-        return rows
+        last_err: Exception | None = None
+        for attempt in range(2):
+            req = Request(f"{self.base}/getUpdates?{q}")
+            try:
+                with urlopen(req, timeout=timeout + 10) as resp:
+                    body = json.loads(resp.read().decode("utf-8"))
+            except HTTPError as e:
+                raw = e.read().decode("utf-8", "replace")
+                log.warning("getUpdates HTTP %s attempt=%s body=%s", e.code, attempt, clip(raw, 400))
+                if e.code == 429:
+                    time.sleep(retry_after_seconds(raw))
+                    last_err = e
+                    continue
+                raise RuntimeError(f"telegram getUpdates HTTP {e.code}: {raw[:200]}") from e
+            if not body.get("ok"):
+                log.warning("getUpdates failed body=%s", clip(body, 400))
+                raise RuntimeError(f"telegram getUpdates failed: {body}")
+            rows = body.get("result") or []
+            log.debug("getUpdates n=%s offset=%s", len(rows), offset)
+            return rows
+        raise RuntimeError(f"telegram getUpdates rate limited: {last_err}")
 
     def send_rich(
         self,

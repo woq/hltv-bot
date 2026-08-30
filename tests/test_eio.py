@@ -1,10 +1,12 @@
 from hltv_bot.eio import (
+    Yeast,
     classify_eio,
     decode_payload,
     encode_event,
     parse_event,
     parse_open,
     split_ws_packets,
+    yeast_encode,
 )
 from hltv_bot.scorebot import (
     WS_RETRY_EVERY,
@@ -17,8 +19,10 @@ from hltv_bot.scorebot import (
     _http_status_from_exc,
     _is_http_error,
     _is_timeout,
+    _poll_url,
     _ws_headers,
     _ws_url,
+    cookie_header,
     http_to_ws,
     is_poll_5xx,
     iter_ws_events,
@@ -126,6 +130,40 @@ def test_ws_upgrade_refused():
     assert not ws_upgrade_refused(RuntimeError("scorebot poll HTTP 502"))
 
 
+def test_yeast_t_matches_engine_io_client():
+    assert yeast_encode(0) == "0"
+    clock = Yeast()
+    a = clock.next(1_788_092_239_000)
+    assert a and not a.isdigit()
+    assert all(ch.isalnum() or ch in "-_" for ch in a)
+    b = clock.next(1_788_092_239_000)
+    assert b == a + ".0"
+    c = clock.next(1_788_092_239_000)
+    assert c == a + ".1"
+    d = clock.next(1_788_092_239_001)
+    assert d != a and "." not in d
+    assert "t=" in _poll_url("https://scorebot-lb.hltv.org")
+    ws = _ws_url("https://scorebot-lb.hltv.org", {"sid": "abc"})
+    assert "transport=websocket" in ws
+    t = [p.split("=", 1)[1] for p in ws.split("?")[1].split("&") if p.startswith("t=")][0]
+    assert t and not t.isdigit()
+
+
+def test_cookie_header_puts_cf_names_first():
+    raw = cookie_header(
+        {
+            "foo": "1",
+            "cf_clearance": "c",
+            "io": "sid",
+            "__cf_bm": "b",
+            "_cfuvid": "u",
+        }
+    )
+    names = [p.split("=", 1)[0] for p in raw.split("; ")]
+    assert names[:4] == ["io", "_cfuvid", "cf_clearance", "__cf_bm"]
+    assert names[-1] == "foo"
+
+
 def test_ws_headers_drop_cookie_and_priority():
     h = _ws_headers(
         {
@@ -134,11 +172,15 @@ def test_ws_headers_drop_cookie_and_priority():
             "cookie": "secret=1",
             "priority": "u=1, i",
             "accept": "*/*",
+            "accept-encoding": "gzip, deflate, br, zstd",
         }
     )
     keys = {k.lower() for k in h}
     assert "cookie" not in keys
     assert "priority" not in keys
+    assert "accept" not in keys
+    assert "accept-encoding" not in keys
+    assert "sec-websocket-extensions" not in keys
     assert h["sec-fetch-mode"] == "websocket"
     assert h["origin"] == "https://www.hltv.org"
 
@@ -223,3 +265,32 @@ def test_ready_event_is_not_xhr_framed():
     s = encode_event("readyForMatch", '{"token":"","listId":"1"}')
     assert s.startswith("42[")
     assert not s.startswith("\x00")
+
+
+class _StopPoll:
+    def get(self, url, headers=None, timeout=None):
+        raise RuntimeError("stop poll")
+
+
+def test_iter_poll_events_emits_ws_fail():
+    from hltv_bot.scorebot import iter_poll_events
+
+    out = []
+    try:
+        for ev in iter_poll_events(
+            _StopPoll(),
+            base="https://scorebot-lb.hltv.org",
+            headers={},
+            sid="abc",
+            list_id="1",
+            timeout=1,
+            skip_ready=True,
+            ws_factory=lambda: (None, [], RuntimeError("Refused WebSocket upgrade: 403")),
+            ws_retry_every=999,
+        ):
+            out.append(ev)
+    except RuntimeError as e:
+        assert "stop poll" in str(e)
+    fail = next(p for n, p in out if n == "ws_fail")
+    assert fail["n"] == 1
+    assert "403" in fail["error"]
