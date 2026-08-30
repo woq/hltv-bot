@@ -20,7 +20,7 @@ Rich Message 把一条消息当成**小文档**：标题、表格、列表、引
 
 **不要检查普通消息是不是 Rich。** 提交前测试只约束 watch 路径：编辑失败不得改成连发新卡片。
 
-Watch 规则不变：默认只 edit 同一条；`not modified` 当成功；新卡片只有 `/bump`。普通消息和 rich **不能互相 edit 变形**。
+Watch 规则不变：默认只 edit 同一条；`not modified` 当成功；新卡片只有 `/bump`。卡片只发给发过 `/watch` 的群，不广播全部授权群。普通消息和 rich **不能互相 edit 变形**。
 
 ## Watch 记分板怎么排
 

@@ -87,9 +87,9 @@ python3 -m hltv_bot bot
 | 命令 | |
 |---|---|
 | `/matches` | 今日比赛 |
-| `/watch` | 实时观赛(自动更新) |
+| `/watch` | 本群观赛；已有场次发 `/watch` 加入 |
 | `/bump` | 顶到最新 |
-| `/stop` | 停止观赛 |
+| `/stop` | 本群退出；`/stop all` 停全部 |
 | `/allow` | 授权本群 |
 | `/deny` | 取消授权 |
 | `/groups` | 已授权群 |
@@ -100,7 +100,7 @@ python3 -m hltv_bot bot
 
 把 bot 拉进私有群后，用该账号发 `/allow`。直播命令只在已授权群生效；`/allow` `/deny` `/groups` `/cookie` `/status` 仅管理员。
 
-Watch **全局一场**：任意授权群 `/watch id` 都是同一场 Scorebot。每个群各自一条 Rich 消息，更新时分别 `edit`。新卡片只有该群手动 `/bump`。
+Watch **全局一场** Scorebot。默认**只给发了 `/watch` 的群**发卡片；其它群自己 `/watch`（可无 id）加入。新卡片只有该群手动 `/bump`。`/stop` 退出本群，`/stop all` 停全部。
 
 ## 建议跑在哪
 

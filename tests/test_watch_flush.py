@@ -105,6 +105,50 @@ def test_watch_debug_mode_healthy_vs_down():
     assert not watch_debug_mode("idle", has_board=True, last_data_at=now - 5, now=now)
 
 
+def test_watch_sends_only_command_chat(tmp_path, monkeypatch):
+    import os
+
+    from hltv_bot.chats import add_group
+
+    old = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        (tmp_path / "data").mkdir()
+        add_group(-100, "A")
+        add_group(-200, "B")
+        monkeypatch.setattr(
+            "hltv_bot.bot.fetch_match_meta",
+            lambda sess, raw: {
+                "scorebotId": "9",
+                "team1": "G2",
+                "team2": "NaVi",
+                "url": "https://x",
+            },
+        )
+        monkeypatch.setattr("hltv_bot.bot.iter_scorebot", lambda *a, **k: iter(()))
+        monkeypatch.setattr("hltv_bot.bot.scorebot_base", lambda url: "https://scorebot")
+        bot = HltvTelegramBot(
+            _Tg(),
+            BrowserSession("chrome131", {}, "", path=None),
+            admin_ids={1, 2},
+        )
+        bot.handle_text(-100, "/watch 9", user_id=1, chat_type="supergroup")
+        chats = [c for c, _ in bot.tg.sent]
+        assert -100 in chats
+        assert -200 not in chats
+        assert bot.watch is not None
+        assert list(bot.watch.cards) == [-100]
+        bot.handle_text(-200, "/watch", user_id=2, chat_type="supergroup")
+        assert -200 in bot.watch.cards
+        bot.handle_text(-200, "/stop", user_id=2, chat_type="supergroup")
+        assert -200 not in bot.watch.cards
+        assert -100 in bot.watch.cards
+        bot.handle_text(-100, "/stop all", user_id=1, chat_type="supergroup")
+        assert bot.watch is None
+    finally:
+        os.chdir(old)
+
+
 def test_mark_watch_down_edits_debug_card():
     bot = _bot()
     st = _state(

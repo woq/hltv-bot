@@ -103,9 +103,56 @@ def _ws_url(base: str, extra: dict[str, str] | None = None) -> str:
     return f"{http_to_ws(base)}/socket.io/?{urlencode(q)}"
 
 
+def _parse_cookie_pairs(raw: object) -> dict[str, str]:
+    out: dict[str, str] = {}
+    if not raw:
+        return out
+    if isinstance(raw, dict):
+        for k, v in raw.items():
+            if k:
+                out[str(k)] = str(v)
+        return out
+    text = str(raw)
+    for part in text.split(";"):
+        part = part.strip()
+        if "=" not in part:
+            continue
+        k, v = part.split("=", 1)
+        k, v = k.strip(), v.strip()
+        if k:
+            out[k] = v
+    return out
+
+
+def merged_ws_cookies(session_cookie: str, *sources: object) -> dict[str, str]:
+    """Polling Set-Cookie (`io`) must ride on the WS upgrade; header Cookie can clobber it."""
+    out = _parse_cookie_pairs(session_cookie)
+    for src in sources:
+        if src is None:
+            continue
+        if hasattr(src, "items") and not isinstance(src, (str, bytes)):
+            try:
+                out.update(_parse_cookie_pairs(dict(src.items())))
+                continue
+            except Exception:
+                pass
+        out.update(_parse_cookie_pairs(src))
+    return out
+
+
 def _ws_headers(headers: dict[str, str]) -> dict[str, str]:
-    h = dict(headers)
-    h.pop("accept-encoding", None)
+    """Chrome WS upgrade is HTTP/1.1; drop H2-only / cookie header (cookies= instead)."""
+    keep = {
+        "origin",
+        "referer",
+        "user-agent",
+        "sec-ch-ua",
+        "sec-ch-ua-mobile",
+        "sec-ch-ua-platform",
+        "accept-language",
+        "dnt",
+    }
+    h = {k: v for k, v in headers.items() if k.lower() in keep}
     h["sec-fetch-dest"] = "websocket"
     h["sec-fetch-mode"] = "websocket"
     h["sec-fetch-site"] = "same-site"
@@ -259,7 +306,11 @@ def _trace(text: str) -> tuple[str, dict[str, str]]:
 def _http_status_from_exc(exc: BaseException) -> int | None:
     import re
 
-    m = re.search(r"(?:HTTP[ /]|status(?:_code)?[=: ]|ws )(\d{3})", str(exc), re.I)
+    m = re.search(
+        r"(?:HTTP[ /]|status(?:_code)?[=: ]|ws |upgrade:\s*)(\d{3})",
+        str(exc),
+        re.I,
+    )
     if not m:
         return None
     try:
@@ -359,23 +410,45 @@ def iter_scorebot(
 
             ws_url = _ws_url(base, {"sid": str(sid)})
             log.debug("ws connect %s", ws_url)
-            yield _trace("ws connect")
-            try:
-                ws = client.ws_connect(
-                    ws_url,
-                    headers=_ws_headers(headers),
-                    impersonate=sess.impersonate,
-                    timeout=None,
-                    verify=True,
-                    default_headers=True,
-                )
-            except Exception as e:
-                code = _http_status_from_exc(e)
-                if code in (403, 429):
-                    raise CloudflareError(code, ws_url) from e
+            cookies = merged_ws_cookies(
+                sess.cookie,
+                getattr(client, "cookies", None),
+                getattr(resp, "cookies", None),
+            )
+            if sid and "io" not in cookies:
+                cookies["io"] = str(sid)
+            yield _trace("ws cookies=" + ",".join(sorted(cookies)[:12]))
+            from curl_cffi.const import CurlHttpVersion
+
+            ws_err: Exception | None = None
+            for label, default_hdrs in (("h1", True), ("h1-min", False)):
+                try:
+                    yield _trace(f"ws connect {label}")
+                    ws = client.ws_connect(
+                        ws_url,
+                        headers=_ws_headers(headers),
+                        cookies=cookies,
+                        impersonate=sess.impersonate,
+                        timeout=None,
+                        verify=True,
+                        default_headers=default_hdrs,
+                        http_version=CurlHttpVersion.V1_1,
+                    )
+                    ws_err = None
+                    break
+                except Exception as e:
+                    ws_err = e
+                    yield _trace(f"ws {label} {clip(e, 100)}")
+                    log.warning("ws connect %s failed: %s", label, clip(e, 160))
+            if ws is None:
+                assert ws_err is not None
+                code = _http_status_from_exc(ws_err)
+                # Polling already 200: WS 403 is upgrade/WAF, not a dead cookie.
+                if code in (403, 429) and not cookies:
+                    raise CloudflareError(code, ws_url) from ws_err
                 if code and is_poll_5xx(code):
-                    raise RuntimeError(f"scorebot ws HTTP {code}") from e
-                raise RuntimeError(f"scorebot ws connect: {e}") from e
+                    raise RuntimeError(f"scorebot ws HTTP {code}") from ws_err
+                raise RuntimeError(f"scorebot ws connect: {ws_err}") from ws_err
 
             extra = probe_upgrade(ws, timeout=WS_PROBE_TIMEOUT)
             yield _trace("ws probe ok")

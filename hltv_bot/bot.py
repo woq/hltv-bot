@@ -41,9 +41,9 @@ HELP = """\
 <h3>hltv-bot</h3>
 <ul>
 <li><code>/matches</code> — 今日比赛</li>
-<li><code>/watch</code> — 实时观赛</li>
+<li><code>/watch</code> — 本群观赛（已有场次发 /watch 加入）</li>
 <li><code>/bump</code> — 顶到最新</li>
-<li><code>/stop</code> — 停止观赛</li>
+<li><code>/stop</code> — 本群退出（/stop all 停全部）</li>
 </ul>
 <h4>管理员</h4>
 <ul>
@@ -85,9 +85,9 @@ _LIVE_LINKS = frozenset({"connected", "idle"})
 
 USER_BOT_COMMANDS = [
     {"command": "matches", "description": "今日比赛"},
-    {"command": "watch", "description": "实时观赛(自动更新)"},
+    {"command": "watch", "description": "本群观赛(已有场次 /watch 加入)"},
     {"command": "bump", "description": "顶到最新"},
-    {"command": "stop", "description": "停止观赛"},
+    {"command": "stop", "description": "本群退出(/stop all 停全部)"},
     {"command": "help", "description": "帮助"},
 ]
 ADMIN_BOT_COMMANDS = USER_BOT_COMMANDS + [
@@ -268,7 +268,7 @@ class HltvTelegramBot:
             self._cmd_bump(chat_id)
         elif cmd == "/stop":
             self._await_cookie.discard(chat_id)
-            self._cmd_stop(chat_id)
+            self._cmd_stop(chat_id, arg)
         elif cmd == "/status":
             self._await_cookie.discard(chat_id)
             self._cmd_status(chat_id)
@@ -291,16 +291,49 @@ class HltvTelegramBot:
         log.debug("matches text_len=%s", len(text))
         self.tg.send_message(chat_id, text)
 
-    def _watch_targets(self, chat_id: int) -> list[int]:
-        ids = set(group_ids())
-        ids.add(int(chat_id))
-        return sorted(ids)
+    def _watch_hint(self, list_id: str) -> str:
+        return (
+            f"本群已加入。其它群发 <code>/watch</code> 或 "
+            f"<code>/watch {h(list_id)}</code> 加入同一场。\n"
+            "本群退出 <code>/stop</code> · 全部停止 <code>/stop all</code>"
+        )
+
+    def _join_watch(self, state: WatchState, chat_id: int) -> None:
+        html = state.text or self._watch_card_html(state, board=None, feed=[])
+        card = state.cards.get(int(chat_id))
+        if card and card.message_id:
+            self.tg.send_message(
+                chat_id,
+                "本群已在观赛。/bump 顶到最新 · /stop 退出本群",
+            )
+            return
+        log.info("watch join chat=%s listId=%s", chat_id, state.list_id)
+        self._flush_watch(state, html, send_new=True, chat_id=chat_id)
+        self.tg.send_message(chat_id, self._watch_hint(state.list_id))
+
+    def _put_watch_card(self, state: WatchState, chat_id: int, html: str) -> None:
+        card = state.card(chat_id)
+        try:
+            if card.message_id:
+                self._flush_watch(state, html, chat_id=chat_id)
+            else:
+                self._flush_watch(state, html, send_new=True, chat_id=chat_id)
+        except Exception:
+            log.exception("watch card failed chat=%s", chat_id)
 
     def _cmd_watch(self, chat_id: int, arg: str) -> None:
-        if not arg:
-            self.tg.send_message(chat_id, "用法: /watch 2396932")
-            return
         raw = arg.strip()
+        w = self.watch
+        live = w is not None and not w.stop.is_set()
+        if not raw:
+            if live and w is not None:
+                self._join_watch(w, chat_id)
+                return
+            self.tg.send_message(
+                chat_id,
+                "用法: /watch 2396932\n已有观赛时本群发 /watch 即可加入",
+            )
+            return
         try:
             meta = fetch_match_meta(self.session, raw)
         except CloudflareError as e:
@@ -311,18 +344,11 @@ class HltvTelegramBot:
             self.tg.send_message(chat_id, "没有 data-scorebot-id")
             return
         list_id = str(list_id)
-        w = self.watch
-        if w and not w.stop.is_set() and w.list_id == list_id:
-            html = w.text or self._watch_card_html(w, board=None, feed=[])
-            card = w.card(chat_id)
-            if card.message_id:
-                self.tg.send_message(chat_id, "已在观赛这条。/bump 顶到最新")
-                return
-            log.info("watch attach chat=%s listId=%s", chat_id, list_id)
-            self._flush_watch(w, html, send_new=True, chat_id=chat_id)
+        if live and w is not None and w.list_id == list_id:
+            self._join_watch(w, chat_id)
             return
         old_cards: dict[int, WatchCard] = {}
-        if w and not w.stop.is_set():
+        if live and w is not None:
             old_cards = dict(w.cards)
         self._stop_watch()
         t1, t2 = meta.get("team1") or "?", meta.get("team2") or "?"
@@ -336,18 +362,14 @@ class HltvTelegramBot:
         )
         append_trace(state.trace, f"watch start listId={list_id} {t1} vs {t2}")
         html = self._watch_card_html(state, board=None, feed=[])
-        for cid in self._watch_targets(chat_id):
-            card = state.card(cid)
-            try:
-                if card.message_id:
-                    self._flush_watch(state, html, chat_id=cid)
-                else:
-                    self._flush_watch(state, html, send_new=True, chat_id=cid)
-            except Exception:
-                log.exception("watch card failed chat=%s", cid)
+        targets = {int(chat_id)}
+        targets.update(old_cards)
+        for cid in sorted(targets):
+            self._put_watch_card(state, cid, html)
         self.watch = state
         self._thread = threading.Thread(target=self._watch_loop, args=(state,), daemon=True)
         self._thread.start()
+        self.tg.send_message(chat_id, self._watch_hint(list_id))
 
     def _cmd_bump(self, chat_id: int) -> None:
         w = self.watch
@@ -362,9 +384,27 @@ class HltvTelegramBot:
         )
         self._flush_watch(w, w.text, send_new=True, chat_id=chat_id)
 
-    def _cmd_stop(self, chat_id: int) -> None:
-        self._stop_watch()
-        self.tg.send_message(chat_id, "已停止")
+    def _cmd_stop(self, chat_id: int, arg: str = "") -> None:
+        w = self.watch
+        if not w or w.stop.is_set():
+            self.tg.send_message(chat_id, "没有正在 watch")
+            return
+        if arg.strip().lower() in {"all", "全部", "*"}:
+            n = len(w.cards)
+            self._stop_watch()
+            self.tg.send_message(chat_id, f"已停止全部（{n} 个群）")
+            return
+        card = w.cards.pop(int(chat_id), None)
+        if not w.cards:
+            self._stop_watch()
+            self.tg.send_message(chat_id, "已停止")
+            return
+        log.info("watch leave chat=%s remaining=%s", chat_id, list(w.cards))
+        extra = "" if card else "（本群本来没有卡片）"
+        self.tg.send_message(
+            chat_id,
+            f"本群已退出{extra}。其它群仍在观赛。全部停止发 /stop all",
+        )
 
     def _cmd_status(self, chat_id: int) -> None:
         names = self.session.cookie_names()

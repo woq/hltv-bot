@@ -128,7 +128,7 @@ Origin: https://www.hltv.org
 }
 ```
 
-`sid` 之后升级：
+`sid` 之后升级（**HTTP/1.1**，带上握手 `Set-Cookie` 的 `io`，不要用 HTTP/2 的 `priority` 头）：
 
 ```
 wss://scorebot-lb.hltv.org/socket.io/?EIO=3&transport=websocket&sid={sid}

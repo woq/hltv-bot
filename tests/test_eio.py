@@ -13,12 +13,15 @@ from hltv_bot.scorebot import (
     RECONNECT_5XX,
     RECONNECT_MAX,
     RECONNECT_MIN,
+    _http_status_from_exc,
     _is_http_error,
     _is_timeout,
+    _ws_headers,
     _ws_url,
     http_to_ws,
     is_poll_5xx,
     iter_ws_events,
+    merged_ws_cookies,
     next_backoff,
     poll_gap,
     probe_upgrade,
@@ -97,6 +100,36 @@ def test_poll_gap_empty_vs_event_vs_timeout():
     assert poll_gap(30.0, got_event=False, timed_out=True) == POLL_MIN_GAP
     assert poll_gap(25.0, got_event=False) == 0.0
     assert poll_gap(0.4, got_event=False, http_5xx=True) == POLL_5XX_GAP
+
+
+def test_merged_ws_cookies_keep_io_over_header():
+    jar = {"io": "sid-from-jar", "cf_clearance": "x"}
+    out = merged_ws_cookies("cf_clearance=old; foo=1", jar)
+    assert out["io"] == "sid-from-jar"
+    assert out["cf_clearance"] == "x"
+    assert out["foo"] == "1"
+
+
+def test_ws_headers_drop_cookie_and_priority():
+    h = _ws_headers(
+        {
+            "user-agent": "UA",
+            "origin": "https://www.hltv.org",
+            "cookie": "secret=1",
+            "priority": "u=1, i",
+            "accept": "*/*",
+        }
+    )
+    keys = {k.lower() for k in h}
+    assert "cookie" not in keys
+    assert "priority" not in keys
+    assert h["sec-fetch-mode"] == "websocket"
+    assert h["origin"] == "https://www.hltv.org"
+
+
+def test_ws_upgrade_403_is_http_status():
+    err = RuntimeError("Failed to perform, curl: (22) Refused WebSocket upgrade: 403")
+    assert _http_status_from_exc(err) == 403
 
 
 def test_ws_url_uses_wss_and_sid():
