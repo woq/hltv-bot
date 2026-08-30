@@ -566,7 +566,8 @@ class HltvTelegramBot:
         self._await_cookie.add(chat_id)
         self._reply(
             chat_id,
-            "把 DevTools → Network → Cookie 整行贴过来（可带 Cookie: 前缀）。\n"
+            "把 DevTools → Network → Cookie 整行贴过来（可带 Cookie: 前缀），\n"
+            "或直接贴整份 data/session.json。\n"
             "发完后会尽量删掉你的消息。取消请发 /status。",
         )
 

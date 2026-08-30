@@ -1,5 +1,5 @@
 from hltv_bot.bot import DEFAULT_ADMIN_ID, HltvTelegramBot
-from hltv_bot.session import BrowserSession, parse_cookie_line
+from hltv_bot.session import BrowserSession, parse_cookie_line, save_cookie
 
 
 class FakeTg:
@@ -22,6 +22,24 @@ def test_parse_cookie_line_strips_prefix():
     assert parse_cookie_line("Cookie: cf_clearance=abc; __cf_bm=x") == (
         "cf_clearance=abc; __cf_bm=x"
     )
+
+
+def test_save_cookie_accepts_session_json(tmp_path):
+    p = tmp_path / "session.json"
+    p.write_text(
+        '{"impersonate":"chrome131","user_agent":"UA","cookie":""}\n',
+        encoding="utf-8",
+    )
+    save_cookie(
+        p,
+        '{"impersonate":"chrome131","user_agent":"Mozilla/5.0","cookie":"cf_clearance=tok; __cf_bm=bm"}',
+    )
+    import json
+
+    data = json.loads(p.read_text(encoding="utf-8"))
+    assert data["cookie"] == "cf_clearance=tok; __cf_bm=bm"
+    assert data["user_agent"] == "Mozilla/5.0"
+    assert parse_cookie_line(p.read_text(encoding="utf-8")).startswith("cf_clearance=")
 
 
 def test_cookie_command_waits_then_saves(tmp_path):

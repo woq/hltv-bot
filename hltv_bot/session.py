@@ -35,8 +35,45 @@ class BrowserSession:
         return h
 
 
+_SESSION_KEYS = (
+    "impersonate",
+    "user_agent",
+    "sec_ch_ua",
+    "sec_ch_ua_mobile",
+    "sec_ch_ua_platform",
+    "accept_language",
+    "dnt",
+    "cookie",
+)
+
+
+def parse_session_paste(raw: str) -> dict:
+    """Cookie header, or a full session.json object."""
+    text = (raw or "").strip()
+    if text.startswith("{") and "cookie" in text:
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError:
+            data = None
+        if isinstance(data, dict) and "cookie" in data:
+            out = {}
+            for k in _SESSION_KEYS:
+                if k in data and data[k] is not None:
+                    out[k] = data[k]
+            out["cookie"] = parse_cookie_line(str(out.get("cookie") or ""))
+            return out
+    return {"cookie": parse_cookie_line(text)}
+
+
 def parse_cookie_line(raw: str) -> str:
-    text = raw.strip()
+    text = (raw or "").strip()
+    if text.startswith("{") and "cookie" in text:
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError:
+            data = None
+        if isinstance(data, dict) and data.get("cookie") is not None:
+            text = str(data.get("cookie") or "")
     if text.lower().startswith("cookie:"):
         text = text.split(":", 1)[1].strip()
     return text
@@ -72,6 +109,10 @@ def save_cookie(path: str | Path, cookie: str) -> None:
                 encoding="utf-8"
             )
         )
-    data["cookie"] = parse_cookie_line(cookie)
+    patch = parse_session_paste(cookie)
+    for k, v in patch.items():
+        if k in _SESSION_KEYS and v is not None:
+            data[k] = v
+    data["cookie"] = parse_cookie_line(str(data.get("cookie") or ""))
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
