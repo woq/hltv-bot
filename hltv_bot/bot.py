@@ -821,6 +821,7 @@ class HltvTelegramBot:
             state.next_at = 0.0
             append_trace(state.trace, state.notice)
             self._mark_watch_down(state, "disconnected")
+            self._notify_admins(f"⚠️ <b>HLTV Cookie 已失效 (Cloudflare {e.status})</b>\n请在有环境的机器烤好后发 /cookie 更新")
         except Exception as e:
             state.notice = str(e)[:80] or "ended"
             append_trace(state.trace, state.notice)

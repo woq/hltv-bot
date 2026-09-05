@@ -34,6 +34,48 @@ class BrowserSession:
             h.update(extra)
         return h
 
+    def update_cookie(self, new_pairs: dict[str, str] | str) -> None:
+        """Merge incoming cookies (e.g. fresh __cf_bm from Set-Cookie) and persist."""
+        if not new_pairs:
+            return
+        current = parse_session_paste(self.cookie).get("cookie", "")
+        pairs = {}
+        for part in current.split(";"):
+            part = part.strip()
+            if "=" in part:
+                k, v = part.split("=", 1)
+                pairs[k.strip()] = v.strip()
+        if isinstance(new_pairs, str):
+            for part in new_pairs.split(";"):
+                part = part.strip()
+                if "=" in part:
+                    k, v = part.split("=", 1)
+                    pairs[k.strip()] = v.strip()
+        elif hasattr(new_pairs, "items"):
+            for k, v in new_pairs.items():
+                if k and v:
+                    pairs[str(k)] = str(v)
+        # 维持 Chrome 标准顺序
+        first_keys = ("io", "_cfuvid", "__cflb", "cf_clearance", "__cf_bm")
+        seen = set()
+        merged = []
+        for fk in first_keys:
+            if fk in pairs and pairs[fk]:
+                merged.append(f"{fk}={pairs[fk]}")
+                seen.add(fk)
+        for k, v in pairs.items():
+            if k and v and k not in seen:
+                merged.append(f"{k}={v}")
+                seen.add(k)
+        new_cookie_str = "; ".join(merged)
+        if new_cookie_str != self.cookie:
+            self.cookie = new_cookie_str
+            if self.path and self.path.exists():
+                try:
+                    save_cookie(self.path, new_cookie_str)
+                except Exception:
+                    pass
+
 
 _SESSION_KEYS = (
     "impersonate",

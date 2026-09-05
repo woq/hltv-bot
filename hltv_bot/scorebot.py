@@ -409,6 +409,7 @@ def iter_poll_events(
     sid: str,
     list_id: str | int,
     timeout: float,
+    sess: Any | None = None,
     skip_ready: bool = False,
     ws_factory: Any | None = None,
     ws_retry_every: float = WS_RETRY_EVERY,
@@ -455,6 +456,10 @@ def iter_poll_events(
             brief = clip(err, 80)
             yield _trace(f"ws retry {brief}")
             yield ("ws_fail", {"error": clip(err, 120), "n": ws_fails})
+            if ws_upgrade_refused(err):
+                # 遇到 403 触发熔断：当前凭据不支持升级，不再频繁骚扰 Cloudflare
+                yield _trace("ws 403 refused: switch to poll only")
+                ws_factory = None
             next_ws = now + ws_retry_every
         t0 = time.monotonic()
         try:
@@ -511,6 +516,8 @@ def iter_poll_events(
             yield ("status", {"state": "connected", "transport": "poll"})
         misses = 0
         http_fails = 0
+        if getattr(resp, "cookies", None) and hasattr(sess, "update_cookie"):
+            sess.update_cookie(resp.cookies)
         got = False
         pkts = decode_payload(resp.content or b"")
         for pkt in pkts:
@@ -632,6 +639,8 @@ def iter_scorebot(
                 )
 
             log.info("scorebot sid=%s listId=%s polling then ws", sid, list_id)
+            if getattr(resp, "cookies", None) and hasattr(sess, "update_cookie"):
+                sess.update_cookie(resp.cookies)
             backoff = RECONNECT_MIN
             for ev in iter_poll_events(
                 client,
@@ -640,6 +649,7 @@ def iter_scorebot(
                 sid=str(sid),
                 list_id=list_id,
                 timeout=timeout,
+                sess=sess,
                 ws_factory=_ws_factory,
             ):
                 yield ev

@@ -63,3 +63,22 @@ def test_cookie_command_waits_then_saves(tmp_path):
     assert bot.session.has_clearance()
     assert 99 in tg.deleted
     assert any("已更新" in t for t in tg.sent)
+
+
+def test_browser_session_update_cookie(tmp_path):
+    sess_path = tmp_path / "session.json"
+    sess_path.write_text(
+        '{"impersonate":"chrome131","user_agent":"UA","cookie":"cf_clearance=tok; __cf_bm=old_bm"}\n',
+        encoding="utf-8",
+    )
+    sess = BrowserSession(impersonate="chrome131", headers={}, cookie="cf_clearance=tok; __cf_bm=old_bm", path=sess_path)
+    sess.update_cookie({"__cf_bm": "new_bm", "__cflb": "lb123"})
+    assert "new_bm" in sess.cookie
+    assert "__cflb=lb123" in sess.cookie
+    assert "cf_clearance=tok" in sess.cookie
+    # 验证文件持久化
+    import json
+    data = json.loads(sess_path.read_text(encoding="utf-8"))
+    assert "__cf_bm=new_bm" in data["cookie"]
+    assert "__cflb=lb123" in data["cookie"]
+
