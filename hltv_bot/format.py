@@ -132,11 +132,11 @@ def plain_to_rich(text: str) -> str:
 
 
 def format_kv_table(title: str, rows: list[tuple[str, str]]) -> str:
-    body = "".join(
-        f"<tr><th>{h(k)}</th><td>{v}</td></tr>" for k, v in rows if k is not None
-    )
-    head = f"<h3>{h(title)}</h3>" if title else ""
-    return f'{head}<table bordered striped compact>{body}</table>'
+    lines = [f"<b>{h(title)}</b>\n"] if title else []
+    for k, v in rows:
+        if k is not None:
+            lines.append(f"• <b>{h(k)}</b>: {v}")
+    return "\n".join(lines)
 
 
 def _killer_victim(entry: dict) -> tuple[str, str]:

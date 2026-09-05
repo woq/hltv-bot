@@ -337,3 +337,14 @@ def test_scorebot_base_picks_last_url():
 def test_pick_impersonate_returns_string():
     name = pick_impersonate("chrome131")
     assert isinstance(name, str) and name.startswith("chrome")
+
+
+def test_format_kv_table_standard_html():
+    from hltv_bot.format import format_kv_table
+
+    out = format_kv_table("Status", [("a", "1"), ("b", "2")])
+    assert "<b>Status</b>" in out
+    assert "• <b>a</b>: 1" in out
+    assert "• <b>b</b>: 2" in out
+    for tag in ("<h3>", "<table", "<tr>", "<td>", "<th>"):
+        assert tag not in out

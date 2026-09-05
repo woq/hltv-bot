@@ -267,3 +267,16 @@ def test_mark_watch_down_edits_debug_card():
     assert "DEBUG" in html
     assert "handshake HTTP 502" in html
     assert st.debug_view is True
+
+
+def test_command_replies_have_no_unsupported_tags():
+    bot = _bot()
+    bot.handle_text(1, "/help", user_id=1)
+    bot.handle_text(1, "/status", user_id=1)
+    bot.handle_text(1, "/debug", user_id=1)
+    bot.handle_text(1, "/groups", user_id=1)
+
+    unsupported = ("<h", "<table", "<tr>", "<td>", "<th>", "<p>", "<ul", "<ol", "<li")
+    for chat_id, text in bot.tg.sent:
+        for tag in unsupported:
+            assert tag not in text, f"Found {tag} in reply: {text}"

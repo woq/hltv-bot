@@ -38,22 +38,19 @@ from hltv_bot.telegram_api import Telegram, is_not_modified
 DEFAULT_ADMIN_ID = 1442477170
 
 HELP = """\
-<h3>hltv-bot</h3>
-<ul>
-<li><code>/matches</code> — 今日比赛</li>
-<li><code>/watch</code> — 本群观赛（已有场次发 /watch 加入）</li>
-<li><code>/bump</code> — 顶到最新</li>
-<li><code>/stop</code> — 本群退出（/stop all 停全部）</li>
-</ul>
-<h4>管理员</h4>
-<ul>
-<li><code>/allow</code> — 授权本群</li>
-<li><code>/deny</code> — 取消授权</li>
-<li><code>/groups</code> — 已授权群</li>
-<li><code>/cookie</code> — 更新 Cookie</li>
-<li><code>/status</code> — 状态</li>
-<li><code>/debug</code> — 调试（user/chat/admin）</li>
-</ul>
+<b>hltv-bot</b>
+• <code>/matches</code> — 今日比赛
+• <code>/watch</code> — 本群观赛（已有场次发 /watch 加入）
+• <code>/bump</code> — 顶到最新
+• <code>/stop</code> — 本群退出（/stop all 停全部）
+
+<b>管理员</b>
+• <code>/allow</code> — 授权本群
+• <code>/deny</code> — 取消授权
+• <code>/groups</code> — 已授权群
+• <code>/cookie</code> — 更新 Cookie
+• <code>/status</code> — 状态
+• <code>/debug</code> — 调试（user/chat/admin）
 """
 
 ADMIN_CMDS = frozenset(
@@ -577,14 +574,10 @@ class HltvTelegramBot:
         if not rows:
             self._reply(chat_id, "还没有授权群。把 bot 拉进群后发 /allow")
             return
-        body = "".join(
-            f"<tr><td><code>{h(g.get('id'))}</code></td><td>{h(g.get('title') or '')}</td></tr>"
-            for g in rows
-        )
-        self._reply(
-            chat_id,
-            f"<h3>授权群</h3><table bordered striped compact>{body}</table>",
-        )
+        lines = ["<b>授权群</b>\n"]
+        for g in rows:
+            lines.append(f"• <code>{h(g.get('id'))}</code> {h(g.get('title') or '')}".rstrip())
+        self._reply(chat_id, "\n".join(lines))
 
     def handle_added_to_chat(self, upd: dict) -> None:
         member = upd.get("my_chat_member") or {}
@@ -611,7 +604,7 @@ class HltvTelegramBot:
         if self.can_setup_chat(int(cid), from_id, ctype):
             self._reply(
                 cid,
-                f"<h3>已进群</h3><p><b>{h(title)}</b></p><p>发 /allow 加入推送名单</p>",
+                f"<b>已进群</b>\n<b>{h(title)}</b>\n发 /allow 加入推送名单",
             )
             return
         log.info("added to chat but adder cannot /allow from=%s", from_id)
