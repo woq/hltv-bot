@@ -79,6 +79,14 @@ title=Just a moment... cf=True
 
 顶层卡在 Cloudflare 自动页，canvas/WebGL 没有 GPU，验证码算不出来就刷新。**不是点得不够。** 代码已全部撤掉，不留 `HLTV_WPE`。
 
+### RFC 8441 (HTTP/2 WebSockets / Extended CONNECT)（实测不可行）
+
+想法：既然 HTTP/2 poll 是通的，能否不降级到 HTTP/1.1 Upgrade，直接在 HTTP/2 上走 RFC 8441 打开 WebSocket。
+
+实测结论：
+1. **`curl_cffi` 库层限制**：`ws_connect(..., http_version=CurlHttpVersion.V2_0)` 时，`curl_cffi` / 底层 `libcurl-ws` 遇到 ws/wss scheme，在 TLS ALPN 阶段仍强制只 offer `http/1.1`（`ALPN: curl offers http/1.1`），不会向服务端协商 `h2`。
+2. **服务端 / 协议层限制**：即使 ALPN 能协商到 H2，RFC 8441 需要服务端在 HTTP/2 SETTINGS 帧中显式声明 `SETTINGS_ENABLE_CONNECT_PROTOCOL = 1`。目前 Cloudflare 边缘节点对普通站点与 HLTV Scorebot 默认不启用该扩展能力，仍强制要求通过 HTTP/1.1 `Connection: Upgrade`。因此此路不通。
+
 ---
 
 ## 4. 现在怎么跑
@@ -90,3 +98,4 @@ title=Just a moment... cf=True
 - 提交前：`pytest tests/test_rich_message.py tests/test_format.py tests/test_watch_flush.py tests/test_gaps.py -q`。
 
 以后若要真 WS：给机器加内存，跑 `deploy/chrome-session/`，在**已打开的比赛页**里连，不要再抄 cookie 去 Upgrade，也不要再试 Lightpanda / WebKitGTK。
+
