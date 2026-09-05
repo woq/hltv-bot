@@ -70,6 +70,8 @@ class BrowserSession:
         new_cookie_str = "; ".join(merged)
         if new_cookie_str != self.cookie:
             self.cookie = new_cookie_str
+            if "cookie" in self.headers:
+                self.headers["cookie"] = new_cookie_str
             if self.path and self.path.exists():
                 try:
                     save_cookie(self.path, new_cookie_str)
