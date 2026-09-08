@@ -82,3 +82,56 @@ def test_browser_session_update_cookie(tmp_path):
     assert "__cf_bm=new_bm" in data["cookie"]
     assert "__cflb=lb123" in data["cookie"]
 
+
+class _Jar:
+    def __init__(self, items):
+        self._items = items
+
+    def items(self):
+        return list(self._items)
+
+
+def test_update_cookie_ignores_jar_newlines_and_non_cf_keys(tmp_path):
+    sess_path = tmp_path / "session.json"
+    sess_path.write_text(
+        '{"impersonate":"chrome131","user_agent":"UA","cookie":"cf_clearance=tok; MatchFilter=keep"}\n',
+        encoding="utf-8",
+    )
+    sess = BrowserSession(
+        impersonate="chrome131",
+        headers={},
+        cookie="cf_clearance=tok; MatchFilter=keep",
+        path=sess_path,
+    )
+    sess.update_cookie(
+        _Jar(
+            [
+                ("__cf_bm", "ok_bm"),
+                ("__cflb", "lb\nbad"),
+                ("OptanonConsent", "datestamp=(中国标准时间)"),
+                ("io", "sid1"),
+            ]
+        )
+    )
+    assert "__cf_bm=ok_bm" in sess.cookie
+    assert "io=sid1" in sess.cookie
+    assert "MatchFilter=keep" in sess.cookie
+    assert "OptanonConsent" not in sess.cookie
+    assert "\n" not in sess.cookie
+    hdr = sess.as_headers()["cookie"]
+    assert "\n" not in hdr
+    assert hdr.encode("latin-1")
+
+
+def test_as_headers_strips_crlf_already_in_cookie():
+    sess = BrowserSession(
+        impersonate="chrome131",
+        headers={"user-agent": "UA"},
+        cookie="cf_clearance=tok; x=a\nb; __cf_bm=z",
+    )
+    cookie = sess.as_headers()["cookie"]
+    assert "\n" not in cookie
+    assert "cf_clearance=tok" in cookie
+    assert "__cf_bm=z" in cookie
+    assert "x=" not in cookie
+

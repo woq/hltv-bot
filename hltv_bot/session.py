@@ -6,6 +6,54 @@ from pathlib import Path
 
 from hltv_bot.profile import DEFAULT_UA, build_headers, pick_impersonate
 
+# Scorebot Set-Cookie 只轮换这些；其它（OptanonConsent 等）保留 Chrome 粘贴原样。
+_ROTATE_COOKIE_KEYS = frozenset(("io", "_cfuvid", "__cflb", "cf_clearance", "__cf_bm"))
+
+
+def _cookie_value_ok(value: str) -> bool:
+    if not value or "\r" in value or "\n" in value or "\0" in value:
+        return False
+    try:
+        value.encode("latin-1")
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
+def _pairs_from_cookie_str(text: str) -> dict[str, str]:
+    pairs: dict[str, str] = {}
+    for part in (text or "").split(";"):
+        part = part.strip()
+        if "=" not in part:
+            continue
+        k, v = part.split("=", 1)
+        k, v = k.strip(), v.strip()
+        if k and _cookie_value_ok(v):
+            pairs[k] = v
+    return pairs
+
+
+def _pairs_from_jar(src: object) -> dict[str, str]:
+    out: dict[str, str] = {}
+    items = getattr(src, "items", None)
+    if not callable(items):
+        return out
+    try:
+        iterator = items()
+    except Exception:
+        return out
+    for k, v in iterator:
+        name = str(k).strip()
+        if name not in _ROTATE_COOKIE_KEYS:
+            continue
+        val = v if isinstance(v, str) else getattr(v, "value", None)
+        if val is None:
+            val = str(v)
+        val = str(val).strip()
+        if name and _cookie_value_ok(val):
+            out[name] = val
+    return out
+
 
 @dataclass
 class BrowserSession:
@@ -28,8 +76,9 @@ class BrowserSession:
 
     def as_headers(self, extra: dict[str, str] | None = None) -> dict[str, str]:
         h = dict(self.headers)
-        if self.cookie:
-            h["cookie"] = self.cookie
+        cookie = format_cookie_header(_pairs_from_cookie_str(self.cookie))
+        if cookie:
+            h["cookie"] = cookie
         if extra:
             h.update(extra)
         return h
@@ -39,35 +88,12 @@ class BrowserSession:
         if not new_pairs:
             return
         current = parse_session_paste(self.cookie).get("cookie", "")
-        pairs = {}
-        for part in current.split(";"):
-            part = part.strip()
-            if "=" in part:
-                k, v = part.split("=", 1)
-                pairs[k.strip()] = v.strip()
+        pairs = _pairs_from_cookie_str(current)
         if isinstance(new_pairs, str):
-            for part in new_pairs.split(";"):
-                part = part.strip()
-                if "=" in part:
-                    k, v = part.split("=", 1)
-                    pairs[k.strip()] = v.strip()
+            pairs.update(_pairs_from_cookie_str(new_pairs))
         elif hasattr(new_pairs, "items"):
-            for k, v in new_pairs.items():
-                if k and v:
-                    pairs[str(k)] = str(v)
-        # 维持 Chrome 标准顺序
-        first_keys = ("io", "_cfuvid", "__cflb", "cf_clearance", "__cf_bm")
-        seen = set()
-        merged = []
-        for fk in first_keys:
-            if fk in pairs and pairs[fk]:
-                merged.append(f"{fk}={pairs[fk]}")
-                seen.add(fk)
-        for k, v in pairs.items():
-            if k and v and k not in seen:
-                merged.append(f"{k}={v}")
-                seen.add(k)
-        new_cookie_str = "; ".join(merged)
+            pairs.update(_pairs_from_jar(new_pairs))
+        new_cookie_str = format_cookie_header(pairs)
         if new_cookie_str != self.cookie:
             self.cookie = new_cookie_str
             if "cookie" in self.headers:
@@ -77,6 +103,21 @@ class BrowserSession:
                     save_cookie(self.path, new_cookie_str)
                 except Exception:
                     pass
+
+
+def format_cookie_header(pairs: dict[str, str]) -> str:
+    first_keys = ("io", "_cfuvid", "__cflb", "cf_clearance", "__cf_bm")
+    seen: set[str] = set()
+    merged: list[str] = []
+    for fk in first_keys:
+        if fk in pairs and _cookie_value_ok(pairs[fk]):
+            merged.append(f"{fk}={pairs[fk]}")
+            seen.add(fk)
+    for k, v in pairs.items():
+        if k and k not in seen and _cookie_value_ok(v):
+            merged.append(f"{k}={v}")
+            seen.add(k)
+    return "; ".join(merged)
 
 
 _SESSION_KEYS = (
@@ -126,7 +167,7 @@ def parse_cookie_line(raw: str) -> str:
 def load_session(path: str | Path) -> BrowserSession:
     p = Path(path)
     data = json.loads(p.read_text(encoding="utf-8"))
-    cookie = parse_cookie_line(data.get("cookie") or "")
+    cookie = format_cookie_header(_pairs_from_cookie_str(parse_cookie_line(data.get("cookie") or "")))
     headers = build_headers(
         user_agent=data.get("user_agent") or DEFAULT_UA,
         sec_ch_ua=data.get("sec_ch_ua") or build_headers()["sec-ch-ua"],
