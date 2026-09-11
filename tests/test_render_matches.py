@@ -67,6 +67,9 @@ class _MockTg:
     def delete_message(self, chat_id, message_id):
         self.deleted.append((chat_id, message_id))
 
+    def send_chat_action(self, chat_id, action="upload_photo"):
+        return {}
+
     def bot_can_delete_messages(self, chat_id, bot_user_id=None):
         return self.bot_permissions.get(int(chat_id), False)
 

@@ -233,6 +233,12 @@ class Telegram:
             },
         )
 
+    def send_chat_action(self, chat_id: int | str, action: str = "upload_photo") -> dict:
+        try:
+            return self._call("sendChatAction", {"chat_id": chat_id, "action": action})
+        except Exception:
+            return {}
+
     def chat_member_status(self, chat_id: int, user_id: int) -> str:
         try:
             r = self._call(

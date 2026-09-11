@@ -387,31 +387,42 @@ class HltvTelegramBot:
             self._reply(chat_id, text)
             return
 
+        # Send immediate upload_photo chat action so user sees feedback right away
+        self.tg.send_chat_action(chat_id, "upload_photo")
+
         # Attempt image generation
         try:
             from datetime import datetime, timedelta, timezone
             cst = timezone(timedelta(hours=8))
             push_time = datetime.now(cst).strftime("%H:%M")
 
-            suffix = ""
-            if tier_filter == "Other":
-                suffix = " (全部赛事)"
-            elif tier_filter != "T2":
-                suffix = f" ({tier_filter} 赛事)"
-            img_bytes = render_matches_image(
-                rows,
-                tier_filter=tier_filter,
-                title_suffix=suffix,
-                updated_at=f"{push_time} UTC+8",
-            )
-
-            # Build caption with quick /watch shortcuts for live & top matches
-            caption_lines = [f"<b>HLTV Matches</b> · <code>{push_time} UTC+8</code>"]
             max_rank = tier_rank(tier_filter)
             matches_in_tier = [
                 r for r in rows
                 if tier_rank(classify_event_tier(r.get("event") or "", int(r.get("stars") or 0))) <= max_rank
             ]
+
+            # Cache key based on match IDs, live state, and score/time
+            cache_sig = tier_filter + ":" + ",".join(
+                f"{m.get('id')}:{m.get('live')}:{m.get('time')}" for m in matches_in_tier
+            )
+            now_ts = time.time()
+            cached = getattr(self, "_matches_img_cache", {}).get(tier_filter)
+            if cached and cached[0] == cache_sig and (now_ts - cached[1] < 120.0):
+                img_bytes = cached[2]
+                log.debug("matches image cache hit for %s", tier_filter)
+            else:
+                img_bytes = render_matches_image(
+                    rows,
+                    tier_filter=tier_filter,
+                    updated_at=f"{push_time} UTC+8",
+                )
+                if not hasattr(self, "_matches_img_cache"):
+                    self._matches_img_cache = {}
+                self._matches_img_cache[tier_filter] = (cache_sig, now_ts, img_bytes)
+
+            # Build caption with quick /watch shortcuts for live & top matches
+            caption_lines = [f"<b>HLTV Matches</b> · <code>{push_time} UTC+8</code>"]
             live_matches = [r for r in matches_in_tier if r.get("live") == "1"]
             upcoming_top = [r for r in matches_in_tier if r.get("live") != "1" and int(r.get("stars") or 0) >= 2][:4]
 

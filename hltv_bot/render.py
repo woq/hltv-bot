@@ -17,11 +17,10 @@ except ImportError:
     pypdfium2 = None
 
 try:
-    from PIL import Image, ImageDraw, ImageFont
+    from PIL import Image, ImageChops
 except ImportError:
     Image = None  # type: ignore
-    ImageDraw = None  # type: ignore
-    ImageFont = None  # type: ignore
+    ImageChops = None  # type: ignore
 
 log = logging.getLogger("hltv_bot.render")
 
@@ -38,6 +37,15 @@ _TIER_KEYWORDS = {
         "closed qualifier", "open qualifier", "qualifier",
         "cash cup", "academy", "regional cup", "series qualifier", "esea",
     ],
+}
+
+_TEAM_ALIASES = {
+    "natusvincere": "navi",
+    "furiagaming": "furia",
+    "ninjasinpyjamas": "nip",
+    "cloud9": "c9",
+    "themongolz": "mongolz",
+    "virtuspro": "vp",
 }
 
 
@@ -110,25 +118,30 @@ def _get_initials(name: str) -> str:
 
 def _render_team_icon(name: str) -> str:
     norm = re.sub(r"[^a-z0-9]", "", (name or "").lower())
+    norm_alias = _TEAM_ALIASES.get(norm, norm)
     logo_dir = os.path.join(os.path.dirname(__file__), "assets", "logos")
-    svg_path = os.path.join(logo_dir, f"{norm}.svg")
-    png_path = os.path.join(logo_dir, f"{norm}.png")
 
-    if os.path.exists(svg_path):
-        try:
-            with open(svg_path, "rb") as f:
-                b64 = base64.b64encode(f.read()).decode("ascii")
-                return f'<img class="team-logo" src="data:image/svg+xml;base64,{b64}" alt="{html.escape(name)}" />'
-        except Exception:
-            pass
+    for candidate in (norm, norm_alias):
+        if not candidate:
+            continue
+        svg_path = os.path.join(logo_dir, f"{candidate}.svg")
+        png_path = os.path.join(logo_dir, f"{candidate}.png")
 
-    if os.path.exists(png_path):
-        try:
-            with open(png_path, "rb") as f:
-                b64 = base64.b64encode(f.read()).decode("ascii")
-                return f'<img class="team-logo" src="data:image/png;base64,{b64}" alt="{html.escape(name)}" />'
-        except Exception:
-            pass
+        if os.path.exists(svg_path):
+            try:
+                with open(svg_path, "rb") as f:
+                    b64 = base64.b64encode(f.read()).decode("ascii")
+                    return f'<img class="team-logo" src="data:image/svg+xml;base64,{b64}" alt="{html.escape(name)}" />'
+            except Exception:
+                pass
+
+        if os.path.exists(png_path):
+            try:
+                with open(png_path, "rb") as f:
+                    b64 = base64.b64encode(f.read()).decode("ascii")
+                    return f'<img class="team-logo" src="data:image/png;base64,{b64}" alt="{html.escape(name)}" />'
+            except Exception:
+                pass
 
     bg, fg = _get_badge_style(name)
     initials = _get_initials(name)
@@ -171,10 +184,10 @@ def build_matches_html(
         "Other": "• OTHER MATCHES",
     }
 
-    # Estimate content height for dynamic page sizing
+    # Dynamic height calculation to avoid excessive bottom blank space
     row_count = len(filtered)
     sec_count = len(sorted_tiers)
-    calc_height = max(160, 60 + sec_count * 36 + row_count * 48 + 40)
+    calc_height = max(130, 52 + sec_count * 34 + row_count * 47 + 16)
 
     html_parts = [
         f"""<!DOCTYPE html>
@@ -194,15 +207,15 @@ def build_matches_html(
     font-size: 13px;
     width: 640px;
     height: {calc_height}px;
-    padding: 16px 20px 12px 20px;
+    padding: 14px 18px 10px 18px;
   }}
   .header {{
     display: flex;
     justify-content: space-between;
     align-items: flex-end;
     border-bottom: 2px solid #232936;
-    padding-bottom: 8px;
-    margin-bottom: 12px;
+    padding-bottom: 7px;
+    margin-bottom: 10px;
   }}
   .header-title {{
     font-size: 17px;
@@ -216,13 +229,13 @@ def build_matches_html(
     font-weight: 500;
   }}
   .tier-sec {{
-    margin-top: 10px;
+    margin-top: 8px;
   }}
   .tier-hdr {{
     font-size: 12px;
     font-weight: 700;
     letter-spacing: 0.5px;
-    margin-bottom: 6px;
+    margin-bottom: 5px;
     display: flex;
     align-items: center;
   }}
@@ -330,12 +343,6 @@ def build_matches_html(
     color: #38bdf8;
     font-weight: 700;
   }}
-  .footer {{
-    text-align: center;
-    font-size: 11px;
-    color: #64748b;
-    margin-top: 12px;
-  }}
 </style>
 </head>
 <body>
@@ -387,7 +394,7 @@ def build_matches_html(
                 """)
             html_parts.append('</div></div>')
 
-    html_parts.append('<div class="footer">/watch &lt;id&gt; to stream live scorebot</div></body></html>')
+    html_parts.append('</body></html>')
     return "".join(html_parts)
 
 
@@ -408,6 +415,17 @@ def render_matches_image(
     page = doc[0]
     pixmap = page.render(scale=1.5)  # 1.5x crisp rendering (960px high-res)
     pil_image = pixmap.to_pil()
+
+    # Autocrop excess bottom blank space if any
+    if ImageChops is not None:
+        try:
+            bg = Image.new("RGB", pil_image.size, (18, 21, 27))
+            diff = ImageChops.difference(pil_image.convert("RGB"), bg)
+            bbox = diff.getbbox()
+            if bbox and bbox[3] < pil_image.height - 10:
+                pil_image = pil_image.crop((0, 0, pil_image.width, min(pil_image.height, bbox[3] + 18)))
+        except Exception as e:
+            log.debug("autocrop skipped: %s", e)
 
     out = io.BytesIO()
     pil_image.save(out, format="PNG")
