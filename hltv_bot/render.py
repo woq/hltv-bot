@@ -195,7 +195,7 @@ def build_matches_html(
 <meta charset="utf-8">
 <style>
   @page {{
-    size: 720px {calc_height}px;
+    size: 780px {calc_height}px;
     margin: 0;
   }}
   * {{ box-sizing: border-box; margin: 0; padding: 0; }}
@@ -204,7 +204,7 @@ def build_matches_html(
     color: #e2e8f0;
     font-family: DejaVu Sans, Liberation Sans, -apple-system, sans-serif;
     font-size: 13px;
-    width: 720px;
+    width: 780px;
     height: {calc_height}px;
     padding: 14px 18px 10px 18px;
   }}
@@ -259,6 +259,7 @@ def build_matches_html(
     vertical-align: middle;
     border-top: 1px solid #232a38;
     border-bottom: 1px solid #232a38;
+    padding: 0 4px;
   }}
   .row.live td {{
     border-top-color: #ef4444;
@@ -283,11 +284,11 @@ def build_matches_html(
     border-right-color: #ef4444;
   }}
   .time-td {{
-    width: 68px;
-    font-size: 13px;
+    font-size: 12px;
     font-weight: 700;
     color: #94a3b8;
     white-space: nowrap;
+    overflow: hidden;
   }}
   .time-td.live {{
     color: #f87171;
@@ -299,10 +300,9 @@ def build_matches_html(
     border-radius: 50%;
     display: inline-block;
     margin-right: 5px;
+    vertical-align: middle;
   }}
   .team-td {{
-    width: 195px;
-    max-width: 195px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -310,8 +310,10 @@ def build_matches_html(
   .team-unit {{
     display: inline-flex;
     align-items: center;
+    vertical-align: middle;
     gap: 6px;
-    max-width: 195px;
+    width: 100%;
+    max-width: 100%;
     overflow: hidden;
   }}
   .team-logo {{
@@ -320,6 +322,7 @@ def build_matches_html(
     object-fit: contain;
     border-radius: 3px;
     flex-shrink: 0;
+    display: block;
   }}
   .team-badge {{
     display: inline-block;
@@ -332,6 +335,7 @@ def build_matches_html(
     font-family: monospace;
     border-radius: 3px;
     flex-shrink: 0;
+    vertical-align: middle;
   }}
   .team-name {{
     font-weight: 700;
@@ -340,32 +344,29 @@ def build_matches_html(
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    vertical-align: middle;
   }}
   .vs-td {{
-    width: 26px;
     text-align: center;
     font-size: 12px;
     color: #64748b;
     font-weight: 600;
+    white-space: nowrap;
   }}
   .event-td {{
-    width: 100px;
     font-size: 11px;
     color: #64748b;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
     padding-left: 6px;
-    max-width: 100px;
   }}
   .stars-td {{
-    width: 70px;
     text-align: right;
     white-space: nowrap;
-    padding-right: 6px;
+    padding-right: 4px;
   }}
   .id-td {{
-    width: 66px;
     text-align: right;
     font-family: monospace;
     font-size: 13px;
@@ -383,6 +384,18 @@ def build_matches_html(
 """
     ]
 
+    colgroup_html = """
+    <colgroup>
+      <col style="width: 100px;">
+      <col style="width: 205px;">
+      <col style="width: 28px;">
+      <col style="width: 205px;">
+      <col style="width: 106px;">
+      <col style="width: 58px;">
+      <col style="width: 62px;">
+    </colgroup>
+    """
+
     if not filtered:
         html_parts.append(
             f'<div style="text-align:center;padding:30px;color:#64748b;font-size:14px;">No matches found for {html.escape(tier_filter)}</div>'
@@ -390,7 +403,7 @@ def build_matches_html(
     else:
         for t in sorted_tiers:
             title = tier_titles.get(t, f"• {t}")
-            html_parts.append(f'<div class="tier-sec"><div class="tier-hdr {t}">{html.escape(title)}</div><table class="match-table">')
+            html_parts.append(f'<div class="tier-sec"><div class="tier-hdr {t}">{html.escape(title)}</div><table class="match-table">{colgroup_html}')
             for m in grouped[t]:
                 is_live = m.get("live") == "1"
                 row_cls = "row live" if is_live else "row"
