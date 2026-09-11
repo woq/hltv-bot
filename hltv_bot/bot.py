@@ -406,7 +406,7 @@ class HltvTelegramBot:
             )
 
             # Build caption with quick /watch shortcuts for live & top matches
-            caption_lines = [f"<b>HLTV CS2 今日赛程</b> · <code>{push_time}</code>"]
+            caption_lines = [f"<b>HLTV Matches</b> · <code>{push_time} UTC+8</code>"]
             max_rank = tier_rank(tier_filter)
             matches_in_tier = [
                 r for r in rows
@@ -416,7 +416,7 @@ class HltvTelegramBot:
             upcoming_top = [r for r in matches_in_tier if r.get("live") != "1" and int(r.get("stars") or 0) >= 2][:4]
 
             if live_matches:
-                caption_lines.append("🔴 <b>直播中:</b>")
+                caption_lines.append("🔴 <b>LIVE:</b>")
                 for r in live_matches[:3]:
                     t1 = h(r.get("team1") or "?")
                     t2 = h(r.get("team2") or "?")
@@ -424,7 +424,7 @@ class HltvTelegramBot:
                     caption_lines.append(f"• {t1} vs {t2} ➔ <code>/watch {mid}</code>")
 
             if upcoming_top:
-                caption_lines.append("⏰ <b>焦点预告:</b>")
+                caption_lines.append("⏰ <b>UPCOMING:</b>")
                 for r in upcoming_top:
                     t1 = h(r.get("team1") or "?")
                     t2 = h(r.get("team2") or "?")
@@ -432,7 +432,7 @@ class HltvTelegramBot:
                     mid = h(r.get("id") or "")
                     caption_lines.append(f"• [{clock}] {t1} vs {t2} ➔ <code>/watch {mid}</code>")
 
-            caption_lines.append("<i>筛选: /matches [t1|t2|t3|all|text]</i>")
+            caption_lines.append("<i>Filter: /matches [t1|t2|t3|all|text]</i>")
             caption = "\n".join(caption_lines)
 
             self._reply_photo(chat_id, img_bytes, caption=caption)

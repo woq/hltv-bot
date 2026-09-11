@@ -81,7 +81,7 @@ def test_cmd_matches_sends_photo_and_shortcuts(monkeypatch):
     chat_id, data, caption = tg.photos[0]
     assert chat_id == 1
     assert len(data) > 1000
-    assert "HLTV CS2 今日赛程" in caption
+    assert "HLTV Matches" in caption
     assert "/watch 2396932" in caption
 
     # Text mode
