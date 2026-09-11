@@ -230,6 +230,7 @@ class HltvTelegramBot:
         self._ws_fail = WsFailDigest()
         self.msg_ttl = MSG_TTL
         self._can_delete_cache: dict[int, tuple[float, bool]] = {}
+        self.started_at = time.time()
 
     def can_delete_in_chat(self, chat_id: int) -> bool:
         """Check if bot has permissions to delete messages in group, cached for 300s."""
@@ -567,11 +568,16 @@ class HltvTelegramBot:
                 f"{c.chat_id}:{c.message_id}" for c in w.cards.values()
             ) or "-"
             watch_line = f"watching {w.list_id} cards={cards}"
+        from datetime import datetime, timedelta, timezone
+        cst = timezone(timedelta(hours=8))
+        deployed_str = datetime.fromtimestamp(self.started_at, cst).strftime("%m-%d %H:%M:%S")
+
         self._reply(
             chat_id,
             format_kv_table(
                 "Status",
                 [
+                    ("deployed", f"{deployed_str} (UTC+8)"),
                     ("impersonate", h(self.session.impersonate)),
                     ("cf_clearance", "yes" if self.session.has_clearance() else "NO"),
                     ("cookies", h(", ".join(names) or "(none)")),

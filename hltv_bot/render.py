@@ -141,10 +141,26 @@ def render_matches_puppeteer(
     return res.stdout
 
 
+def _load_fallback_font(size: int, bold: bool = False):
+    font_paths = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+    ]
+    for p in font_paths:
+        if os.path.exists(p):
+            try:
+                return ImageFont.truetype(p, size)
+            except Exception:
+                pass
+    return ImageFont.load_default()
+
+
 def render_matches_image_fallback(
     rows: Sequence[dict],
     *,
-    tier_filter: str = "T3",
+    tier_filter: str = "T2",
+    updated_at: str = "",
 ) -> bytes:
     """Compact Pillow fallback if puppeteer is unavailable."""
     if Image is None:
@@ -160,45 +176,87 @@ def render_matches_image_fallback(
         if tier_rank(t) <= max_rank:
             filtered.append(r_copy)
 
-    width = 440
+    width = 480
+    f_title = _load_fallback_font(14, bold=True)
+    f_sub = _load_fallback_font(11)
+    f_tier = _load_fallback_font(10, bold=True)
+    f_time = _load_fallback_font(11, bold=True)
+    f_team = _load_fallback_font(12, bold=True)
+    f_meta = _load_fallback_font(10)
+    f_id = _load_fallback_font(11)
+
     if not filtered:
-        im = Image.new("RGB", (width, 120), (20, 23, 30))
+        im = Image.new("RGB", (width, 120), (18, 21, 27))
         d = ImageDraw.Draw(im)
-        f = ImageFont.load_default()
-        d.text((width // 2, 60), f"No matches found for {tier_filter}", font=f, fill=(160, 160, 160), anchor="mm")
+        d.text((width // 2, 60), f"No matches found for {tier_filter}", font=f_sub, fill=(148, 163, 184), anchor="mm")
         out = io.BytesIO()
         im.save(out, format="PNG")
         return out.getvalue()
 
-    card_h = 28
+    card_h = 30
     card_gap = 4
-    header_h = 44
+    header_h = 46
     grouped: dict[str, list[dict]] = {}
     for r in filtered:
         grouped.setdefault(r["_tier"], []).append(r)
 
-    total_h = header_h + len(grouped) * 24 + len(filtered) * (card_h + card_gap) + 20
-    im = Image.new("RGB", (width, total_h), (20, 23, 30))
-    d = ImageDraw.Draw(im)
-    f = ImageFont.load_default()
+    tier_labels = {
+        "T1": ("🔥 TIER 1 / MAJOR & BIG EVENTS", (248, 113, 113)),
+        "T2": ("⚡ TIER 2 / CHALLENGER & CIRCUIT", (251, 191, 36)),
+        "T3": ("🎯 TIER 3 / QUALIFIERS & CUPS", (96, 165, 250)),
+        "Other": ("▫️ OTHER MATCHES", (148, 163, 184)),
+    }
 
-    d.text((14, 16), f"HLTV MATCHES · {tier_filter}", font=f, fill=(255, 255, 255))
+    total_h = header_h + len(grouped) * 26 + len(filtered) * (card_h + card_gap) + 26
+    im = Image.new("RGB", (width, total_h), (18, 21, 27))
+    d = ImageDraw.Draw(im)
+
+    # Header
+    d.text((14, 14), "HLTV MATCHES", font=f_title, fill=(255, 255, 255))
+    header_sub_text = f"{updated_at} · {tier_filter}" if updated_at else tier_filter
+    d.text((width - 14, 16), header_sub_text, font=f_sub, fill=(100, 116, 139), anchor="ra")
+    d.line([(14, 38), (width - 14, 38)], fill=(35, 41, 54), width=2)
+
     cur_y = header_h
 
     for t in sorted(grouped.keys(), key=tier_rank):
-        d.text((14, cur_y), f"── {t} ──", font=f, fill=(160, 174, 192))
+        label, col = tier_labels.get(t, (f"── {t} ──", (148, 163, 184)))
+        d.text((14, cur_y), label, font=f_tier, fill=col)
         cur_y += 20
+
         for m in grouped[t]:
             live = m.get("live") == "1"
-            bg = (37, 27, 32) if live else (30, 35, 45)
-            d.rectangle([(14, cur_y), (width - 14, cur_y + card_h)], fill=bg)
-            t_col = (255, 100, 100) if live else (180, 190, 205)
-            d.text((20, cur_y + 8), "LIVE" if live else (m.get("time") or "--:--"), font=f, fill=t_col)
-            vs = f"{m.get('team1') or '?'} vs {m.get('team2') or '?'}"
-            d.text((75, cur_y + 8), vs[:32], font=f, fill=(255, 255, 255))
-            d.text((width - 20, cur_y + 8), f"#{m.get('id')}", font=f, fill=(99, 179, 237), anchor="ra")
+            bg = (35, 22, 26) if live else (25, 30, 39)
+            border = (239, 68, 68) if live else (35, 42, 54)
+            d.rounded_rectangle([(14, cur_y), (width - 14, cur_y + card_h)], radius=4, fill=bg, outline=border, width=1)
+
+            # Time / Status
+            t_col = (248, 113, 113) if live else (148, 163, 184)
+            time_txt = "🔴 LIVE" if live else (m.get("time") or "--:--")
+            d.text((22, cur_y + 8), time_txt, font=f_time, fill=t_col)
+
+            # Teams
+            t1 = m.get("team1") or "?"
+            t2 = m.get("team2") or "?"
+            d.text((82, cur_y + 7), t1, font=f_team, fill=(255, 255, 255))
+            vs_x = 82 + int(d.textlength(t1, font=f_team)) + 6
+            d.text((vs_x, cur_y + 8), "vs", font=f_meta, fill=(71, 85, 105))
+            t2_x = vs_x + int(d.textlength("vs", font=f_meta)) + 6
+            d.text((t2_x, cur_y + 7), t2, font=f_team, fill=(255, 255, 255))
+
+            # Stars
+            stars = int(m.get("stars") or 0)
+            if stars > 0:
+                stars_x = t2_x + int(d.textlength(t2, font=f_team)) + 8
+                d.text((stars_x, cur_y + 8), "★" * stars, font=f_meta, fill=(245, 158, 11))
+
+            # ID
+            d.text((width - 22, cur_y + 8), f"#{m.get('id')}", font=f_id, fill=(56, 189, 248), anchor="ra")
             cur_y += card_h + card_gap
         cur_y += 6
+
+    # Footer
+    d.text((width // 2, cur_y + 4), "/watch <id> to stream live scorebot", font=f_meta, fill=(71, 85, 105), anchor="mm")
 
     out = io.BytesIO()
     im.save(out, format="PNG")
@@ -217,4 +275,4 @@ def render_matches_image(
         return render_matches_puppeteer(rows, tier_filter=tier_filter, updated_at=updated_at)
     except Exception as e:
         log.warning("Puppeteer render failed, falling back to compact pillow: %s", e)
-        return render_matches_image_fallback(rows, tier_filter=tier_filter)
+        return render_matches_image_fallback(rows, tier_filter=tier_filter, updated_at=updated_at)
