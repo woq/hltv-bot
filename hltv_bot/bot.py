@@ -397,11 +397,14 @@ class HltvTelegramBot:
             push_time = datetime.now(cst).strftime("%H:%M")
 
             max_rank = tier_rank(tier_filter)
-            matches_in_tier = [
-                r for r in rows
-                if tier_rank(classify_event_tier(r.get("event") or "", int(r.get("stars") or 0))) <= max_rank
-                or int(r.get("stars") or 0) >= 1
-            ]
+            if tier_filter == "Other":
+                matches_in_tier = list(rows)
+            else:
+                matches_in_tier = [
+                    r for r in rows
+                    if tier_rank(classify_event_tier(r.get("event") or "", int(r.get("stars") or 0))) <= max_rank
+                    and int(r.get("stars") or 0) >= 1
+                ]
 
             # Cache key based on match IDs, live state, and score/time
             cache_sig = tier_filter + ":" + ",".join(

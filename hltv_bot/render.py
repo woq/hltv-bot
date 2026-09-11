@@ -148,6 +148,38 @@ def _render_team_icon(name: str) -> str:
     return f'<span class="team-badge" style="background:{bg};color:{fg};">{html.escape(initials)}</span>'
 
 
+_TROPHY_SVG = (
+    '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fbbf24" stroke-width="2" '
+    'stroke-linecap="round" stroke-linejoin="round" '
+    'style="display:inline-block;vertical-align:middle;margin-right:6px;">'
+    '<path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/>'
+    '<path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/>'
+    '<path d="M4 22h16"/>'
+    '<path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/>'
+    '<path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/>'
+    '<path d="M18 2H6v7a6 6 0 0 0 12 0V2Z" fill="#f59e0b"/>'
+    '</svg>'
+)
+
+
+def _render_event_icon(event_name: str) -> str:
+    norm = re.sub(r"[^a-z0-9]", "", (event_name or "").lower())
+    if not norm:
+        return _TROPHY_SVG
+    events_dir = os.path.join(os.path.dirname(__file__), "assets", "events")
+    for ext in ("png", "svg"):
+        p = os.path.join(events_dir, f"{norm}.{ext}")
+        if os.path.exists(p):
+            try:
+                with open(p, "rb") as f:
+                    mime = "image/svg+xml" if ext == "svg" else "image/png"
+                    b64 = base64.b64encode(f.read()).decode("ascii")
+                    return f'<img class="event-logo" src="data:{mime};base64,{b64}" alt="event" />'
+            except Exception:
+                pass
+    return _TROPHY_SVG
+
+
 def _star_svg(count: int) -> str:
     if count <= 0:
         return ""
@@ -168,8 +200,10 @@ def build_matches_html(
         t = classify_event_tier(r.get("event") or "", stars)
         r_copy = dict(r)
         r_copy["_tier"] = t
-        # Starred matches (>= 1 star) are guaranteed baseline display
-        if tier_rank(t) <= max_rank or stars >= 1:
+        # Double filter: 1. Event meets tier standard AND 2. Match has >= 1 star (unless viewing All/Other)
+        if tier_filter == "Other":
+            filtered.append(r_copy)
+        elif tier_rank(t) <= max_rank and stars >= 1:
             filtered.append(r_copy)
 
     grouped: dict[str, list[dict]] = {}
@@ -246,6 +280,18 @@ def build_matches_html(
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    display: inline-flex;
+    align-items: center;
+  }}
+  .event-logo {{
+    width: 16px;
+    height: 16px;
+    max-width: 16px;
+    max-height: 16px;
+    object-fit: contain;
+    margin-right: 7px;
+    vertical-align: middle;
+    display: inline-block;
   }}
   .event-banner.T1 .event-name {{ color: #fca5a5; }}
   .event-banner.T2 .event-name {{ color: #fde68a; }}
@@ -425,7 +471,7 @@ def build_matches_html(
                 html_parts.append(f"""
                 <div class="event-block">
                   <div class="event-banner {t}">
-                    <span class="event-name">🏆 {html.escape(ev)}</span>
+                    <span class="event-name">{_render_event_icon(ev)}{html.escape(ev)}</span>
                     <span class="event-meta">{m_count_str}</span>
                   </div>
                   <table class="match-table">{colgroup_html}
