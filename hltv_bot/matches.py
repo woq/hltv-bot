@@ -15,12 +15,14 @@ _MATCH_CACHE: dict = {"at": 0.0, "rows": []}
 MATCH_CACHE_TTL = 45.0
 _MATCH_CACHE_TTL = MATCH_CACHE_TTL
 MATCH_HREF = re.compile(r'href="(/matches/(\d+)/([^"]+))"')
+MATCH_TEAMS_BLOCK = re.compile(r'<a[^>]*class="[^"]*match-teams[^"]*"[^>]*>([\s\S]*?)</a>', re.I)
 TEAM_NAME = re.compile(
-    r'class="[^"]*matchTeamName[^"]*"[^>]*>(?:<[^>]+>)*\s*([^<]+)',
+    r'class="[^"]*(?:match-?teamname|matchTeamName|\bteam\b)[^"]*"[^>]*>(?:<[^>]+>)*\s*([^<]+)',
     re.I,
 )
+EVENT_ATTR = re.compile(r'data-event-headline="([^"]+)"', re.I)
 EVENT_NAME = re.compile(
-    r'class="[^"]*matchEvent(?:Name)?[^"]*"[^>]*>(?:<[^>]+>)*\s*([^<]+)',
+    r'class="[^"]*match-?event(?:name)?[^"]*"[^>]*>(?:<[^>]+>)*\s*([^<]+)',
     re.I,
 )
 DATA_STARS = re.compile(r'data-(?:stars|star-rating|rating)="(\d)"', re.I)
@@ -171,7 +173,7 @@ def _chunk_around(html: str, pos: int, span: int = 1800) -> str:
     return html[start:end]
 
 
-def parse_match_list(html: str, *, limit: int = 40) -> list[dict[str, str]]:
+def parse_match_list(html: str, *, limit: int = 100) -> list[dict[str, str]]:
     seen: set[str] = set()
     rows: list[dict[str, str]] = []
     for m in MATCH_HREF.finditer(html):
@@ -179,20 +181,36 @@ def parse_match_list(html: str, *, limit: int = 40) -> list[dict[str, str]]:
         if mid in seen:
             continue
         seen.add(mid)
-        chunk = _chunk_around(html, m.start())
-        prefix = html[max(0, m.start() - 1200) : m.start()]
-        live_at = [x.start() for x in re.finditer(r"liveMatch|live-match", prefix, re.I)]
+        start = max(0, m.start() - 1200)
+        end = min(len(html), m.start() + 2400)
+        chunk = html[start:end]
+        prefix = html[start : m.start()]
+        live_at = [x.start() for x in re.finditer(r"liveMatch|live-match|matchLive", prefix, re.I)]
         up_at = [x.start() for x in re.finditer(r"upcomingMatch|upcoming-match", prefix, re.I)]
         last_live = max(live_at) if live_at else -1
         last_up = max(up_at) if up_at else -1
         live = last_live > last_up
-        teams = [_clean(x) for x in TEAM_NAME.findall(chunk) if _clean(x)]
+
+        teams: list[str] = []
+        mt = MATCH_TEAMS_BLOCK.search(chunk)
+        if mt:
+            teams = [_clean(x) for x in TEAM_NAME.findall(mt.group(1)) if _clean(x)]
+        if len(teams) < 2:
+            teams = [_clean(x) for x in TEAM_NAME.findall(chunk) if _clean(x)]
+
         t1, t2, event = _teams_event_from_slug(slug)
         if len(teams) >= 2:
             t1, t2 = teams[0], teams[1]
-        ev = EVENT_NAME.search(chunk)
-        if ev:
-            event = _clean(ev.group(1)) or event
+        elif len(teams) == 1:
+            t1 = teams[0]
+
+        ev_attr = EVENT_ATTR.search(chunk)
+        if ev_attr:
+            event = _clean(ev_attr.group(1))
+        else:
+            ev = EVENT_NAME.search(chunk)
+            if ev:
+                event = _clean(ev.group(1)) or event
         t1, t2, event = pretty_name(t1), pretty_name(t2), pretty_name(event)
         stars = _stars_in(chunk)
         unix = None

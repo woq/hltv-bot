@@ -400,6 +400,7 @@ class HltvTelegramBot:
             matches_in_tier = [
                 r for r in rows
                 if tier_rank(classify_event_tier(r.get("event") or "", int(r.get("stars") or 0))) <= max_rank
+                or int(r.get("stars") or 0) >= 1
             ]
 
             # Cache key based on match IDs, live state, and score/time

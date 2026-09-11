@@ -168,7 +168,8 @@ def build_matches_html(
         t = classify_event_tier(r.get("event") or "", stars)
         r_copy = dict(r)
         r_copy["_tier"] = t
-        if tier_rank(t) <= max_rank:
+        # Starred matches (>= 1 star) are guaranteed baseline display
+        if tier_rank(t) <= max_rank or stars >= 1:
             filtered.append(r_copy)
 
     grouped: dict[str, list[dict]] = {}
@@ -177,16 +178,10 @@ def build_matches_html(
 
     sorted_tiers = sorted(grouped.keys(), key=tier_rank)
 
-    tier_titles = {
-        "T1": "• TIER 1 / MAJOR & BIG EVENTS",
-        "T2": "• TIER 2 / CHALLENGER & CIRCUIT",
-        "T3": "• TIER 3 / QUALIFIERS & CUPS",
-        "Other": "• OTHER MATCHES",
-    }
-
+    # Count unique events per tier to accurately calculate total height
+    total_event_headers = sum(len({m.get("event") or "Other Matches" for m in grouped[t]}) for t in sorted_tiers)
     row_count = len(filtered)
-    sec_count = len(sorted_tiers)
-    calc_height = max(130, 52 + sec_count * 34 + row_count * 47 + 16)
+    calc_height = max(130, 56 + total_event_headers * 38 + row_count * 45 + 24)
 
     html_parts = [
         f"""<!DOCTYPE html>
@@ -214,7 +209,7 @@ def build_matches_html(
     align-items: flex-end;
     border-bottom: 2px solid #232936;
     padding-bottom: 7px;
-    margin-bottom: 10px;
+    margin-bottom: 12px;
   }}
   .header-title {{
     font-size: 17px;
@@ -227,30 +222,50 @@ def build_matches_html(
     color: #94a3b8;
     font-weight: 500;
   }}
-  .tier-sec {{
-    margin-top: 8px;
+  .event-block {{
+    margin-bottom: 10px;
   }}
-  .tier-hdr {{
-    font-size: 12px;
-    font-weight: 700;
-    letter-spacing: 0.5px;
-    margin-bottom: 5px;
+  .event-banner {{
     display: flex;
+    justify-content: space-between;
     align-items: center;
+    background: #181d26;
+    border-left: 3.5px solid #38bdf8;
+    padding: 6px 12px;
+    margin-bottom: 4px;
+    border-radius: 3px 5px 5px 3px;
   }}
-  .tier-hdr.T1 {{ color: #f87171; }}
-  .tier-hdr.T2 {{ color: #fbbf24; }}
-  .tier-hdr.T3 {{ color: #60a5fa; }}
-  .tier-hdr.Other {{ color: #94a3b8; }}
+  .event-banner.T1 {{ border-left-color: #f87171; background: #23181c; }}
+  .event-banner.T2 {{ border-left-color: #fbbf24; background: #231f16; }}
+  .event-banner.T3 {{ border-left-color: #60a5fa; background: #161e2b; }}
+  .event-banner.Other {{ border-left-color: #94a3b8; background: #181d26; }}
+  .event-name {{
+    font-size: 12.5px;
+    font-weight: 700;
+    color: #f1f5f9;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }}
+  .event-banner.T1 .event-name {{ color: #fca5a5; }}
+  .event-banner.T2 .event-name {{ color: #fde68a; }}
+  .event-banner.T3 .event-name {{ color: #93c5fd; }}
+  .event-meta {{
+    font-size: 11px;
+    color: #94a3b8;
+    font-weight: 600;
+    white-space: nowrap;
+    margin-left: 12px;
+  }}
   .match-table {{
     width: 100%;
     table-layout: fixed;
     border-collapse: separate;
-    border-spacing: 0 5px;
+    border-spacing: 0 4px;
   }}
   .row {{
     background: #181d26;
-    height: 42px;
+    height: 40px;
   }}
   .row.live {{
     background: #24161b;
@@ -267,8 +282,8 @@ def build_matches_html(
   }}
   .row td:first-child {{
     border-left: 1px solid #232a38;
-    border-top-left-radius: 6px;
-    border-bottom-left-radius: 6px;
+    border-top-left-radius: 5px;
+    border-bottom-left-radius: 5px;
     padding-left: 12px;
   }}
   .row.live td:first-child {{
@@ -276,8 +291,8 @@ def build_matches_html(
   }}
   .row td:last-child {{
     border-right: 1px solid #232a38;
-    border-top-right-radius: 6px;
-    border-bottom-right-radius: 6px;
+    border-top-right-radius: 5px;
+    border-bottom-right-radius: 5px;
     padding-right: 12px;
   }}
   .row.live td:last-child {{
@@ -311,7 +326,7 @@ def build_matches_html(
     display: inline-flex;
     align-items: center;
     vertical-align: middle;
-    gap: 6px;
+    gap: 7px;
     width: 100%;
     max-width: 100%;
     overflow: hidden;
@@ -319,10 +334,12 @@ def build_matches_html(
   .team-logo {{
     width: 20px;
     height: 20px;
+    max-width: 20px;
+    max-height: 20px;
     object-fit: contain;
     border-radius: 3px;
     flex-shrink: 0;
-    display: block;
+    display: inline-block;
   }}
   .team-badge {{
     display: inline-block;
@@ -353,26 +370,23 @@ def build_matches_html(
     font-weight: 600;
     white-space: nowrap;
   }}
-  .event-td {{
-    font-size: 11px;
-    color: #64748b;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    padding-left: 6px;
-  }}
-  .stars-td {{
+  .meta-right-td {{
     text-align: right;
     white-space: nowrap;
-    padding-right: 4px;
+    padding-right: 12px;
   }}
-  .id-td {{
-    text-align: right;
+  .stars {{
+    display: inline-block;
+    vertical-align: middle;
+    margin-right: 6px;
+  }}
+  .id-val {{
+    display: inline-block;
+    vertical-align: middle;
     font-family: monospace;
     font-size: 13px;
     color: #38bdf8;
     font-weight: 700;
-    white-space: nowrap;
   }}
 </style>
 </head>
@@ -386,13 +400,11 @@ def build_matches_html(
 
     colgroup_html = """
     <colgroup>
-      <col style="width: 100px;">
-      <col style="width: 205px;">
+      <col style="width: 95px;">
+      <col style="width: 240px;">
       <col style="width: 28px;">
-      <col style="width: 205px;">
-      <col style="width: 106px;">
-      <col style="width: 58px;">
-      <col style="width: 62px;">
+      <col style="width: 240px;">
+      <col style="width: 141px;">
     </colgroup>
     """
 
@@ -402,42 +414,53 @@ def build_matches_html(
         )
     else:
         for t in sorted_tiers:
-            title = tier_titles.get(t, f"• {t}")
-            html_parts.append(f'<div class="tier-sec"><div class="tier-hdr {t}">{html.escape(title)}</div><table class="match-table">{colgroup_html}')
-            for m in grouped[t]:
-                is_live = m.get("live") == "1"
-                row_cls = "row live" if is_live else "row"
-                time_cls = "time-td live" if is_live else "time-td"
-                if is_live:
-                    time_html = '<span class="live-dot"></span>LIVE'
-                else:
-                    time_html = html.escape(m.get("time") or "--:--")
+            t_matches = grouped[t]
+            ev_map: dict[str, list[dict]] = {}
+            for m in t_matches:
+                ev = m.get("event") or "Other Matches"
+                ev_map.setdefault(ev, []).append(m)
 
-                t1 = m.get("team1") or "?"
-                t2 = m.get("team2") or "?"
-                t1_icon = _render_team_icon(t1)
-                t2_icon = _render_team_icon(t2)
-                stars_val = int(m.get("stars") or 0)
-                stars_html = _star_svg(stars_val)
-                mid = html.escape(m.get("id") or "")
-                ev = html.escape(m.get("event") or "")
-
+            for ev, ms in ev_map.items():
+                m_count_str = f"{len(ms)} MATCH{'ES' if len(ms) > 1 else ''}"
                 html_parts.append(f"""
-                <tr class="{row_cls}">
-                  <td class="{time_cls}">{time_html}</td>
-                  <td class="team-td">
-                    <div class="team-unit">{t1_icon}<span class="team-name">{html.escape(t1)}</span></div>
-                  </td>
-                  <td class="vs-td">vs</td>
-                  <td class="team-td">
-                    <div class="team-unit">{t2_icon}<span class="team-name">{html.escape(t2)}</span></div>
-                  </td>
-                  <td class="event-td">{ev}</td>
-                  <td class="stars-td">{stars_html}</td>
-                  <td class="id-td">#{mid}</td>
-                </tr>
+                <div class="event-block">
+                  <div class="event-banner {t}">
+                    <span class="event-name">🏆 {html.escape(ev)}</span>
+                    <span class="event-meta">{m_count_str}</span>
+                  </div>
+                  <table class="match-table">{colgroup_html}
                 """)
-            html_parts.append('</table></div>')
+                for m in ms:
+                    is_live = m.get("live") == "1"
+                    row_cls = "row live" if is_live else "row"
+                    time_cls = "time-td live" if is_live else "time-td"
+                    if is_live:
+                        time_html = '<span class="live-dot"></span>LIVE'
+                    else:
+                        time_html = html.escape(m.get("time") or "--:--")
+
+                    t1 = m.get("team1") or "?"
+                    t2 = m.get("team2") or "?"
+                    t1_icon = _render_team_icon(t1)
+                    t2_icon = _render_team_icon(t2)
+                    stars_val = int(m.get("stars") or 0)
+                    stars_html = _star_svg(stars_val)
+                    mid = html.escape(m.get("id") or "")
+
+                    html_parts.append(f"""
+                    <tr class="{row_cls}">
+                      <td class="{time_cls}">{time_html}</td>
+                      <td class="team-td">
+                        <div class="team-unit">{t1_icon}<span class="team-name">{html.escape(t1)}</span></div>
+                      </td>
+                      <td class="vs-td">vs</td>
+                      <td class="team-td">
+                        <div class="team-unit">{t2_icon}<span class="team-name">{html.escape(t2)}</span></div>
+                      </td>
+                      <td class="meta-right-td">{stars_html}<span class="id-val">#{mid}</span></td>
+                    </tr>
+                    """)
+                html_parts.append('</table></div>')
 
     html_parts.append('</body></html>')
     return "".join(html_parts)
