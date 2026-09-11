@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import io
+import json
+import logging
 import os
 import re
+import shutil
+import subprocess
 from typing import Sequence
 
 try:
@@ -12,54 +16,7 @@ except ImportError:
     ImageDraw = None  # type: ignore
     ImageFont = None  # type: ignore
 
-FONT_FALLBACKS = [
-    "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
-    "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-]
-
-_FONT_PATH: str | None = None
-for p in FONT_FALLBACKS:
-    if os.path.exists(p):
-        _FONT_PATH = p
-        break
-
-_TEAM_CN_MAP = {
-    "natus vincere": "NaVi",
-    "navi": "NaVi",
-    "virtus.pro": "VP",
-    "virtus pro": "VP",
-    "faze clan": "FaZe",
-    "faze": "FaZe",
-    "the mongolz": "The MongolZ (蒙古队)",
-    "mongolz": "The MongolZ (蒙古队)",
-    "rare atom": "Rare Atom (稀有原子)",
-    "lyg gaming": "LYG",
-    "tyloo": "TYLOO (天禄)",
-    "spirit": "Team Spirit (绿龙)",
-    "team spirit": "Team Spirit (绿龙)",
-    "vitality": "Vitality (小蜜蜂)",
-    "team vitality": "Vitality (小蜜蜂)",
-    "mouz": "MOUZ (老鼠)",
-    "astralis": "Astralis (A队)",
-    "complexity": "Complexity (COL)",
-    "eternal fire": "Eternal Fire (永恒之火)",
-    "heroic": "Heroic",
-    "liquid": "Team Liquid (液体)",
-    "team liquid": "Team Liquid (液体)",
-    "furia": "FURIA (黑豹)",
-    "pain gaming": "paiN",
-    "pain": "paiN",
-    "m80": "M80",
-    "imperial": "Imperial (帝国)",
-    "big": "BIG",
-    "fnatic": "Fnatic",
-    "nip": "NIP (忍者)",
-    "ninjas in pyjamas": "NIP (忍者)",
-    "g2": "G2",
-    "g2 esports": "G2",
-    "flyquest": "FlyQuest",
-}
+log = logging.getLogger("hltv_bot.render")
 
 _TIER_KEYWORDS = {
     "T1": [
@@ -115,26 +72,76 @@ def tier_rank(tier: str) -> int:
 
 
 def localize_team(name: str) -> str:
-    k = (name or "").strip().lower()
-    return _TEAM_CN_MAP.get(k, name)
+    # Retain clean English name directly without verbose chinese
+    return name
 
 
-def _get_font(size: int):
-    if _FONT_PATH:
-        try:
-            return ImageFont.truetype(_FONT_PATH, size)
-        except Exception:
-            pass
-    return ImageFont.load_default()
+def _find_node_bin() -> str | None:
+    p = shutil.which("node")
+    if p:
+        return p
+    candidates = [
+        "/home/x/.local/share/fnm/node-versions/v24.16.0/installation/bin/node",
+        "/usr/local/bin/node",
+        "/usr/bin/node",
+    ]
+    for c in candidates:
+        if os.path.isfile(c) and os.access(c, os.X_OK):
+            return c
+    return None
 
 
-def render_matches_image(
+def render_matches_puppeteer(
     rows: Sequence[dict],
     *,
     tier_filter: str = "T3",
-    title_suffix: str = "",
 ) -> bytes:
-    """Render matches list into a dark-themed CS2 image."""
+    node_bin = _find_node_bin()
+    if not node_bin:
+        raise RuntimeError("Node binary not found")
+
+    script_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "render_matches.js")
+    if not os.path.exists(script_path):
+        raise RuntimeError(f"render_matches.js not found at {script_path}")
+
+    # Prepare data
+    data = []
+    for r in rows:
+        c = dict(r)
+        c["_tier"] = classify_event_tier(r.get("event") or "", int(r.get("stars") or 0))
+        data.append(c)
+
+    payload = json.dumps({"matches": data, "tier_filter": tier_filter}).encode("utf-8")
+
+    env = os.environ.copy()
+    node_dir = os.path.dirname(node_bin)
+    env["PATH"] = f"{node_dir}:{env.get('PATH', '')}"
+    node_modules = "/home/x/.local/share/fnm/node-versions/v24.16.0/installation/lib/node_modules"
+    if os.path.exists(node_modules):
+        env["NODE_PATH"] = node_modules
+
+    res = subprocess.run(
+        [node_bin, script_path],
+        input=payload,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=env,
+        timeout=15.0,
+    )
+
+    if res.returncode != 0:
+        err_msg = res.stderr.decode("utf-8", "replace")[:300]
+        raise RuntimeError(f"Puppeteer failed (code {res.returncode}): {err_msg}")
+
+    return res.stdout
+
+
+def render_matches_image_fallback(
+    rows: Sequence[dict],
+    *,
+    tier_filter: str = "T3",
+) -> bytes:
+    """Compact Pillow fallback if puppeteer is unavailable."""
     if Image is None:
         raise RuntimeError("Pillow is not installed")
 
@@ -148,127 +155,60 @@ def render_matches_image(
         if tier_rank(t) <= max_rank:
             filtered.append(r_copy)
 
+    width = 440
     if not filtered:
-        width = 840
-        height = 200
-        im = Image.new("RGB", (width, height), (22, 24, 30))
+        im = Image.new("RGB", (width, 120), (20, 23, 30))
         d = ImageDraw.Draw(im)
-        font = _get_font(20)
-        d.text((width // 2, height // 2), "当前等级筛选下无比赛", font=font, fill=(180, 180, 180), anchor="mm")
+        f = ImageFont.load_default()
+        d.text((width // 2, 60), f"No matches found for {tier_filter}", font=f, fill=(160, 160, 160), anchor="mm")
         out = io.BytesIO()
         im.save(out, format="PNG")
         return out.getvalue()
 
-    width = 900
-    padding_x = 32
-    content_width = width - padding_x * 2
-
-    header_h = 80
-    card_h = 72
-    card_gap = 10
-    legend_h = 45
-
+    card_h = 28
+    card_gap = 4
+    header_h = 44
     grouped: dict[str, list[dict]] = {}
     for r in filtered:
         grouped.setdefault(r["_tier"], []).append(r)
 
-    total_cards = len(filtered)
-    tier_headers = len(grouped)
-    total_h = (
-        header_h
-        + tier_headers * 40
-        + total_cards * (card_h + card_gap)
-        + legend_h
-        + 30
-    )
-
-    im = Image.new("RGB", (width, total_h), (18, 20, 26))
+    total_h = header_h + len(grouped) * 24 + len(filtered) * (card_h + card_gap) + 20
+    im = Image.new("RGB", (width, total_h), (20, 23, 30))
     d = ImageDraw.Draw(im)
+    f = ImageFont.load_default()
 
-    font_title = _get_font(24)
-    font_sub = _get_font(13)
-    font_tier = _get_font(16)
-    font_team = _get_font(17)
-    font_meta = _get_font(13)
-    font_time = _get_font(15)
-    font_id = _get_font(13)
+    d.text((14, 16), f"HLTV MATCHES · {tier_filter}", font=f, fill=(255, 255, 255))
+    cur_y = header_h
 
-    # Top accent line
-    d.rectangle([(0, 0), (width, 4)], fill=(245, 166, 35))
-    d.text((padding_x, 24), "HLTV CS2 今日赛程", font=font_title, fill=(255, 255, 255))
-    subtitle = f"默认展示 Tier 3 及以上赛事 · 时间 UTC+8{title_suffix}"
-    d.text((padding_x, 54), subtitle, font=font_sub, fill=(140, 145, 160))
-
-    cur_y = header_h + 10
-    tier_display_names = {
-        "T1": "🔥 Tier 1 / 焦点顶级赛事 (Major, BLAST, IEM, EPL)",
-        "T2": "⚡ Tier 2 / 中型巡回赛事 (CCT, ECL, RES)",
-        "T3": "🎯 Tier 3 / 预选资格赛与常规赛",
-        "Other": "▫️ 其它赛事",
-    }
-    tier_badge_colors = {
-        "T1": (230, 80, 70),
-        "T2": (245, 166, 35),
-        "T3": (75, 160, 235),
-        "Other": (120, 125, 135),
-    }
-
-    for t_key in sorted(grouped.keys(), key=tier_rank):
-        matches = grouped[t_key]
-        d.rectangle([(padding_x, cur_y + 2), (padding_x + 4, cur_y + 18)], fill=tier_badge_colors.get(t_key, (150, 150, 150)))
-        d.text((padding_x + 12, cur_y), tier_display_names.get(t_key, t_key), font=font_tier, fill=(220, 225, 235))
-        cur_y += 32
-
-        for r in matches:
-            live = r.get("live") == "1"
-            t1 = localize_team(r.get("team1") or "?")
-            t2 = localize_team(r.get("team2") or "?")
-            ev = r.get("event") or ""
-            clock = r.get("time") or ("LIVE" if live else "")
-            stars = int(r.get("stars") or 0)
-            mid = r.get("id") or ""
-
-            card_bg = (28, 31, 40) if not live else (38, 28, 32)
-            border_color = (48, 52, 66) if not live else (230, 70, 70)
-            d.rounded_rectangle(
-                [(padding_x, cur_y), (padding_x + content_width, cur_y + card_h)],
-                radius=8,
-                fill=card_bg,
-                outline=border_color,
-                width=1 if not live else 2,
-            )
-
-            badge_x = padding_x + 16
-            if live:
-                d.rounded_rectangle(
-                    [(badge_x, cur_y + 16), (badge_x + 64, cur_y + 40)],
-                    radius=4,
-                    fill=(220, 50, 50),
-                )
-                d.text((badge_x + 32, cur_y + 28), "LIVE", font=font_time, fill=(255, 255, 255), anchor="mm")
-            else:
-                d.text((badge_x, cur_y + 18), clock or "--:--", font=font_time, fill=(200, 205, 215))
-
-            if stars > 0:
-                stars_txt = "★" * stars
-                d.text((badge_x, cur_y + 44), stars_txt, font=font_meta, fill=(245, 180, 50))
-
-            teams_x = padding_x + 100
-            vs_y = cur_y + 16
-            d.text((teams_x, vs_y), f"{t1}  vs  {t2}", font=font_team, fill=(255, 255, 255))
-
-            d.text((teams_x, vs_y + 26), ev[:45], font=font_meta, fill=(140, 145, 160))
-
-            cmd_text = f"/watch {mid}"
-            d.text((padding_x + content_width - 16, cur_y + 36), cmd_text, font=font_id, fill=(90, 170, 250), anchor="rm")
-
+    for t in sorted(grouped.keys(), key=tier_rank):
+        d.text((14, cur_y), f"── {t} ──", font=f, fill=(160, 174, 192))
+        cur_y += 20
+        for m in grouped[t]:
+            live = m.get("live") == "1"
+            bg = (37, 27, 32) if live else (30, 35, 45)
+            d.rectangle([(14, cur_y), (width - 14, cur_y + card_h)], fill=bg)
+            t_col = (255, 100, 100) if live else (180, 190, 205)
+            d.text((20, cur_y + 8), "LIVE" if live else (m.get("time") or "--:--"), font=f, fill=t_col)
+            vs = f"{m.get('team1') or '?'} vs {m.get('team2') or '?'}"
+            d.text((75, cur_y + 8), vs[:32], font=f, fill=(255, 255, 255))
+            d.text((width - 20, cur_y + 8), f"#{m.get('id')}", font=f, fill=(99, 179, 237), anchor="ra")
             cur_y += card_h + card_gap
-
-        cur_y += 12
-
-    footer_text = "提示: 点击 /watch <id> 可直接开启观赛 · /matches all 查看全部级别赛事"
-    d.text((width // 2, cur_y + 10), footer_text, font=font_sub, fill=(110, 115, 130), anchor="mm")
+        cur_y += 6
 
     out = io.BytesIO()
-    im.save(out, format="PNG", optimize=True)
+    im.save(out, format="PNG")
     return out.getvalue()
+
+
+def render_matches_image(
+    rows: Sequence[dict],
+    *,
+    tier_filter: str = "T3",
+    title_suffix: str = "",
+) -> bytes:
+    """Render matches using Puppeteer with pure Python fallback."""
+    try:
+        return render_matches_puppeteer(rows, tier_filter=tier_filter)
+    except Exception as e:
+        log.warning("Puppeteer render failed, falling back to compact pillow: %s", e)
+        return render_matches_image_fallback(rows, tier_filter=tier_filter)

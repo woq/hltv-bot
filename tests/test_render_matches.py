@@ -33,9 +33,8 @@ def test_tier_rank_ordering():
 
 
 def test_localize_team():
-    assert "蒙古" in localize_team("The MongolZ")
-    assert "天禄" in localize_team("TYLOO")
-    assert "绿龙" in localize_team("Spirit")
+    assert localize_team("The MongolZ") == "The MongolZ"
+    assert localize_team("Spirit") == "Spirit"
     assert localize_team("G2") == "G2"
 
 
