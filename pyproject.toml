@@ -7,6 +7,7 @@ readme = "README.md"
 dependencies = [
   "curl_cffi>=0.7.0",
   "python-dotenv>=1.0.0",
+  "pillow>=10.0.0",
 ]
 
 [project.scripts]

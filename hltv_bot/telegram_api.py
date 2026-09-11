@@ -164,6 +164,63 @@ class Telegram:
             },
         )
 
+    def send_photo(
+        self,
+        chat_id: int | str,
+        photo_bytes: bytes,
+        *,
+        caption: str = "",
+        filename: str = "matches.png",
+    ) -> dict:
+        import uuid
+
+        boundary = f"----WebKitFormBoundary{uuid.uuid4().hex}"
+        body_parts: list[bytes] = []
+        fields = {"chat_id": str(chat_id)}
+        if caption:
+            fields["caption"] = caption[:1024]
+            fields["parse_mode"] = "HTML"
+        for k, v in fields.items():
+            body_parts.append(
+                f"--{boundary}\r\nContent-Disposition: form-data; name=\"{k}\"\r\n\r\n{v}\r\n".encode("utf-8")
+            )
+        body_parts.append(
+            f"--{boundary}\r\nContent-Disposition: form-data; name=\"photo\"; filename=\"{filename}\"\r\n"
+            f"Content-Type: image/png\r\n\r\n".encode("utf-8")
+            + photo_bytes
+            + b"\r\n"
+        )
+        body_parts.append(f"--{boundary}--\r\n".encode("utf-8"))
+        data = b"".join(body_parts)
+
+        log.debug("tg sendPhoto chat=%s photo_len=%s cap_len=%s", chat_id, len(photo_bytes), len(caption))
+        last_err: Exception | None = None
+        for attempt in range(2):
+            req = Request(
+                f"{self.base}/sendPhoto",
+                data=data,
+                headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+                method="POST",
+            )
+            try:
+                with urlopen(req, timeout=self.timeout) as resp:
+                    raw_body = resp.read().decode("utf-8")
+                    body = json.loads(raw_body)
+            except HTTPError as e:
+                raw = e.read().decode("utf-8", "replace")
+                log.warning("tg sendPhoto HTTP %s attempt=%s body=%s", e.code, attempt, clip(raw, 400))
+                if e.code == 429:
+                    time.sleep(retry_after_seconds(raw))
+                    last_err = e
+                    continue
+                raise RuntimeError(f"telegram sendPhoto HTTP {e.code}: {raw[:200]}") from e
+            if not body.get("ok"):
+                log.warning("tg sendPhoto not ok body=%s", clip(body, 400))
+                raise RuntimeError(f"telegram sendPhoto failed: {body}")
+            result = body["result"]
+            return result
+        raise RuntimeError(f"telegram sendPhoto rate limited: {last_err}")
+
     def edit_message(self, chat_id: int | str, message_id: int, text: str) -> dict:
         return self._call(
             "editMessageText",
@@ -207,6 +264,34 @@ class Telegram:
         if scope:
             payload["scope"] = scope
         self._call("setMyCommands", payload)
+
+    def bot_can_delete_messages(self, chat_id: int | str, bot_user_id: int | None = None) -> bool:
+        """Check if bot has administrator permission to delete messages in a group."""
+        try:
+            cid = int(chat_id)
+            if cid > 0:
+                # Direct private chat
+                return True
+            # In group/supergroup: check bot member status/permissions
+            # If bot_user_id is not given, extract from token (before ':')
+            buid = bot_user_id
+            if buid is None and ":" in self.token:
+                try:
+                    buid = int(self.token.split(":", 1)[0])
+                except (ValueError, TypeError):
+                    buid = None
+            if buid:
+                r = self._call("getChatMember", {"chat_id": cid, "user_id": buid})
+                if isinstance(r, dict):
+                    status = str(r.get("status") or "")
+                    if status == "creator":
+                        return True
+                    if status == "administrator":
+                        return bool(r.get("can_delete_messages", False))
+                    return False
+        except Exception as e:
+            log.debug("bot_can_delete_messages check failed chat=%s: %s", chat_id, e)
+        return False
 
     def delete_message(self, chat_id: int | str, message_id: int) -> None:
         try:

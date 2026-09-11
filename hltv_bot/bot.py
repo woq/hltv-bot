@@ -20,6 +20,7 @@ from hltv_bot.format import (
     h,
     plain_to_rich,
 )
+from hltv_bot.render import classify_event_tier, render_matches_image, tier_rank
 from hltv_bot.http import CloudflareError
 from hltv_bot.live import (
     mark_new_round,
@@ -228,6 +229,21 @@ class HltvTelegramBot:
         self._cool = Cooldown()
         self._ws_fail = WsFailDigest()
         self.msg_ttl = MSG_TTL
+        self._can_delete_cache: dict[int, tuple[float, bool]] = {}
+
+    def can_delete_in_chat(self, chat_id: int) -> bool:
+        """Check if bot has permissions to delete messages in group, cached for 300s."""
+        cid = int(chat_id)
+        if cid > 0:
+            return True
+        now = time.monotonic()
+        if cid in self._can_delete_cache:
+            ts, val = self._can_delete_cache[cid]
+            if now - ts < 300.0:
+                return val
+        can = self.tg.bot_can_delete_messages(cid)
+        self._can_delete_cache[cid] = (now, can)
+        return can
 
     def is_admin(self, user_id: int | None) -> bool:
         return user_id is not None and int(user_id) in self.admin_ids
@@ -302,6 +318,7 @@ class HltvTelegramBot:
             cmd.startswith("/")
             and cmd not in _KEEP_USER_CMDS
             and message_id is not None
+            and self.can_delete_in_chat(chat_id)
         ):
             self._schedule_delete(chat_id, int(message_id))
         if cmd.startswith("/") and user_id is not None:
@@ -343,7 +360,17 @@ class HltvTelegramBot:
             self._cmd_debug(chat_id, user_id=user_id, chat_title=chat_title, chat_type=chat_type)
 
     def _cmd_matches(self, chat_id: int, arg: str = "") -> None:
-        all_mode = arg.strip().lower() in {"all", "全部", "*", "full"}
+        raw_arg = arg.strip().lower()
+        text_only = "text" in raw_arg or "txt" in raw_arg
+        if "all" in raw_arg or "全部" in raw_arg or "*" in raw_arg or "full" in raw_arg:
+            tier_filter = "Other"
+        elif "t1" in raw_arg or "top" in raw_arg:
+            tier_filter = "T1"
+        elif "t2" in raw_arg:
+            tier_filter = "T2"
+        else:
+            tier_filter = "T3"  # Default: Tier 3 and above
+
         try:
             rows = fetch_matches(self.session)
         except CloudflareError as e:
@@ -352,9 +379,59 @@ class HltvTelegramBot:
         if not rows:
             self._reply(chat_id, "列表是空的（或解析失败）")
             return
-        text = format_match_list(rows, starred_only=not all_mode)
-        log.debug("matches text_len=%s", len(text))
-        self._reply(chat_id, text)
+
+        if text_only:
+            text = format_match_list(rows, starred_only=(tier_filter != "Other"))
+            log.debug("matches text_len=%s", len(text))
+            self._reply(chat_id, text)
+            return
+
+        # Attempt image generation
+        try:
+            suffix = ""
+            if tier_filter == "Other":
+                suffix = " (全部赛事)"
+            elif tier_filter != "T3":
+                suffix = f" ({tier_filter} 赛事)"
+            img_bytes = render_matches_image(rows, tier_filter=tier_filter, title_suffix=suffix)
+
+            # Build caption with quick /watch shortcuts for live & top matches
+            caption_lines = ["<b>HLTV CS2 今日赛程</b>"]
+            max_rank = tier_rank(tier_filter)
+            matches_in_tier = [
+                r for r in rows
+                if tier_rank(classify_event_tier(r.get("event") or "", int(r.get("stars") or 0))) <= max_rank
+            ]
+            live_matches = [r for r in matches_in_tier if r.get("live") == "1"]
+            upcoming_top = [r for r in matches_in_tier if r.get("live") != "1" and int(r.get("stars") or 0) >= 2][:4]
+
+            if live_matches:
+                caption_lines.append("🔴 <b>直播中:</b>")
+                for r in live_matches[:3]:
+                    t1 = h(r.get("team1") or "?")
+                    t2 = h(r.get("team2") or "?")
+                    mid = h(r.get("id") or "")
+                    caption_lines.append(f"• {t1} vs {t2} ➔ <code>/watch {mid}</code>")
+
+            if upcoming_top:
+                caption_lines.append("⏰ <b>焦点预告:</b>")
+                for r in upcoming_top:
+                    t1 = h(r.get("team1") or "?")
+                    t2 = h(r.get("team2") or "?")
+                    clock = h(r.get("time") or "")
+                    mid = h(r.get("id") or "")
+                    caption_lines.append(f"• [{clock}] {t1} vs {t2} ➔ <code>/watch {mid}</code>")
+
+            caption_lines.append("<i>筛选: /matches [t1|t2|all|text]</i>")
+            caption = "\n".join(caption_lines)
+
+            self._reply_photo(chat_id, img_bytes, caption=caption)
+            log.info("matches photo sent chat=%s tier=%s matches=%s", chat_id, tier_filter, len(matches_in_tier))
+            return
+        except Exception as e:
+            log.exception("matches image render failed, falling back to text: %s", e)
+            text = format_match_list(rows, starred_only=(tier_filter != "Other"))
+            self._reply(chat_id, text)
 
     def _watch_hint(self, list_id: str) -> str:
         return (
@@ -871,6 +948,20 @@ class HltvTelegramBot:
 
     def _reply(self, chat_id: int, text: str) -> dict:
         msg = self.tg.send_message(chat_id, text)
+        mid = msg.get("message_id") if isinstance(msg, dict) else None
+        if mid is not None:
+            self._schedule_delete(chat_id, int(mid))
+        return msg
+
+    def _reply_photo(
+        self,
+        chat_id: int,
+        photo_bytes: bytes,
+        *,
+        caption: str = "",
+        filename: str = "matches.png",
+    ) -> dict:
+        msg = self.tg.send_photo(chat_id, photo_bytes, caption=caption, filename=filename)
         mid = msg.get("message_id") if isinstance(msg, dict) else None
         if mid is not None:
             self._schedule_delete(chat_id, int(mid))
