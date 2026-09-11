@@ -366,10 +366,10 @@ class HltvTelegramBot:
             tier_filter = "Other"
         elif "t1" in raw_arg or "top" in raw_arg:
             tier_filter = "T1"
-        elif "t2" in raw_arg:
-            tier_filter = "T2"
+        elif "t3" in raw_arg:
+            tier_filter = "T3"
         else:
-            tier_filter = "T3"  # Default: Tier 3 and above
+            tier_filter = "T2"  # Default: Tier 2 and above
 
         try:
             rows = fetch_matches(self.session)
@@ -388,15 +388,24 @@ class HltvTelegramBot:
 
         # Attempt image generation
         try:
+            from datetime import datetime, timedelta, timezone
+            cst = timezone(timedelta(hours=8))
+            push_time = datetime.now(cst).strftime("%H:%M")
+
             suffix = ""
             if tier_filter == "Other":
                 suffix = " (全部赛事)"
-            elif tier_filter != "T3":
+            elif tier_filter != "T2":
                 suffix = f" ({tier_filter} 赛事)"
-            img_bytes = render_matches_image(rows, tier_filter=tier_filter, title_suffix=suffix)
+            img_bytes = render_matches_image(
+                rows,
+                tier_filter=tier_filter,
+                title_suffix=suffix,
+                updated_at=f"{push_time} UTC+8",
+            )
 
             # Build caption with quick /watch shortcuts for live & top matches
-            caption_lines = ["<b>HLTV CS2 今日赛程</b>"]
+            caption_lines = [f"<b>HLTV CS2 今日赛程</b> · <code>{push_time}</code>"]
             max_rank = tier_rank(tier_filter)
             matches_in_tier = [
                 r for r in rows
@@ -422,7 +431,7 @@ class HltvTelegramBot:
                     mid = h(r.get("id") or "")
                     caption_lines.append(f"• [{clock}] {t1} vs {t2} ➔ <code>/watch {mid}</code>")
 
-            caption_lines.append("<i>筛选: /matches [t1|t2|all|text]</i>")
+            caption_lines.append("<i>筛选: /matches [t1|t2|t3|all|text]</i>")
             caption = "\n".join(caption_lines)
 
             self._reply_photo(chat_id, img_bytes, caption=caption)

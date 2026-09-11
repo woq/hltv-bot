@@ -50,7 +50,7 @@ function renderTeamIcon(name) {
 
 async function render() {
   const input = JSON.parse(fs.readFileSync(0, 'utf-8'));
-  const { matches, tier_filter = 'T3', title_suffix = '' } = input;
+  const { matches, tier_filter = 'T2', title_suffix = '', updated_at = '' } = input;
 
   const tierRank = (t) => ({ T1: 1, T2: 2, T3: 3, Other: 4 }[t] || 5);
   const maxRank = tierRank(tier_filter);
@@ -223,7 +223,7 @@ async function render() {
 <body>
   <div class="header">
     <div class="header-title">HLTV MATCHES</div>
-    <div class="header-sub">UTC+8 · ${tier_filter}</div>
+    <div class="header-sub">${updated_at ? `${updated_at} · ` : ''}${tier_filter}</div>
   </div>
 `;
 

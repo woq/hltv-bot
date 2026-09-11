@@ -94,7 +94,8 @@ def _find_node_bin() -> str | None:
 def render_matches_puppeteer(
     rows: Sequence[dict],
     *,
-    tier_filter: str = "T3",
+    tier_filter: str = "T2",
+    updated_at: str = "",
 ) -> bytes:
     node_bin = _find_node_bin()
     if not node_bin:
@@ -111,7 +112,11 @@ def render_matches_puppeteer(
         c["_tier"] = classify_event_tier(r.get("event") or "", int(r.get("stars") or 0))
         data.append(c)
 
-    payload = json.dumps({"matches": data, "tier_filter": tier_filter}).encode("utf-8")
+    payload = json.dumps({
+        "matches": data,
+        "tier_filter": tier_filter,
+        "updated_at": updated_at,
+    }).encode("utf-8")
 
     env = os.environ.copy()
     node_dir = os.path.dirname(node_bin)
@@ -203,12 +208,13 @@ def render_matches_image_fallback(
 def render_matches_image(
     rows: Sequence[dict],
     *,
-    tier_filter: str = "T3",
+    tier_filter: str = "T2",
     title_suffix: str = "",
+    updated_at: str = "",
 ) -> bytes:
     """Render matches using Puppeteer with pure Python fallback."""
     try:
-        return render_matches_puppeteer(rows, tier_filter=tier_filter)
+        return render_matches_puppeteer(rows, tier_filter=tier_filter, updated_at=updated_at)
     except Exception as e:
         log.warning("Puppeteer render failed, falling back to compact pillow: %s", e)
         return render_matches_image_fallback(rows, tier_filter=tier_filter)
