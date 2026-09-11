@@ -8,6 +8,8 @@ dependencies = [
   "curl_cffi>=0.7.0",
   "python-dotenv>=1.0.0",
   "pillow>=10.0.0",
+  "weasyprint>=70.0",
+  "pypdfium2>=5.13.0",
 ]
 
 [project.scripts]
@@ -15,3 +17,8 @@ hltv-bot = "hltv_bot.__main__:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]

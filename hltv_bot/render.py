@@ -1,11 +1,20 @@
 from __future__ import annotations
 
+import base64
+import html
 import io
 import json
 import logging
 import os
 import re
 from typing import Sequence
+
+try:
+    import weasyprint
+    import pypdfium2
+except ImportError:
+    weasyprint = None
+    pypdfium2 = None
 
 try:
     from PIL import Image, ImageDraw, ImageFont
@@ -74,16 +83,16 @@ def localize_team(name: str) -> str:
 
 
 BADGE_COLORS = [
-    ((43, 57, 69), (144, 205, 244)),   # Blue
-    ((59, 47, 69), (214, 188, 250)),   # Purple
-    ((47, 62, 53), (154, 230, 180)),   # Green
-    ((69, 56, 43), (251, 211, 141)),   # Orange
-    ((69, 43, 43), (254, 178, 178)),   # Red
-    ((43, 63, 62), (129, 230, 217)),   # Teal
+    ("#2b3945", "#90cdf4"),
+    ("#3b2f45", "#d6bcfa"),
+    ("#2f3e35", "#9ae6b4"),
+    ("#45382b", "#fbd38d"),
+    ("#452b2b", "#feb2b2"),
+    ("#2b3f3e", "#81e6d9"),
 ]
 
 
-def _get_badge_style(name: str) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
+def _get_badge_style(name: str) -> tuple[str, str]:
     h = 0
     for char in name:
         h = (h << 5) - h + ord(char)
@@ -99,32 +108,46 @@ def _get_initials(name: str) -> str:
     return clean[:2].upper()
 
 
-def _load_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
-    font_paths = [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-        "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
-    ]
-    for p in font_paths:
-        if os.path.exists(p):
-            try:
-                return ImageFont.truetype(p, size)
-            except Exception:
-                pass
-    return ImageFont.load_default()
+def _render_team_icon(name: str) -> str:
+    norm = re.sub(r"[^a-z0-9]", "", (name or "").lower())
+    logo_dir = os.path.join(os.path.dirname(__file__), "assets", "logos")
+    svg_path = os.path.join(logo_dir, f"{norm}.svg")
+    png_path = os.path.join(logo_dir, f"{norm}.png")
+
+    if os.path.exists(svg_path):
+        try:
+            with open(svg_path, "rb") as f:
+                b64 = base64.b64encode(f.read()).decode("ascii")
+                return f'<img class="team-logo" src="data:image/svg+xml;base64,{b64}" alt="{html.escape(name)}" />'
+        except Exception:
+            pass
+
+    if os.path.exists(png_path):
+        try:
+            with open(png_path, "rb") as f:
+                b64 = base64.b64encode(f.read()).decode("ascii")
+                return f'<img class="team-logo" src="data:image/png;base64,{b64}" alt="{html.escape(name)}" />'
+        except Exception:
+            pass
+
+    bg, fg = _get_badge_style(name)
+    initials = _get_initials(name)
+    return f'<span class="team-badge" style="background:{bg};color:{fg};">{html.escape(initials)}</span>'
 
 
-def render_matches_image(
+def _star_svg(count: int) -> str:
+    if count <= 0:
+        return ""
+    star_path = '<svg width="14" height="14" viewBox="0 0 24 24" fill="#f59e0b" style="display:inline-block;vertical-align:middle;margin:0 1px;"><polygon points="12,2 15,9 22,9 17,14 19,21 12,17 5,21 7,14 2,9 9,9"/></svg>'
+    return f'<span class="stars">{"".join(star_path for _ in range(count))}</span>'
+
+
+def build_matches_html(
     rows: Sequence[dict],
     *,
     tier_filter: str = "T2",
-    title_suffix: str = "",
     updated_at: str = "",
-) -> bytes:
-    """Crisp, high-fidelity match card rendered with pure Pillow (no Chrome/Node)."""
-    if Image is None:
-        raise RuntimeError("Pillow is not installed")
-
+) -> str:
     max_rank = tier_rank(tier_filter)
     filtered = []
     for r in rows:
@@ -135,103 +158,257 @@ def render_matches_image(
         if tier_rank(t) <= max_rank:
             filtered.append(r_copy)
 
-    width = 480
-    f_title = _load_font(13, bold=True)
-    f_sub = _load_font(10)
-    f_tier = _load_font(10, bold=True)
-    f_time = _load_font(10, bold=True)
-    f_team = _load_font(11, bold=True)
-    f_meta = _load_font(9)
-    f_badge = _load_font(8, bold=True)
-    f_id = _load_font(10, bold=True)
-
-    if not filtered:
-        im = Image.new("RGB", (width, 100), (18, 21, 27))
-        d = ImageDraw.Draw(im)
-        d.text((width // 2, 50), f"No matches found for {tier_filter}", font=f_sub, fill=(148, 163, 184), anchor="mm")
-        out = io.BytesIO()
-        im.save(out, format="PNG")
-        return out.getvalue()
-
-    card_h = 32
-    card_gap = 5
-    header_h = 44
     grouped: dict[str, list[dict]] = {}
     for r in filtered:
         grouped.setdefault(r["_tier"], []).append(r)
 
-    tier_labels = {
-        "T1": ("TIER 1 / MAJOR & BIG EVENTS", (248, 113, 113)),
-        "T2": ("TIER 2 / CHALLENGER & CIRCUIT", (251, 191, 36)),
-        "T3": ("TIER 3 / QUALIFIERS & CUPS", (96, 165, 250)),
-        "Other": ("OTHER MATCHES", (148, 163, 184)),
+    sorted_tiers = sorted(grouped.keys(), key=tier_rank)
+
+    tier_titles = {
+        "T1": "• TIER 1 / MAJOR & BIG EVENTS",
+        "T2": "• TIER 2 / CHALLENGER & CIRCUIT",
+        "T3": "• TIER 3 / QUALIFIERS & CUPS",
+        "Other": "• OTHER MATCHES",
     }
 
-    total_h = header_h + len(grouped) * 26 + len(filtered) * (card_h + card_gap) + 24
-    im = Image.new("RGB", (width, total_h), (18, 21, 27))
-    d = ImageDraw.Draw(im)
+    # Estimate content height for dynamic page sizing
+    row_count = len(filtered)
+    sec_count = len(sorted_tiers)
+    calc_height = max(160, 60 + sec_count * 36 + row_count * 48 + 40)
 
-    # Top Header
-    d.text((16, 15), "HLTV MATCHES", font=f_title, fill=(255, 255, 255))
-    header_sub_text = f"{updated_at} · {tier_filter}" if updated_at else tier_filter
-    d.text((width - 16, 17), header_sub_text, font=f_sub, fill=(100, 116, 139), anchor="ra")
-    d.line([(16, 36), (width - 16, 36)], fill=(35, 41, 54), width=1)
+    html_parts = [
+        f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  @page {{
+    size: 640px {calc_height}px;
+    margin: 0;
+  }}
+  * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+  body {{
+    background: #12151b;
+    color: #e2e8f0;
+    font-family: DejaVu Sans, Liberation Sans, -apple-system, sans-serif;
+    font-size: 13px;
+    width: 640px;
+    height: {calc_height}px;
+    padding: 16px 20px 12px 20px;
+  }}
+  .header {{
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    border-bottom: 2px solid #232936;
+    padding-bottom: 8px;
+    margin-bottom: 12px;
+  }}
+  .header-title {{
+    font-size: 17px;
+    font-weight: 800;
+    color: #ffffff;
+    letter-spacing: 0.5px;
+  }}
+  .header-sub {{
+    font-size: 13px;
+    color: #94a3b8;
+    font-weight: 500;
+  }}
+  .tier-sec {{
+    margin-top: 10px;
+  }}
+  .tier-hdr {{
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    margin-bottom: 6px;
+    display: flex;
+    align-items: center;
+  }}
+  .tier-hdr.T1 {{ color: #f87171; }}
+  .tier-hdr.T2 {{ color: #fbbf24; }}
+  .tier-hdr.T3 {{ color: #60a5fa; }}
+  .tier-hdr.Other {{ color: #94a3b8; }}
+  .table {{
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+  }}
+  .row {{
+    background: #181d26;
+    border-radius: 6px;
+    padding: 8px 12px;
+    display: flex;
+    align-items: center;
+    border: 1px solid #232a38;
+    height: 42px;
+  }}
+  .row.live {{
+    border-color: #ef4444;
+    background: #24161b;
+  }}
+  .time-col {{
+    width: 72px;
+    font-size: 13px;
+    font-weight: 700;
+    color: #94a3b8;
+    display: flex;
+    align-items: center;
+  }}
+  .time-col.live {{
+    color: #f87171;
+  }}
+  .live-dot {{
+    width: 7px;
+    height: 7px;
+    background: #ef4444;
+    border-radius: 50%;
+    display: inline-block;
+    margin-right: 6px;
+  }}
+  .match-col {{
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    overflow: hidden;
+  }}
+  .team-unit {{
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }}
+  .team-logo {{
+    width: 20px;
+    height: 20px;
+    object-fit: contain;
+    border-radius: 3px;
+  }}
+  .team-badge {{
+    display: inline-block;
+    text-align: center;
+    line-height: 18px;
+    width: 24px;
+    height: 18px;
+    font-size: 10px;
+    font-weight: 700;
+    font-family: monospace;
+    border-radius: 3px;
+    flex-shrink: 0;
+  }}
+  .team {{
+    font-weight: 700;
+    color: #ffffff;
+    font-size: 14px;
+    white-space: nowrap;
+  }}
+  .vs {{
+    font-size: 12px;
+    color: #64748b;
+    font-weight: 600;
+    margin: 0 4px;
+  }}
+  .event-tag {{
+    font-size: 11px;
+    color: #64748b;
+    margin-left: 8px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 140px;
+  }}
+  .stars-wrap {{
+    margin-left: auto;
+    padding-right: 12px;
+    display: flex;
+    align-items: center;
+  }}
+  .id-col {{
+    font-family: monospace;
+    font-size: 13px;
+    color: #38bdf8;
+    font-weight: 700;
+  }}
+  .footer {{
+    text-align: center;
+    font-size: 11px;
+    color: #64748b;
+    margin-top: 12px;
+  }}
+</style>
+</head>
+<body>
+  <div class="header">
+    <div class="header-title">HLTV MATCHES</div>
+    <div class="header-sub">{html.escape(f"{updated_at} · {tier_filter}" if updated_at else tier_filter)}</div>
+  </div>
+"""
+    ]
 
-    cur_y = header_h
+    if not filtered:
+        html_parts.append(
+            f'<div style="text-align:center;padding:30px;color:#64748b;font-size:14px;">No matches found for {html.escape(tier_filter)}</div>'
+        )
+    else:
+        for t in sorted_tiers:
+            title = tier_titles.get(t, f"• {t}")
+            html_parts.append(f'<div class="tier-sec"><div class="tier-hdr {t}">{html.escape(title)}</div><div class="table">')
+            for m in grouped[t]:
+                is_live = m.get("live") == "1"
+                row_cls = "row live" if is_live else "row"
+                time_cls = "time-col live" if is_live else "time-col"
+                if is_live:
+                    time_html = '<span class="live-dot"></span>LIVE'
+                else:
+                    time_html = html.escape(m.get("time") or "--:--")
 
-    for t in sorted(grouped.keys(), key=tier_rank):
-        label, col = tier_labels.get(t, (f"── {t} ──", (148, 163, 184)))
-        # Bullet dot
-        d.ellipse([(16, cur_y + 4), (22, cur_y + 10)], fill=col)
-        d.text((26, cur_y + 2), label, font=f_tier, fill=col)
-        cur_y += 22
+                t1 = m.get("team1") or "?"
+                t2 = m.get("team2") or "?"
+                t1_icon = _render_team_icon(t1)
+                t2_icon = _render_team_icon(t2)
+                stars_val = int(m.get("stars") or 0)
+                stars_html = _star_svg(stars_val)
+                mid = html.escape(m.get("id") or "")
+                ev = html.escape(m.get("event") or "")
 
-        for m in grouped[t]:
-            live = m.get("live") == "1"
-            bg = (34, 22, 27) if live else (24, 29, 38)
-            border = (239, 68, 68) if live else (35, 42, 56)
-            d.rounded_rectangle([(16, cur_y), (width - 16, cur_y + card_h)], radius=5, fill=bg, outline=border, width=1)
+                html_parts.append(f"""
+                <div class="{row_cls}">
+                  <div class="{time_cls}">{time_html}</div>
+                  <div class="match-col">
+                    <div class="team-unit">{t1_icon}<span class="team">{html.escape(t1)}</span></div>
+                    <span class="vs">vs</span>
+                    <div class="team-unit">{t2_icon}<span class="team">{html.escape(t2)}</span></div>
+                    {f'<span class="event-tag">{ev}</span>' if ev else ''}
+                  </div>
+                  <div class="stars-wrap">{stars_html}</div>
+                  <div class="id-col">#{mid}</div>
+                </div>
+                """)
+            html_parts.append('</div></div>')
 
-            # Time / Status
-            if live:
-                d.ellipse([(24, cur_y + 13), (29, cur_y + 18)], fill=(239, 68, 68))
-                d.text((32, cur_y + 9), "LIVE", font=f_time, fill=(248, 113, 113))
-            else:
-                clock = m.get("time") or "--:--"
-                d.text((24, cur_y + 9), clock, font=f_time, fill=(148, 163, 184))
+    html_parts.append('<div class="footer">/watch &lt;id&gt; to stream live scorebot</div></body></html>')
+    return "".join(html_parts)
 
-            # Team 1 Badge & Text
-            t1 = m.get("team1") or "?"
-            t1_bg, t1_fg = _get_badge_style(t1)
-            d.rounded_rectangle([(74, cur_y + 8), (90, cur_y + 23)], radius=3, fill=t1_bg)
-            d.text((82, cur_y + 15), _get_initials(t1), font=f_badge, fill=t1_fg, anchor="mm")
-            d.text((95, cur_y + 9), t1[:11], font=f_team, fill=(255, 255, 255))
 
-            # vs
-            d.text((188, cur_y + 10), "vs", font=f_meta, fill=(71, 85, 105), anchor="mm")
+def render_matches_image(
+    rows: Sequence[dict],
+    *,
+    tier_filter: str = "T2",
+    title_suffix: str = "",
+    updated_at: str = "",
+) -> bytes:
+    """Render matches using Python native WeasyPrint (HTML+CSS) with pypdfium2."""
+    if weasyprint is None or pypdfium2 is None:
+        raise RuntimeError("weasyprint and pypdfium2 are required for HTML/CSS rendering")
 
-            # Team 2 Badge & Text
-            t2 = m.get("team2") or "?"
-            t2_bg, t2_fg = _get_badge_style(t2)
-            d.rounded_rectangle([(200, cur_y + 8), (216, cur_y + 23)], radius=3, fill=t2_bg)
-            d.text((208, cur_y + 15), _get_initials(t2), font=f_badge, fill=t2_fg, anchor="mm")
-            d.text((221, cur_y + 9), t2[:11], font=f_team, fill=(255, 255, 255))
-
-            # Stars
-            stars = int(m.get("stars") or 0)
-            if stars > 0:
-                stars_txt = "★" * stars
-                d.text((width - 86, cur_y + 9), stars_txt, font=f_meta, fill=(245, 158, 11), anchor="ra")
-
-            # Match ID
-            d.text((width - 24, cur_y + 9), f"#{m.get('id')}", font=f_id, fill=(56, 189, 248), anchor="ra")
-
-            cur_y += card_h + card_gap
-        cur_y += 5
-
-    # Footer
-    d.text((width // 2, cur_y + 6), "/watch <id> to stream live scorebot", font=f_meta, fill=(71, 85, 105), anchor="mm")
+    html_content = build_matches_html(rows, tier_filter=tier_filter, updated_at=updated_at)
+    pdf_bytes = weasyprint.HTML(string=html_content).write_pdf()
+    doc = pypdfium2.PdfDocument(pdf_bytes)
+    page = doc[0]
+    pixmap = page.render(scale=1.5)  # 1.5x crisp rendering (960px high-res)
+    pil_image = pixmap.to_pil()
 
     out = io.BytesIO()
-    im.save(out, format="PNG")
+    pil_image.save(out, format="PNG")
     return out.getvalue()
