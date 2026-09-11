@@ -151,7 +151,7 @@ def _render_team_icon(name: str) -> str:
 def _star_svg(count: int) -> str:
     if count <= 0:
         return ""
-    star_path = '<svg width="14" height="14" viewBox="0 0 24 24" fill="#f59e0b" style="display:inline-block;vertical-align:middle;margin:0 1px;"><polygon points="12,2 15,9 22,9 17,14 19,21 12,17 5,21 7,14 2,9 9,9"/></svg>'
+    star_path = '<svg width="13" height="13" viewBox="0 0 24 24" fill="#f59e0b" style="display:inline-block;vertical-align:middle;margin:0 1px;"><polygon points="12,2 15,9 22,9 17,14 19,21 12,17 5,21 7,14 2,9 9,9"/></svg>'
     return f'<span class="stars">{"".join(star_path for _ in range(count))}</span>'
 
 
@@ -184,7 +184,6 @@ def build_matches_html(
         "Other": "• OTHER MATCHES",
     }
 
-    # Dynamic height calculation to avoid excessive bottom blank space
     row_count = len(filtered)
     sec_count = len(sorted_tiers)
     calc_height = max(130, 52 + sec_count * 34 + row_count * 47 + 16)
@@ -196,7 +195,7 @@ def build_matches_html(
 <meta charset="utf-8">
 <style>
   @page {{
-    size: 640px {calc_height}px;
+    size: 720px {calc_height}px;
     margin: 0;
   }}
   * {{ box-sizing: border-box; margin: 0; padding: 0; }}
@@ -205,7 +204,7 @@ def build_matches_html(
     color: #e2e8f0;
     font-family: DejaVu Sans, Liberation Sans, -apple-system, sans-serif;
     font-size: 13px;
-    width: 640px;
+    width: 720px;
     height: {calc_height}px;
     padding: 14px 18px 10px 18px;
   }}
@@ -243,33 +242,54 @@ def build_matches_html(
   .tier-hdr.T2 {{ color: #fbbf24; }}
   .tier-hdr.T3 {{ color: #60a5fa; }}
   .tier-hdr.Other {{ color: #94a3b8; }}
-  .table {{
-    display: flex;
-    flex-direction: column;
-    gap: 5px;
+  .match-table {{
+    width: 100%;
+    table-layout: fixed;
+    border-collapse: separate;
+    border-spacing: 0 5px;
   }}
   .row {{
     background: #181d26;
-    border-radius: 6px;
-    padding: 8px 12px;
-    display: flex;
-    align-items: center;
-    border: 1px solid #232a38;
     height: 42px;
   }}
   .row.live {{
-    border-color: #ef4444;
     background: #24161b;
   }}
-  .time-col {{
-    width: 72px;
+  .row td {{
+    vertical-align: middle;
+    border-top: 1px solid #232a38;
+    border-bottom: 1px solid #232a38;
+  }}
+  .row.live td {{
+    border-top-color: #ef4444;
+    border-bottom-color: #ef4444;
+  }}
+  .row td:first-child {{
+    border-left: 1px solid #232a38;
+    border-top-left-radius: 6px;
+    border-bottom-left-radius: 6px;
+    padding-left: 12px;
+  }}
+  .row.live td:first-child {{
+    border-left-color: #ef4444;
+  }}
+  .row td:last-child {{
+    border-right: 1px solid #232a38;
+    border-top-right-radius: 6px;
+    border-bottom-right-radius: 6px;
+    padding-right: 12px;
+  }}
+  .row.live td:last-child {{
+    border-right-color: #ef4444;
+  }}
+  .time-td {{
+    width: 68px;
     font-size: 13px;
     font-weight: 700;
     color: #94a3b8;
-    display: flex;
-    align-items: center;
+    white-space: nowrap;
   }}
-  .time-col.live {{
+  .time-td.live {{
     color: #f87171;
   }}
   .live-dot {{
@@ -278,25 +298,28 @@ def build_matches_html(
     background: #ef4444;
     border-radius: 50%;
     display: inline-block;
-    margin-right: 6px;
+    margin-right: 5px;
   }}
-  .match-col {{
-    flex: 1;
-    display: flex;
-    align-items: center;
-    gap: 8px;
+  .team-td {{
+    width: 195px;
+    max-width: 195px;
+    white-space: nowrap;
     overflow: hidden;
+    text-overflow: ellipsis;
   }}
   .team-unit {{
-    display: flex;
+    display: inline-flex;
     align-items: center;
     gap: 6px;
+    max-width: 195px;
+    overflow: hidden;
   }}
   .team-logo {{
     width: 20px;
     height: 20px;
     object-fit: contain;
     border-radius: 3px;
+    flex-shrink: 0;
   }}
   .team-badge {{
     display: inline-block;
@@ -310,38 +333,45 @@ def build_matches_html(
     border-radius: 3px;
     flex-shrink: 0;
   }}
-  .team {{
+  .team-name {{
     font-weight: 700;
     color: #ffffff;
-    font-size: 14px;
-    white-space: nowrap;
-  }}
-  .vs {{
-    font-size: 12px;
-    color: #64748b;
-    font-weight: 600;
-    margin: 0 4px;
-  }}
-  .event-tag {{
-    font-size: 11px;
-    color: #64748b;
-    margin-left: 8px;
+    font-size: 13.5px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    max-width: 140px;
   }}
-  .stars-wrap {{
-    margin-left: auto;
-    padding-right: 12px;
-    display: flex;
-    align-items: center;
+  .vs-td {{
+    width: 26px;
+    text-align: center;
+    font-size: 12px;
+    color: #64748b;
+    font-weight: 600;
   }}
-  .id-col {{
+  .event-td {{
+    width: 100px;
+    font-size: 11px;
+    color: #64748b;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    padding-left: 6px;
+    max-width: 100px;
+  }}
+  .stars-td {{
+    width: 70px;
+    text-align: right;
+    white-space: nowrap;
+    padding-right: 6px;
+  }}
+  .id-td {{
+    width: 66px;
+    text-align: right;
     font-family: monospace;
     font-size: 13px;
     color: #38bdf8;
     font-weight: 700;
+    white-space: nowrap;
   }}
 </style>
 </head>
@@ -360,11 +390,11 @@ def build_matches_html(
     else:
         for t in sorted_tiers:
             title = tier_titles.get(t, f"• {t}")
-            html_parts.append(f'<div class="tier-sec"><div class="tier-hdr {t}">{html.escape(title)}</div><div class="table">')
+            html_parts.append(f'<div class="tier-sec"><div class="tier-hdr {t}">{html.escape(title)}</div><table class="match-table">')
             for m in grouped[t]:
                 is_live = m.get("live") == "1"
                 row_cls = "row live" if is_live else "row"
-                time_cls = "time-col live" if is_live else "time-col"
+                time_cls = "time-td live" if is_live else "time-td"
                 if is_live:
                     time_html = '<span class="live-dot"></span>LIVE'
                 else:
@@ -380,19 +410,21 @@ def build_matches_html(
                 ev = html.escape(m.get("event") or "")
 
                 html_parts.append(f"""
-                <div class="{row_cls}">
-                  <div class="{time_cls}">{time_html}</div>
-                  <div class="match-col">
-                    <div class="team-unit">{t1_icon}<span class="team">{html.escape(t1)}</span></div>
-                    <span class="vs">vs</span>
-                    <div class="team-unit">{t2_icon}<span class="team">{html.escape(t2)}</span></div>
-                    {f'<span class="event-tag">{ev}</span>' if ev else ''}
-                  </div>
-                  <div class="stars-wrap">{stars_html}</div>
-                  <div class="id-col">#{mid}</div>
-                </div>
+                <tr class="{row_cls}">
+                  <td class="{time_cls}">{time_html}</td>
+                  <td class="team-td">
+                    <div class="team-unit">{t1_icon}<span class="team-name">{html.escape(t1)}</span></div>
+                  </td>
+                  <td class="vs-td">vs</td>
+                  <td class="team-td">
+                    <div class="team-unit">{t2_icon}<span class="team-name">{html.escape(t2)}</span></div>
+                  </td>
+                  <td class="event-td">{ev}</td>
+                  <td class="stars-td">{stars_html}</td>
+                  <td class="id-td">#{mid}</td>
+                </tr>
                 """)
-            html_parts.append('</div></div>')
+            html_parts.append('</table></div>')
 
     html_parts.append('</body></html>')
     return "".join(html_parts)
@@ -413,7 +445,7 @@ def render_matches_image(
     pdf_bytes = weasyprint.HTML(string=html_content).write_pdf()
     doc = pypdfium2.PdfDocument(pdf_bytes)
     page = doc[0]
-    pixmap = page.render(scale=1.5)  # 1.5x crisp rendering (960px high-res)
+    pixmap = page.render(scale=1.5)  # 1.5x crisp rendering (1050px high-res)
     pil_image = pixmap.to_pil()
 
     # Autocrop excess bottom blank space if any

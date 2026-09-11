@@ -79,7 +79,7 @@ CMD_COOLDOWN = {
 DEFAULT_CMD_COOLDOWN = 1.2
 MIN_EDIT_INTERVAL = 1.8
 WATCH_STALE = 60.0
-MSG_TTL = 30.0
+MSG_TTL = 60.0
 GET_UPDATES_FAIL_SLEEP = 3.0
 TG_COMMANDS_GAP = 0.4
 # WS retries every 30s on poll; ping admin after 2 fails, then batch every 5m.
