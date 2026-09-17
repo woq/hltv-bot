@@ -33,6 +33,8 @@ def test_js_reconnects_and_logs_close_code():
     assert "TextDecoder" in _SCOREBOT_JS
     assert _SCOREBOT_JS.index("armPing();") < _SCOREBOT_JS.index('if (t === "3probe")')
     assert "if (readySent) return" in _SCOREBOT_JS
+    assert "JSON.parse(JSON.stringify(payload))" in _SCOREBOT_JS
+    assert "board r=" in _SCOREBOT_JS
 
 
 def test_pick_match_page_skips_keeper_list():

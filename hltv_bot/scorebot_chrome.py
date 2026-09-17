@@ -40,7 +40,9 @@ _SCOREBOT_JS = r"""
     }
   }
   const emit = (name, payload) => {
-    pending.push([name, payload]);
+    let copy = payload;
+    try { copy = JSON.parse(JSON.stringify(payload)); } catch (e) {}
+    pending.push([name, copy]);
     if (!flushTimer) flushTimer = setTimeout(flush, 0);
   };
   let ws = null;
@@ -169,6 +171,10 @@ _SCOREBOT_JS = r"""
         try { raw = JSON.stringify(evp.payload); } catch (e) {}
         if (raw && raw === lastBoard) return;
         lastBoard = raw;
+        const o = evp.payload || {};
+        const hist = (o.ctMatchHistory && o.ctMatchHistory.firstHalf) || [];
+        emit("trace", {text: "board r=" + o.currentRound + " " + o.counterTerroristScore + "-" + o.terroristScore
+          + " " + o.currentRoundState + " hist=" + (Array.isArray(hist) ? hist.length : 0)});
       }
       emit(evp.name, evp.payload);
       return;

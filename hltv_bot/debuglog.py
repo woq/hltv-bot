@@ -24,6 +24,7 @@ def board_brief(board: dict[str, Any] | None) -> str:
         f"ct={board.get('ctScore', board.get('counterTerroristScore'))}"
         f" t={board.get('tScore', board.get('terroristScore'))}"
         f" r={board.get('currentRound', board.get('round'))}"
+        f" st={board.get('currentRoundState', board.get('roundState'))}"
         f" map={board.get('mapName', board.get('map'))}"
         f" keys={keys}"
     )

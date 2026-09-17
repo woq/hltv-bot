@@ -126,6 +126,13 @@ def test_status_line_packs_match_bits():
     assert "freeze" in line
     assert "bomb" in line
     assert "1v2" in line
+    dead = dict(snap)
+    dead["teams"] = [
+        {"name": "A", "players": [{"nick": "a", "alive": False}]},
+        {"name": "B", "players": [{"nick": "b", "alive": False}]},
+    ]
+    dead_line = _status_line("connected", "", None, snap=dead)
+    assert "0v0" not in dead_line
     assert "R19" in line
     visible = line.replace("<p><i>", "").replace("</i></p>", "")
     assert len(visible) <= 68

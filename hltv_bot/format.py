@@ -324,6 +324,8 @@ def _alive_pair(teams: list) -> str:
         if not players or all(p.get("alive") is None for p in players):
             return ""
         nums.append(str(sum(1 for p in players if p.get("alive"))))
+    if nums[0] == "0" and nums[1] == "0":
+        return ""
     return f"{nums[0]}v{nums[1]}"
 
 
@@ -355,10 +357,15 @@ def _status_line(
         tr = str(snap.get("transport") or "").lower()
         if tr in ("ws", "poll"):
             extra.append(tr)
-        if snap.get("frozen"):
+        st = str(snap.get("roundState") or "").strip().lower().replace(" ", "")
+        if snap.get("frozen") or st in {"freezeperiod", "freezetime", "freeze"}:
             extra.append("freeze")
-        st = str(snap.get("roundState") or "").strip().lower()
-        if st and st not in {"", "live", "normal"} and st not in {x.lower() for x in extra}:
+        if (
+            st
+            and st not in {"", "live", "normal", "started", "playing", "warmup", "warmingup"}
+            and st not in {"freezeperiod", "freezetime", "freeze"}
+            and st not in {x.lower() for x in extra}
+        ):
             extra.append(st.replace("_", " ")[:12])
         if snap.get("bombPlanted"):
             extra.append("bomb")

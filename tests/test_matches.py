@@ -3,6 +3,7 @@ from hltv_bot.live import (
     mark_new_round,
     mark_round_over,
     merge_log,
+    merge_scoreboard,
     patch_board_from_log,
     snapshot_from_scoreboard,
 )
@@ -453,3 +454,68 @@ def test_snapshot_includes_round_history():
         (2, "T"),
         (3, "CT"),
     ]
+
+
+def test_snapshot_round_from_history_when_current_round_stuck():
+    snap = snapshot_from_scoreboard(
+        {
+            "ctTeamName": "MOUZ",
+            "terroristTeamName": "NRG",
+            "counterTerroristScore": 0,
+            "terroristScore": 5,
+            "currentRound": 1,
+            "currentRoundState": "warmup",
+            "frozen": True,
+            "mapName": "de_dust2",
+            "CT": [{"nick": "x", "score": 5, "deaths": 6, "assists": 1, "alive": False}],
+            "TERRORIST": [{"nick": "y", "score": 8, "deaths": 2, "assists": 1, "alive": True}],
+            "ctMatchHistory": {
+                "firstHalf": [
+                    {"type": "lost", "roundOrdinal": 1},
+                    {"type": "lost", "roundOrdinal": 2},
+                    {"type": "lost", "roundOrdinal": 3},
+                    {"type": "lost", "roundOrdinal": 4},
+                    {"type": "lost", "roundOrdinal": 5},
+                ]
+            },
+            "terroristMatchHistory": {
+                "firstHalf": [
+                    {"type": "Target_Bombed", "roundOrdinal": 1},
+                    {"type": "Target_Bombed", "roundOrdinal": 2},
+                    {"type": "Target_Bombed", "roundOrdinal": 3},
+                    {"type": "Target_Bombed", "roundOrdinal": 4},
+                    {"type": "Terrorists_Win", "roundOrdinal": 5},
+                ]
+            },
+        }
+    )
+    assert snap["scoreText"] == "0-5"
+    assert snap["roundText"].startswith("6")
+    assert snap["history"]
+    assert snap["roundState"] == "live"
+    assert snap["frozen"] is False
+    assert snap["teams"][0]["players"][0]["kills"] == 5
+
+
+def test_merge_scoreboard_keeps_ahead_header():
+    prev = {
+        "mapName": "de_dust2",
+        "currentRound": 6,
+        "counterTerroristScore": 1,
+        "terroristScore": 5,
+        "ctMatchHistory": {"firstHalf": [{"type": "lost", "roundOrdinal": 1}]},
+        "terroristMatchHistory": {"firstHalf": [{"type": "Target_Bombed", "roundOrdinal": 1}]},
+        "CT": [],
+    }
+    incoming = {
+        "mapName": "de_dust2",
+        "currentRound": 1,
+        "counterTerroristScore": 0,
+        "terroristScore": 0,
+        "currentRoundState": "warmup",
+        "CT": [{"nick": "x", "score": 5, "deaths": 1}],
+    }
+    got = merge_scoreboard(prev, incoming)
+    assert got["currentRound"] == 6
+    assert got["terroristScore"] == 5
+    assert got["CT"][0]["nick"] == "x"

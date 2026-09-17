@@ -604,6 +604,57 @@ def patch_board_from_log(board: dict[str, Any], incoming: Any) -> dict[str, Any]
     return patched
 
 
+def _first_int(board: dict[str, Any], keys: tuple[str, ...]) -> int | None:
+    for key in keys:
+        if key not in board or board.get(key) is None:
+            continue
+        try:
+            return int(board[key])
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def merge_scoreboard(prev: dict[str, Any] | None, incoming: dict[str, Any]) -> dict[str, Any]:
+    """Keep round/score/history if a later packet regresses to warmup/R1 on the same map."""
+    if not incoming:
+        return dict(prev or {})
+    out = dict(incoming)
+    if not prev:
+        return out
+    same_map = (incoming.get("mapName") or incoming.get("map")) == (
+        prev.get("mapName") or prev.get("map")
+    )
+    if not same_map:
+        return out
+    new_r = _first_int(incoming, ("currentRound", "round")) or 0
+    old_r = _first_int(prev, ("currentRound", "round")) or 0
+    if old_r > new_r:
+        out["currentRound"] = prev.get("currentRound", old_r)
+    new_ct = _first_int(incoming, ("ctScore", "counterTerroristScore", "ctTeamScore"))
+    new_t = _first_int(incoming, ("tScore", "terroristScore", "tTeamScore", "terroristTeamScore"))
+    old_ct = _first_int(prev, ("ctScore", "counterTerroristScore", "ctTeamScore"))
+    old_t = _first_int(prev, ("tScore", "terroristScore", "tTeamScore", "terroristTeamScore"))
+    if (new_ct, new_t) == (0, 0) and (old_ct or 0) + (old_t or 0) > 0:
+        for k in (
+            "ctScore",
+            "tScore",
+            "counterTerroristScore",
+            "terroristScore",
+            "ctTeamScore",
+            "tTeamScore",
+        ):
+            if k in prev:
+                out[k] = prev[k]
+    old_hist = match_history(prev)
+    new_hist = match_history(incoming)
+    if len(old_hist) > len(new_hist):
+        for k in ("ctMatchHistory", "terroristMatchHistory"):
+            if k in prev:
+                out[k] = prev[k]
+    return out
+
+
 def snapshot_from_scoreboard(
     board: dict[str, Any],
     *,
@@ -613,25 +664,14 @@ def snapshot_from_scoreboard(
     meta = meta or {}
     ct_name = board.get("ctTeamName") or board.get("ctName") or meta.get("team2") or "CT"
     t_name = board.get("tTeamName") or board.get("terroristTeamName") or meta.get("team1") or "T"
-    ct_score = (
-        board.get("ctScore")
-        or board.get("counterTerroristScore")
-        or board.get("ctTeamScore")
-        or 0
-    )
-    t_score = (
-        board.get("tScore")
-        or board.get("terroristScore")
-        or board.get("tTeamScore")
-        or board.get("terroristTeamScore")
-        or 0
-    )
-    try:
-        ct_score = int(ct_score)
-        t_score = int(t_score)
-    except (TypeError, ValueError):
-        ct_score, t_score = 0, 0
-    round_n = board.get("currentRound") or board.get("round") or ""
+    ct_score = _first_int(board, ("ctScore", "counterTerroristScore", "ctTeamScore")) or 0
+    t_score = _first_int(board, ("tScore", "terroristScore", "tTeamScore", "terroristTeamScore")) or 0
+    hist = match_history(board)
+    round_n = _first_int(board, ("currentRound", "round"))
+    max_h = max((int(x["n"]) for x in hist), default=0)
+    if max_h and (round_n is None or round_n < max_h or (round_n <= 1 and max_h > 1)):
+        round_n = max_h + 1
+    round_s = "" if round_n is None else str(round_n)
     map_name = board.get("mapName") or board.get("map") or ""
     map_name = str(map_name or "").removeprefix("de_").replace("_", " ").title()
     ct_players = _side_players(
@@ -648,22 +688,30 @@ def snapshot_from_scoreboard(
             len(ct_players),
             len(t_players),
         )
+    ct_pl = _players(ct_players if isinstance(ct_players, list) else None)
+    t_pl = _players(t_players if isinstance(t_players, list) else None)
+    state = str(board.get("currentRoundState") or board.get("roundState") or "").strip()
+    st = state.lower().replace(" ", "")
+    frozen = bool(board.get("frozen")) or st in {"freezeperiod", "freezetime", "freeze"}
+    if st in {"warmup", "warmingup"} and (hist or any(p.get("kills") or p.get("deaths") for p in ct_pl + t_pl)):
+        state = "live"
+        frozen = False
     return {
         "live": True,
         "url": meta.get("url"),
         "team1": {"name": t_name},
         "team2": {"name": ct_name},
-        "roundText": f"{round_n} - {map_name}".strip(" -"),
+        "roundText": f"{round_s} - {map_name}".strip(" -"),
         "scoreText": f"{ct_score}-{t_score}",
         "ctScore": ct_score,
         "tScore": t_score,
         "teams": [
-            {"name": ct_name, "players": _players(ct_players if isinstance(ct_players, list) else None)},
-            {"name": t_name, "players": _players(t_players if isinstance(t_players, list) else None)},
+            {"name": ct_name, "players": ct_pl},
+            {"name": t_name, "players": t_pl},
         ],
-        "history": match_history(board),
+        "history": hist,
         "bombPlanted": bool(board.get("bombPlanted")),
-        "frozen": bool(board.get("frozen")),
-        "roundState": str(board.get("currentRoundState") or board.get("roundState") or "").strip(),
+        "frozen": frozen,
+        "roundState": state,
         "log": log or [],
     }

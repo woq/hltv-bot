@@ -27,6 +27,7 @@ from hltv_bot.live import (
     mark_new_round,
     mark_round_over,
     merge_log,
+    merge_scoreboard,
     patch_board_from_log,
     snapshot_from_scoreboard,
 )
@@ -930,7 +931,7 @@ class HltvTelegramBot:
                         state.next_at,
                     )
                 elif name == "scoreboard" and isinstance(payload, dict):
-                    board = payload
+                    board = merge_scoreboard(board, payload)
                     feed, round_seen = mark_new_round(feed, board, round_seen)
                     feed, prev_ct, prev_t = mark_round_over(feed, board, prev_ct, prev_t)
                     state.last_data_at = time.time()
