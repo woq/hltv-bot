@@ -21,10 +21,10 @@ ExecStart=/usr/bin/google-chrome-stable \
   --no-default-browser-check \
   --disable-dev-shm-usage \
   --disable-gpu \
-  --disable-extensions \
-  --renderer-process-limit=2 \
+  --disable-features=DisableLoadExtensionCommandLineSwitch \
+  --load-extension=/var/lib/hltv-chrome/ublock \
   --disk-cache-size=67108864 \
-  --window-size=800,600 \
+  --window-size=1280,720 \
   --force-device-scale-factor=1 \
   --mute-audio \
   https://www.hltv.org/matches

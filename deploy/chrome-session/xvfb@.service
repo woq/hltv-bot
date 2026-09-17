@@ -6,7 +6,7 @@ After=network.target
 # Default 800x600x16. If Turnstile is a blank canvas, maintenance window:
 # 1280x720x24 then 1920x1080x24, and match Chrome --window-size.
 # Restarting Xvfb kills Chrome; Chrome is Restart=no, so that is a VNC event.
-ExecStart=/usr/bin/Xvfb :%i -screen 0 800x600x16 -nolisten tcp
+ExecStart=/usr/bin/Xvfb :%i -screen 0 1280x720x24 -nolisten tcp
 Restart=always
 RestartSec=2
 
