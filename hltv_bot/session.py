@@ -70,8 +70,16 @@ def _cdp_domain_ok(domain: str) -> bool:
 
 
 def _partitioned(c: dict) -> bool:
+    """True only for cross-site CHIPS cookies.
+
+    Chrome 111+ often sets partitionKey even on first-party hltv.org
+    cookies (hasCrossSiteAncestor=false). Those must still count as
+    cf_clearance for challenge detection.
+    """
     pk = c.get("partitionKey")
     if pk in (None, "", {}, []):
+        return False
+    if isinstance(pk, dict) and not pk.get("hasCrossSiteAncestor"):
         return False
     return True
 

@@ -30,7 +30,11 @@ def test_merge_healthy_example():
         _c("OptanonConsent", "datestamp=y"),
         _c("NID", "xyz", domain=".google.com"),
         _c("__cflb", "bad\n"),
-        _c("cf_clearance", "part", partitionKey={"topLevelSite": "https://hltv.org"}),
+        _c(
+            "cf_clearance",
+            "part",
+            partitionKey={"topLevelSite": "https://hltv.org", "hasCrossSiteAncestor": True},
+        ),
     ]
     out = merge_cdp_cookies(EXISTING, cdp)
     assert "io=live" in out
@@ -68,6 +72,19 @@ def test_session_cookie_expires_minus_one_usable():
 
 def test_empty_cdp_keeps_header():
     assert merge_cdp_cookies(EXISTING, []) == EXISTING
+
+
+def test_first_party_partition_key_is_usable():
+    cdp = [
+        _c(
+            "cf_clearance",
+            "fp",
+            partitionKey={"topLevelSite": "https://hltv.org", "hasCrossSiteAncestor": False},
+        ),
+        _c("__cf_bm", "bm"),
+    ]
+    assert not is_challenge_cdp("Matches", "https://www.hltv.org/matches", cdp)
+    assert "cf_clearance=fp" in merge_cdp_cookies("cf_clearance=old", cdp)
 
 
 def test_title_and_missing_clearance_are_challenge():

@@ -26,7 +26,7 @@ jobs:
           ssh-keyscan -p 2233 -H 191.96.243.105 >> ~/.ssh/known_hosts 2>/dev/null
           HOST=root@191.96.243.105
           SSH="ssh -p 2233 -o IdentitiesOnly=yes"
-          $SSH "$HOST" 'mkdir -p /opt/hltv-bot/data'
+          $SSH "$HOST" 'mkdir -p /opt/hltv-bot/data; command -v rsync >/dev/null || (export DEBIAN_FRONTEND=noninteractive; apt-get update -qq && apt-get install -y -qq rsync)'
           rsync -az -e "$SSH" \
             --exclude '.git/' \
             --exclude '.github/' \
@@ -49,6 +49,7 @@ jobs:
           cd /opt/hltv-bot
           test -f .env || cp .env.example .env
           test -f data/session.json || cp data/session.example.json data/session.json
+          apt-get install -y -qq libpango-1.0-0 libpangocairo-1.0-0 libcairo2 libgdk-pixbuf-2.0-0 fonts-dejavu-core
           uv sync
           install -m 644 deploy/hltv-bot.service /etc/systemd/system/hltv-bot.service
           install -m 644 deploy/chrome-session/hltv-chrome.service /etc/systemd/system/hltv-chrome.service
