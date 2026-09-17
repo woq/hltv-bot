@@ -55,6 +55,7 @@ _SCOREBOT_JS = r"""
   let evCount = 0;
   let openedAt = 0;
   let lastBoard = "";
+  let readySent = false;
   window.__hltvBotScorebot = { stop: function() {
     stopped = true;
     if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
@@ -101,6 +102,8 @@ _SCOREBOT_JS = r"""
     return "42" + JSON.stringify(["readyForMatch", inner]);
   }
   function sendReady() {
+    if (readySent) return;
+    readySent = true;
     try { ws.send(readyPkt()); } catch (e) {}
     emit("trace", {text: "readyForMatch listId=" + listId});
   }
@@ -127,8 +130,7 @@ _SCOREBOT_JS = r"""
     armPing();
     if (t === "3probe") {
       try { ws.send("5"); } catch (e) {}
-      sendReady();
-      emit("status", {state: "connected", transport: "ws"});
+      try { ws.send("40"); } catch (e) {}
       return;
     }
     if (t === "2" || t === "2probe") {
@@ -139,8 +141,8 @@ _SCOREBOT_JS = r"""
       }
       return;
     }
-    if (t === "1") {
-      emit("trace", {text: "eio close packet via=" + via});
+    if (t === "1" || t === "41") {
+      emit("trace", {text: "eio disconnect pkt=" + t + " via=" + via});
       try { if (ws) ws.close(); } catch (e) {}
       return;
     }
@@ -151,10 +153,12 @@ _SCOREBOT_JS = r"""
         if (o.pingTimeout) pingTimeout = o.pingTimeout;
         emit("trace", {text: "ws open sid=" + (o.sid || "") + " ping=" + pingInterval + "/" + pingTimeout});
       } catch (e) {}
+      try { ws.send("40"); } catch (e) {}
       return;
     }
     if (t === "40") {
       sendReady();
+      emit("status", {state: "connected", transport: "ws"});
       return;
     }
     const evp = parseEvent(t);
@@ -173,21 +177,21 @@ _SCOREBOT_JS = r"""
       emit("trace", {text: "ws pkt via=" + via + " " + clip(t, 40)});
     }
   }
-  function openWs(sid) {
+  function openWs() {
     if (ws) {
       try { ws.onclose = null; ws.onerror = null; ws.onmessage = null; ws.close(); } catch (e) {}
       ws = null;
     }
     const wsBase = httpBase.replace(/^http/i, "ws");
-    let u = wsBase.replace(/\/$/, "") + "/socket.io/?EIO=3&transport=websocket";
-    if (sid) u += "&sid=" + encodeURIComponent(sid);
+    const u = wsBase.replace(/\/$/, "") + "/socket.io/?EIO=3&transport=websocket";
     const sock = new WebSocket(u);
     ws = sock;
     openedAt = Date.now();
     pingCount = 0;
     evCount = 0;
     lastBoard = "";
-    sock.onopen = function() { sock.send("2probe"); };
+    readySent = false;
+    sock.onopen = function() { emit("trace", {text: "ws tcp open"}); };
     sock.onmessage = function(ev) {
       let raw = ev.data;
       if (typeof raw !== "string") {
@@ -215,40 +219,13 @@ _SCOREBOT_JS = r"""
       if (!stopped) scheduleReconnect("ws close code=" + (ev && ev.code));
     };
   }
-  async function handshake() {
+  function handshake() {
     if (stopped || handshakeBusy) return;
     handshakeBusy = true;
     emit("status", {state: "connecting", transport: "chrome"});
-    const u = httpBase.replace(/\/$/, "") + "/socket.io/?EIO=3&transport=polling&t=" + Date.now().toString(36);
-    let sid = "";
-    let openBits = "";
-    try {
-      const r = await fetch(u, {credentials: "include", mode: "cors"});
-      const text = await r.text();
-      for (const pkt of packets(text)) {
-        if (pkt.charAt(0) === "0") {
-          const o = JSON.parse(pkt.slice(1));
-          sid = o.sid || "";
-          if (o.pingInterval) pingInterval = o.pingInterval;
-          if (o.pingTimeout) pingTimeout = o.pingTimeout;
-          openBits = " sid=" + sid + " ping=" + pingInterval + "/" + pingTimeout;
-        }
-        const evp = parseEvent(pkt);
-        if (evp) emit(evp.name, evp.payload);
-      }
-      emit("trace", {text: "handshake HTTP " + r.status + " bytes=" + text.length + openBits});
-      if (r.status === 403 || r.status === 429) {
-        handshakeBusy = false;
-        emit("status", {state: "disconnected", detail: "Cloudflare " + r.status});
-        scheduleReconnect("Cloudflare " + r.status);
-        return;
-      }
-    } catch (e) {
-      emit("trace", {text: "handshake fetch " + String(e)});
-    }
     handshakeBusy = false;
     if (stopped) return;
-    openWs(sid);
+    openWs();
   }
   handshake();
 })(__LIST_ID__, __HTTP_BASE__);

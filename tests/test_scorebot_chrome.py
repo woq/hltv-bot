@@ -9,7 +9,10 @@ from hltv_bot.scorebot_chrome import (
 def test_js_is_page_ws_not_python_upgrade():
     assert "new WebSocket" in _SCOREBOT_JS
     assert "readyForMatch" in _SCOREBOT_JS
-    assert "credentials: \"include\"" in _SCOREBOT_JS
+    assert "transport=websocket" in _SCOREBOT_JS
+    assert "transport=polling" not in _SCOREBOT_JS
+    assert 'sock.send("2probe")' not in _SCOREBOT_JS
+    assert 'ws.send("40")' in _SCOREBOT_JS
     assert "curl_cffi" not in _SCOREBOT_JS
 
 
@@ -29,6 +32,7 @@ def test_js_reconnects_and_logs_close_code():
     assert 't === "2probe"' in _SCOREBOT_JS
     assert "TextDecoder" in _SCOREBOT_JS
     assert _SCOREBOT_JS.index("armPing();") < _SCOREBOT_JS.index('if (t === "3probe")')
+    assert "if (readySent) return" in _SCOREBOT_JS
 
 
 def test_pick_match_page_skips_keeper_list():
