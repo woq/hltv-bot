@@ -113,7 +113,7 @@ _SCOREBOT_JS = r"""
   }
   function scheduleReconnect(detail) {
     if (stopped || reconnectTimer) return;
-    const wait = 15;
+    const wait = 3;
     emit("status", {state: "reconnect", detail: detail, wait: wait});
     reconnectTimer = setTimeout(function() {
       reconnectTimer = null;
@@ -354,7 +354,7 @@ def iter_scorebot_chrome(
         if ev.get("exceptionDetails"):
             raise CdpError(str(ev.get("exceptionDetails")))
         while True:
-            msg = client.recv_msg(1.0)
+            msg = client.recv_msg(0.4)
             if msg is None:
                 yield ("tick", None)
                 continue

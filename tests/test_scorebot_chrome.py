@@ -25,6 +25,7 @@ def test_js_reconnects_and_logs_close_code():
     assert "ws non-text" in _SCOREBOT_JS
     assert 'detail: "ws close"' not in _SCOREBOT_JS
     assert "setTimeout(flush, 0)" in _SCOREBOT_JS
+    assert "const wait = 3" in _SCOREBOT_JS
     assert 't === "2probe"' in _SCOREBOT_JS
     assert "TextDecoder" in _SCOREBOT_JS
     assert _SCOREBOT_JS.index("armPing();") < _SCOREBOT_JS.index('if (t === "3probe")')

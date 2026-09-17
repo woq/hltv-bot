@@ -9,6 +9,7 @@ from hltv_bot.bot import (
     DEFAULT_CMD_COOLDOWN,
     GET_UPDATES_FAIL_SLEEP,
     MIN_EDIT_INTERVAL,
+    MIN_EDIT_INTERVAL_WS,
     MSG_TTL,
     TG_COMMANDS_GAP,
 )
@@ -47,6 +48,8 @@ def test_delay_floors():
     assert WS_RETRY_EVERY >= 15.0
     assert WS_ATTEMPT_GAP >= 1.0
     assert MIN_EDIT_INTERVAL >= 1.8
+    assert 0.3 <= MIN_EDIT_INTERVAL_WS <= 0.8
+    assert MIN_EDIT_INTERVAL_WS < MIN_EDIT_INTERVAL
     assert MSG_TTL >= 30.0
     assert GET_UPDATES_FAIL_SLEEP >= 3.0
     assert TG_COMMANDS_GAP >= 0.3
@@ -91,7 +94,7 @@ def test_scorebot_sleeps_on_poll_reconnect_ws_and_handshake():
 
 def test_bot_edit_cmd_getupdates_and_setcommands_gaps():
     src = _src("bot.py")
-    assert "wait < MIN_EDIT_INTERVAL" in src
+    assert "wait < watch_edit_interval(state)" in src
     assert "time.sleep(GET_UPDATES_FAIL_SLEEP)" in src
     assert "self._cool.allow(key, interval)" in src
     assert "time.sleep(TG_COMMANDS_GAP)" in src

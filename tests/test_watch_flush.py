@@ -4,6 +4,9 @@ from hltv_bot.bot import (
     WatchState,
     WsFailDigest,
     watch_debug_mode,
+    watch_edit_interval,
+    MIN_EDIT_INTERVAL,
+    MIN_EDIT_INTERVAL_WS,
 )
 from hltv_bot.session import BrowserSession
 from hltv_bot.telegram_api import is_not_modified
@@ -166,6 +169,14 @@ def test_bump_is_the_only_new_send():
     assert len(bot.tg.sent) == 1
     assert st.cards[1].message_id != 7
     assert bot.tg.sent[0][0] == 1
+
+
+def test_watch_edit_interval_ws_is_faster_than_poll():
+    poll = _state()
+    ws = _state(transport="ws")
+    assert watch_edit_interval(poll) == MIN_EDIT_INTERVAL
+    assert watch_edit_interval(ws) == MIN_EDIT_INTERVAL_WS
+    assert watch_edit_interval(ws) < watch_edit_interval(poll)
 
 
 def test_watch_debug_mode_healthy_vs_down():

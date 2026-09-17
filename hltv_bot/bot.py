@@ -79,6 +79,7 @@ CMD_COOLDOWN = {
 }
 DEFAULT_CMD_COOLDOWN = 1.2
 MIN_EDIT_INTERVAL = 1.8
+MIN_EDIT_INTERVAL_WS = 0.5
 WATCH_STALE = 60.0
 MSG_TTL = 60.0
 GET_UPDATES_FAIL_SLEEP = 3.0
@@ -154,6 +155,13 @@ class WatchState:
             c = WatchCard(chat_id=int(chat_id))
             self.cards[int(chat_id)] = c
         return c
+
+
+def watch_edit_interval(state: WatchState) -> float:
+    """Poll coalesced at 1.8s; Chrome WS can edit about twice a second."""
+    if (state.transport or "") == "ws":
+        return MIN_EDIT_INTERVAL_WS
+    return MIN_EDIT_INTERVAL
 
 
 @dataclass
@@ -951,7 +959,11 @@ class HltvTelegramBot:
                             f"stale no scoreboard/log {int(now - state.last_data_at)}s",
                         )
                         status_changed = True
-                    elif state.pending and (state.log_html or state.text):
+                    elif (
+                        state.pending
+                        and (state.log_html or state.text)
+                        and (now - state.last_edit) >= watch_edit_interval(state)
+                    ):
                         self._flush_watch(
                             state,
                             stats_html=state.stats_html,
@@ -1009,7 +1021,7 @@ class HltvTelegramBot:
                     )
                 )
                 wait = now - state.last_edit
-                if wait < MIN_EDIT_INTERVAL and not force:
+                if wait < watch_edit_interval(state) and not force:
                     log.debug(
                         "watch defer interval wait=%.2fs force=%s %s",
                         wait,

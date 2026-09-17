@@ -583,7 +583,7 @@ def iter_scorebot(
                 log.warning("chrome scorebot unavailable, curl_cffi fallback: %s", e)
                 break
             except Exception as e:
-                wait = reconnect_wait(RECONNECT_MIN, http_5xx=False)
+                wait = 3.0
                 log.info("chrome scorebot error, reconnect in %.1fs: %s", wait, e)
                 yield _trace(f"chrome {clip(e, 120)} retry {wait:.0f}s")
                 yield (
@@ -592,7 +592,7 @@ def iter_scorebot(
                 )
                 time.sleep(wait)
                 continue
-            time.sleep(RECONNECT_MIN)
+            time.sleep(3.0)
 
     backoff = RECONNECT_MIN
     while True:
