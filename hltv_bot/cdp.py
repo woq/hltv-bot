@@ -132,6 +132,21 @@ class _CdpWs:
             result = data.get("result")
             return result if isinstance(result, dict) else {}
 
+    def recv_msg(self, timeout: float = 1.0) -> dict | None:
+        import websocket
+
+        self.ws.settimeout(timeout)
+        try:
+            raw = self.ws.recv()
+        except websocket.WebSocketTimeoutException:
+            return None
+        except TimeoutError:
+            return None
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8", "replace")
+        data = json.loads(raw)
+        return data if isinstance(data, dict) else None
+
 
 def _connect_ws(ws_url: str, timeout: float) -> _CdpWs:
     import websocket
@@ -287,11 +302,13 @@ def close_extra_pages(
     base: str = DEFAULT_CDP,
     *,
     keep_path: str = "/matches",
+    keep_urls: list[str] | None = None,
     timeout: float = 3.0,
 ) -> int:
-    """Drop extra HLTV tabs; keep the keeper /matches page. Skip when VNC is up."""
+    """Drop extra HLTV tabs; keep keeper /matches and optional watch URL. Skip when VNC is up."""
     if vnc_up():
         return 0
+    keep = tuple(u.rstrip("/") for u in (keep_urls or []) if u)
     pages = _list_pages(base, timeout)
     n = 0
     for p in pages:
@@ -302,6 +319,8 @@ def close_extra_pages(
             continue
         parsed = urlparse(url)
         if keep_path in (parsed.path or ""):
+            continue
+        if any(url.startswith(k) or k in url for k in keep):
             continue
         tid = str(p.get("id") or "")
         if not tid:

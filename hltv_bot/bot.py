@@ -826,6 +826,12 @@ class HltvTelegramBot:
             self.watch.stop.set()
         self.watch = None
         self._ws_fail.reset()
+        try:
+            from hltv_bot.cdp import close_extra_pages
+
+            close_extra_pages()
+        except Exception:
+            log.debug("close extra tabs after stop skipped", exc_info=True)
 
     def _watch_loop(self, state: WatchState) -> None:
         board: dict = {}
@@ -838,6 +844,7 @@ class HltvTelegramBot:
                 self.session,
                 state.list_id,
                 base=scorebot_base(state.meta.get("scorebotUrl")),
+                match_url=str(state.meta.get("url") or "") or None,
             )
             for name, payload in stream:
                 if state.stop.is_set() or self.watch is not state:

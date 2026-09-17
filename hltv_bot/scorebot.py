@@ -26,6 +26,8 @@ from hltv_bot.eio import (
     parse_open,
     split_ws_packets,
 )
+from hltv_bot.cdp import CdpUnavailable
+from hltv_bot.scorebot_chrome import chrome_scorebot_enabled, iter_scorebot_chrome
 from hltv_bot.session import BrowserSession
 
 log = logging.getLogger("hltv_bot.scorebot")
@@ -550,6 +552,7 @@ def iter_scorebot(
     *,
     base: str = SCOREBOT_DEFAULT,
     timeout: float = 55.0,
+    match_url: str | None = None,
 ) -> Iterator[tuple[str, Any]]:
     """Yield (event_name, payload). Handshake on polling, then Engine.IO websocket.
 
@@ -566,6 +569,30 @@ def iter_scorebot(
         base,
         sess.impersonate,
     )
+
+    if chrome_scorebot_enabled():
+        while True:
+            try:
+                log.info("scorebot via chrome tab listId=%s", list_id)
+                yield from iter_scorebot_chrome(
+                    list_id,
+                    base=base,
+                    match_url=match_url,
+                )
+            except CdpUnavailable as e:
+                log.warning("chrome scorebot unavailable, curl_cffi fallback: %s", e)
+                break
+            except Exception as e:
+                wait = reconnect_wait(RECONNECT_MIN, http_5xx=False)
+                log.info("chrome scorebot error, reconnect in %.1fs: %s", wait, e)
+                yield _trace(f"chrome {clip(e, 120)} retry {wait:.0f}s")
+                yield (
+                    "status",
+                    {"state": "reconnect", "detail": str(e)[:80], "wait": round(wait, 1)},
+                )
+                time.sleep(wait)
+                continue
+            time.sleep(RECONNECT_MIN)
 
     backoff = RECONNECT_MIN
     while True:

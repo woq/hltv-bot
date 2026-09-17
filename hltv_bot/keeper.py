@@ -99,8 +99,14 @@ def tick_keeper(bot: Any, *, sleep: Any = None) -> None:
         bot._was_challenge = False
         bot._challenge_alerted_at = 0.0
     if not vnc_up():
+        keep_urls: list[str] = []
+        w = getattr(bot, "watch", None)
+        if w is not None and not w.stop.is_set():
+            mu = str((w.meta or {}).get("url") or "")
+            if mu:
+                keep_urls.append(mu)
         try:
-            close_extra_pages(url)
+            close_extra_pages(url, keep_urls=keep_urls)
         except Exception:
             log.debug("close extra tabs skipped", exc_info=True)
 
