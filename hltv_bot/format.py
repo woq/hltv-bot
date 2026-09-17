@@ -607,7 +607,7 @@ def _score_parts(snap: dict) -> tuple[object, object]:
 
 
 def format_rich_stats_html(snap: dict) -> str:
-    """Collapsed roster + round history. Own Telegram message so log edits do not re-fold it."""
+    """Roster + round history. Own Telegram message; expanded (not details)."""
     teams = list(snap.get("teams") or [])
     ct_team = teams[0] if teams else {"name": (snap.get("team2") or {}).get("name") or "CT", "players": []}
     t_team = teams[1] if len(teams) > 1 else {"name": (snap.get("team1") or {}).get("name") or "T", "players": []}
@@ -623,7 +623,7 @@ def format_rich_stats_html(snap: dict) -> str:
     summary = f"Stats {h(ct)}–{h(t)}"
     if not stats_inner:
         return f"<p>{summary}</p>"
-    return f"<details><summary>{summary}</summary>{''.join(stats_inner)}</details>"
+    return f"<p>{summary}</p>" + "".join(stats_inner)
 
 
 def format_rich_log_html(snap: dict, *, log_limit: int = 12) -> str:

@@ -67,14 +67,14 @@ def test_format_contains_score_and_log():
     assert "<mark>CT</mark>" in rich
     assert "<b>T</b>" in rich
     assert "<aside>" not in rich
-    assert rich.startswith("<details>")
-    assert "<summary>Stats" in rich
-    assert rich.index("<details>") < rich.index("killed")
+    assert "<p>Stats" in rich
+    assert "<details>" not in rich
     from hltv_bot.format import format_rich_log_html, format_rich_stats_html
 
     stats = format_rich_stats_html(SNAP)
     live = format_rich_log_html(SNAP)
-    assert "<details>" in stats
+    assert "<p>Stats" in stats
+    assert "<details>" not in stats
     assert "killed" not in stats
     assert "<details>" not in live
     assert "killed" in live or "huNter-" in live
@@ -209,17 +209,18 @@ def test_log_bomb_and_round_are_two_columns():
     assert "killed donk" in plus_rich
 
 
-def test_stats_collapsed_and_history_on_top():
+def test_stats_expanded_and_history_on_top():
     snap = dict(SNAP)
     snap["history"] = [
         {"n": 1, "winner": "CT", "winType": "CTs_Win"},
         {"n": 2, "winner": "T", "winType": "Target_Bombed"},
     ]
     rich = format_rich_html(snap)
-    assert rich.startswith("<details>")
+    assert "<details>" not in rich
+    assert rich.startswith("<p>Stats")
     assert "R1 CT elim" in rich
     assert "R2 T bomb" in rich
-    assert rich.index("<details>") < rich.index("<table bordered compact>")
+    assert rich.index("R1 CT elim") < rich.index("<table bordered compact>")
     assert rich.rfind("<p><i>") > rich.rfind("<table")
 
 

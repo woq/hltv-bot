@@ -6,7 +6,7 @@
 
 - **`/watch` / `/bump`**：Rich Message。全局只 watch 一场。卡片只发给发过 `/watch` 的群（已有场次本群 `/watch` 加入）；不要默认广播所有授权群。新卡片只有该群 `/bump`。`/stop` 退本群并删除该群观赛卡片，`/stop all` 停全部并删掉所有观赛卡片。换比赛不要删旧卡片，原地 edit。
 - **`/matches` 和其余通知**：`/matches` 默认渲染深色图片（`sendPhoto`，支持 `T1`/`T2`/`T3` 评级筛选，附快捷 `/watch` 命令）并支持 `text` 纯文本回退；其余通知普通 `sendMessage` + HTML。好复制，**不用**按 Rich 规范检查。30s 后自动删（用户命令也删；若群组未授予 Bot 删消息管理员权限则跳过，**`/watch` 命令和观赛卡片不删**）。
-- 记分板拆成**两条** Rich：上条折叠战绩（回合史 + 名单，只在 K/D/回合史变时 edit）；下条比分表 + log + 链接状态（Kill 只 edit 这条，避免 details 被重新叠上）。不要 h3/ul/footer 文章壳。log 文案全英语。
+- 记分板拆成**两条** Rich：上条战绩（回合史 + 名单，默认展开，只在 K/D/回合史变时 edit）；下条比分表 + log + 链接状态（Kill 只 edit 这条）。不要 h3/ul/footer 文章壳。log 文案全英语。
 - 拿不到数据时**下条**改成 DEBUG 痕迹，上条战绩不动；恢复后再 edit 回记分板。有过比分后链路断开则结算（LIVE→SCORE），不拆卡片。
 
 ## 提交 / push 前

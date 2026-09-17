@@ -380,7 +380,7 @@ semantic key（忽略坐标 / flasher / eventId）：
 
 顺序（Rich HTML，无 h3/ul/footer）：
 
-1. `<details>`（默认折叠）summary `Stats {ct}–{t}`
+1. 战绩消息（默认展开）`Stats {ct}–{t}`
    - `history` → 一行 `R1 CT elim · R2 T bomb · …`
    - `teams` → 两张名单表（Player / K / A / D / ADR）
 2. 比分表：CT 名、本图分、T 名；caption `LIVE · Map · R{n}`
