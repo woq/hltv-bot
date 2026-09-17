@@ -597,18 +597,21 @@ def _history_line(history: list[dict]) -> str:
     return "<p>" + " · ".join(bits) + "</p>"
 
 
-def format_rich_html(snap: dict, *, log_limit: int = 12) -> str:
-    """Score strip + collapsed stats + log + link line (no article chrome)."""
-    teams = list(snap.get("teams") or [])
-    ct_team = teams[0] if teams else {"name": (snap.get("team2") or {}).get("name") or "CT", "players": []}
-    t_team = teams[1] if len(teams) > 1 else {"name": (snap.get("team1") or {}).get("name") or "T", "players": []}
+def _score_parts(snap: dict) -> tuple[object, object]:
     ct = snap.get("ctScore")
     t = snap.get("tScore")
     if ct is None or t is None:
         parts = str(snap.get("scoreText") or "0-0").replace(":", "-").split("-")
         ct, t = (parts + ["0", "0"])[:2]
-    map_name, round_n = _map_and_round(snap)
-    url = str(snap.get("url") or "")
+    return ct, t
+
+
+def format_rich_stats_html(snap: dict) -> str:
+    """Collapsed roster + round history. Own Telegram message so log edits do not re-fold it."""
+    teams = list(snap.get("teams") or [])
+    ct_team = teams[0] if teams else {"name": (snap.get("team2") or {}).get("name") or "CT", "players": []}
+    t_team = teams[1] if len(teams) > 1 else {"name": (snap.get("team1") or {}).get("name") or "T", "players": []}
+    ct, t = _score_parts(snap)
     history = list(snap.get("history") or [])
     stats_inner: list[str] = []
     hist_html = _history_line(history)
@@ -617,34 +620,47 @@ def format_rich_html(snap: dict, *, log_limit: int = 12) -> str:
     if _sorted_players(ct_team) or _sorted_players(t_team):
         stats_inner.append(_side_table("CT", ct_team, ct=True))
         stats_inner.append(_side_table("T", t_team, ct=False))
-    blocks: list[str] = []
-    if stats_inner:
-        summary = f"Stats {h(ct)}–{h(t)}"
-        blocks.append(f"<details><summary>{summary}</summary>{''.join(stats_inner)}</details>")
-    blocks.append(
-        _score_board(
-            left_name=str(ct_team.get("name") or "CT"),
-            right_name=str(t_team.get("name") or "T"),
-            left_score=ct,
-            right_score=t,
-            left_side="CT",
-            right_side="T",
-            map_name=map_name,
-            round_n=round_n,
-            live=bool(snap.get("live")),
-            url=url,
-        )
+    summary = f"Stats {h(ct)}–{h(t)}"
+    if not stats_inner:
+        return f"<p>{summary}</p>"
+    return f"<details><summary>{summary}</summary>{''.join(stats_inner)}</details>"
+
+
+def format_rich_log_html(snap: dict, *, log_limit: int = 12) -> str:
+    """Score strip + kill log + link line. Separate message; safe to edit every kill."""
+    teams = list(snap.get("teams") or [])
+    ct_team = teams[0] if teams else {"name": (snap.get("team2") or {}).get("name") or "CT", "players": []}
+    t_team = teams[1] if len(teams) > 1 else {"name": (snap.get("team1") or {}).get("name") or "T", "players": []}
+    ct, t = _score_parts(snap)
+    map_name, round_n = _map_and_round(snap)
+    return "".join(
+        [
+            _score_board(
+                left_name=str(ct_team.get("name") or "CT"),
+                right_name=str(t_team.get("name") or "T"),
+                left_score=ct,
+                right_score=t,
+                left_side="CT",
+                right_side="T",
+                map_name=map_name,
+                round_n=round_n,
+                live=bool(snap.get("live")),
+                url=str(snap.get("url") or ""),
+            ),
+            _log_table(snap.get("log") or [], limit=log_limit),
+            _status_line(
+                str(snap.get("link") or "connected"),
+                str(snap.get("notice") or ""),
+                snap.get("next_at"),
+                snap=snap,
+            ),
+        ]
     )
-    blocks.append(_log_table(snap.get("log") or [], limit=log_limit))
-    blocks.append(
-        _status_line(
-            str(snap.get("link") or "connected"),
-            str(snap.get("notice") or ""),
-            snap.get("next_at"),
-            snap=snap,
-        )
-    )
-    return "".join(blocks)
+
+
+def format_rich_html(snap: dict, *, log_limit: int = 12) -> str:
+    """Concatenation for tests; live watch sends stats and log as two messages."""
+    return format_rich_stats_html(snap) + format_rich_log_html(snap, log_limit=log_limit)
 
 
 def format_telegram(snap: dict, *, log_limit: int = 15) -> str:

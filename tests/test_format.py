@@ -70,6 +70,14 @@ def test_format_contains_score_and_log():
     assert rich.startswith("<details>")
     assert "<summary>Stats" in rich
     assert rich.index("<details>") < rich.index("killed")
+    from hltv_bot.format import format_rich_log_html, format_rich_stats_html
+
+    stats = format_rich_stats_html(SNAP)
+    live = format_rich_log_html(SNAP)
+    assert "<details>" in stats
+    assert "killed" not in stats
+    assert "<details>" not in live
+    assert "killed" in live or "huNter-" in live
     assert "connected" in rich
     assert "R19" in rich
 

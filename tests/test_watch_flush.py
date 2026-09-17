@@ -120,6 +120,41 @@ def test_flush_without_message_id_does_not_send():
     assert bot.tg.sent == []
 
 
+def test_flush_send_new_two_messages():
+    bot = _bot()
+    st = _state()
+    bot._flush_watch(
+        st,
+        stats_html="<details>s</details>",
+        log_html="<table>log</table>",
+        send_new=True,
+        chat_id=1,
+    )
+    assert len(bot.tg.sent) == 2
+    card = st.cards[1]
+    assert card.stats_id != card.log_id
+    assert card.stats_id and card.log_id
+
+
+def test_kill_edit_does_not_touch_stats_message():
+    bot = _bot()
+    st = _state(
+        cards={
+            1: WatchCard(
+                chat_id=1,
+                stats_id=6,
+                log_id=7,
+                sent_stats="<details>s</details>",
+                sent_log="oldlog",
+            )
+        }
+    )
+    bot._flush_watch(st, stats_html="<details>s</details>", log_html="newlog")
+    edited_ids = [m for _, m, _ in bot.tg.edited]
+    assert 6 not in edited_ids
+    assert 7 in edited_ids
+
+
 def test_bump_is_the_only_new_send():
     bot = _bot()
     st = _state(
