@@ -6,7 +6,14 @@ import threading
 import time
 from typing import Any
 
-from hltv_bot.cdp import CdpUnavailable, DEFAULT_CDP, KEEPER_URL, fetch_keeper_snapshot
+from hltv_bot.cdp import (
+    CdpUnavailable,
+    DEFAULT_CDP,
+    KEEPER_URL,
+    close_extra_pages,
+    fetch_keeper_snapshot,
+    vnc_up,
+)
 from hltv_bot.session import is_challenge_cdp
 
 log = logging.getLogger("hltv_bot.keeper")
@@ -65,6 +72,7 @@ def tick_keeper(bot: Any, *, sleep: Any = None) -> None:
     bot.keeper_title = snap.title
     bot.keeper_url_seen = snap.url
     challenge = is_challenge_cdp(snap.title, snap.url, snap.cookies)
+    bot.keeper_challenge = challenge
     bot.keeper_clearance = (not challenge) and bot.session.has_clearance()
     if challenge:
         bot.keeper_cdp = "up"
@@ -90,6 +98,11 @@ def tick_keeper(bot: Any, *, sleep: Any = None) -> None:
         bot._notify_admins("<b>HLTV Chrome keeper: clearance restored</b>")
         bot._was_challenge = False
         bot._challenge_alerted_at = 0.0
+    if not vnc_up():
+        try:
+            close_extra_pages(url)
+        except Exception:
+            log.debug("close extra tabs skipped", exc_info=True)
 
 
 def _loop(bot: Any) -> None:

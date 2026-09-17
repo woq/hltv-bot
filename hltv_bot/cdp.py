@@ -3,9 +3,11 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import socket
 from dataclasses import dataclass
 from typing import Any
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 from hltv_bot.session import is_challenge_cdp
@@ -55,6 +57,30 @@ def _list_pages(base: str, timeout: float) -> list[dict]:
     if not isinstance(data, list):
         return []
     return [p for p in data if isinstance(p, dict)]
+
+
+def port_open(port: int, host: str = "127.0.0.1", timeout: float = 0.2) -> bool:
+    s = socket.socket()
+    s.settimeout(timeout)
+    try:
+        s.connect((host, int(port)))
+        return True
+    except OSError:
+        return False
+    finally:
+        s.close()
+
+
+def vnc_up() -> bool:
+    return port_open(6080) or port_open(5900)
+
+
+def chrome_cgroup_bytes() -> int | None:
+    path = "/sys/fs/cgroup/system.slice/hltv-chrome.service/memory.current"
+    try:
+        return int(open(path, encoding="utf-8").read().strip())
+    except (OSError, ValueError):
+        return None
 
 
 def _pick_keeper_page(pages: list[dict]) -> dict | None:
@@ -192,3 +218,99 @@ def fetch_keeper_snapshot(
         screenshot_png=screenshot,
         created_new_tab=created,
     )
+
+
+_FETCH_JS = """\
+(async () => {
+  const res = await fetch(%s, {credentials: "include", redirect: "follow"});
+  const buf = new Uint8Array(await res.arrayBuffer());
+  let bin = "";
+  const step = 0x8000;
+  for (let i = 0; i < buf.length; i += step) {
+    bin += String.fromCharCode.apply(null, buf.subarray(i, i + step));
+  }
+  const headers = {};
+  res.headers.forEach((v, k) => { headers[k] = v; });
+  return {status: res.status, url: res.url, headers: headers, body: btoa(bin)};
+})()
+"""
+
+
+def fetch_via_chrome(
+    url: str,
+    base: str = DEFAULT_CDP,
+    *,
+    timeout: float = 25.0,
+) -> tuple[int, bytes, dict[str, str]]:
+    """GET url inside the existing HLTV tab (cookies stay in Chrome). Attach only."""
+    pages = _list_pages(base, min(timeout, 5.0))
+    page = _pick_keeper_page(pages)
+    if page is None:
+        raise CdpUnavailable("no hltv.org page for fetch")
+    ws_url = str(page.get("webSocketDebuggerUrl") or "")
+    if not ws_url:
+        raise CdpUnavailable("missing webSocketDebuggerUrl")
+    client = _connect_ws(ws_url, timeout)
+    try:
+        try:
+            client.call("Runtime.enable", timeout=min(timeout, 5.0))
+        except CdpError:
+            pass
+        ev = client.call(
+            "Runtime.evaluate",
+            {
+                "expression": _FETCH_JS % json.dumps(url),
+                "awaitPromise": True,
+                "returnByValue": True,
+            },
+            timeout=timeout,
+        )
+        if ev.get("exceptionDetails"):
+            raise CdpError(str(ev.get("exceptionDetails")))
+        inner = ev.get("result") if isinstance(ev.get("result"), dict) else {}
+        val = inner.get("value") if isinstance(inner.get("value"), dict) else {}
+        status = int(val.get("status") or 0)
+        body_b64 = str(val.get("body") or "")
+        body = base64.b64decode(body_b64) if body_b64 else b""
+        raw_h = val.get("headers") if isinstance(val.get("headers"), dict) else {}
+        headers = {str(k).lower(): str(v) for k, v in raw_h.items()}
+        log.debug("chrome fetch %s status=%s bytes=%s", url, status, len(body))
+        return status, body, headers
+    finally:
+        try:
+            client.ws.close()
+        except Exception:
+            pass
+
+
+def close_extra_pages(
+    base: str = DEFAULT_CDP,
+    *,
+    keep_path: str = "/matches",
+    timeout: float = 3.0,
+) -> int:
+    """Drop extra HLTV tabs; keep the keeper /matches page. Skip when VNC is up."""
+    if vnc_up():
+        return 0
+    pages = _list_pages(base, timeout)
+    n = 0
+    for p in pages:
+        if p.get("type") != "page":
+            continue
+        url = str(p.get("url") or "")
+        if "hltv.org" not in url:
+            continue
+        parsed = urlparse(url)
+        if keep_path in (parsed.path or ""):
+            continue
+        tid = str(p.get("id") or "")
+        if not tid:
+            continue
+        try:
+            _http_json("GET", f"{base.rstrip('/')}/json/close/{tid}", timeout)
+            n += 1
+        except (CdpError, CdpUnavailable):
+            log.debug("close tab failed id=%s", tid)
+    if n:
+        log.info("closed extra chrome tabs n=%s", n)
+    return n

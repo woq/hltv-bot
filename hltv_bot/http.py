@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any
+from urllib.parse import urlparse
 
 from hltv_bot.debuglog import clip
 from hltv_bot.ratelimit import Gap
@@ -30,6 +32,39 @@ def _session_kwargs(sess: BrowserSession, timeout: float) -> dict[str, Any]:
     }
 
 
+def _want_chrome(method: str, url: str) -> bool:
+    mode = (os.environ.get("HLTV_HTTP") or "chrome").strip().lower()
+    if mode in {"curl", "cffi", "off", "0"}:
+        return False
+    if method.upper() != "GET":
+        return False
+    host = (urlparse(url).hostname or "").lower()
+    if host.startswith("scorebot"):
+        return False
+    return host == "hltv.org" or host.endswith(".hltv.org")
+
+
+def _via_chrome(url: str, timeout: float) -> tuple[int, bytes, dict[str, str]]:
+    from hltv_bot.cdp import fetch_via_chrome
+
+    status, body, hdrs = fetch_via_chrome(url, timeout=timeout)
+    log.debug(
+        "http GET %s via=chrome status=%s bytes=%s cf=%s",
+        url,
+        status,
+        len(body or b""),
+        hdrs.get("cf-mitigated") or hdrs.get("cf-ray"),
+    )
+    if status in (403, 429) or hdrs.get("cf-mitigated") == "challenge":
+        raise CloudflareError(status, url, hdrs.get("cf-mitigated", ""))
+    head = (body or b"")[:2000]
+    if b"Just a moment" in head:
+        raise CloudflareError(status or 403, url, "challenge-html")
+    if status >= 400:
+        raise RuntimeError(f"chrome fetch HTTP {status} {url}")
+    return status, body, hdrs
+
+
 def request(
     sess: BrowserSession,
     method: str,
@@ -44,12 +79,19 @@ def request(
     waited = _HTML_GAP.sleep(HTML_MIN_GAP)
     if waited:
         log.debug("html gap slept %.2fs", waited)
+    if _want_chrome(method, url):
+        try:
+            return _via_chrome(url, timeout)
+        except CloudflareError:
+            raise
+        except Exception as e:
+            log.warning("chrome fetch failed, curl_cffi fallback: %s", clip(e, 160))
     kw = _session_kwargs(sess, timeout)
     extra = dict(kw["headers"])
     if headers:
         extra.update(headers)
     with Session(**{k: v for k, v in kw.items() if k != "headers"}) as client:
-        log.debug("http %s %s timeout=%s impersonate=%s", method, url, timeout, sess.impersonate)
+        log.debug("http %s %s via=curl timeout=%s impersonate=%s", method, url, timeout, sess.impersonate)
         resp = client.request(method, url, data=data, headers=extra)
         hdrs = {k.lower(): v for k, v in resp.headers.items()}
         log.debug(

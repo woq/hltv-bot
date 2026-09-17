@@ -238,6 +238,7 @@ class HltvTelegramBot:
         self.keeper_url_seen = ""
         self.keeper_exported_at = 0.0
         self.keeper_clearance = False
+        self.keeper_challenge = False
         self._was_challenge = False
         self._challenge_alerted_at = 0.0
         self._cdp_down_alerted_at = 0.0
@@ -607,6 +608,23 @@ class HltvTelegramBot:
             exported = f"{max(0.0, time.monotonic() - self.keeper_exported_at):.0f}s ago"
         cdp_line = self.keeper_cdp if self.cdp_url else "off"
         keeper_title = self.keeper_title or "-"
+        from hltv_bot.cdp import chrome_cgroup_bytes, vnc_up
+
+        rss = chrome_cgroup_bytes()
+        chrome_line = cdp_line
+        if rss is not None:
+            chrome_line = f"{cdp_line} {rss / 1048576:.0f}M"
+        tab = keeper_title
+        if self.keeper_url_seen:
+            tab = f"{keeper_title}"
+        cf_live = "yes" if self.keeper_clearance else "NO"
+        if self.keeper_challenge:
+            cf_live = "challenge"
+        http_via = (os.environ.get("HLTV_HTTP") or "chrome").strip().lower()
+        if http_via in {"curl", "cffi", "off", "0"}:
+            http_via = "curl"
+        else:
+            http_via = "chrome"
 
         self._reply(
             chat_id,
@@ -618,8 +636,11 @@ class HltvTelegramBot:
                     ("cf_clearance", "yes" if self.session.has_clearance() else "NO"),
                     ("cookies", h(", ".join(names) or "(none)")),
                     ("session", h(str(self.session.path or ""))),
-                    ("cdp", h(cdp_line)),
-                    ("keeper", h(keeper_title)),
+                    ("chrome", h(chrome_line)),
+                    ("tab", h(tab)),
+                    ("cf live", h(cf_live)),
+                    ("vnc", "on" if vnc_up() else "off"),
+                    ("http", http_via),
                     ("exported", h(exported)),
                     ("watch", h(watch_line)),
                     ("new card", "/bump only"),

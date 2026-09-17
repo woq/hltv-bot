@@ -123,6 +123,10 @@ def test_cdp_and_keeper_do_not_use_curl_cffi():
     assert "curl_cffi" not in _src("cdp.py")
     assert "curl_cffi" not in _src("keeper.py")
     assert 'origin="http://127.0.0.1:9222"' in _src("cdp.py")
+    assert "def fetch_via_chrome" in _src("cdp.py")
+    assert "awaitPromise" in _src("cdp.py")
+    assert "def _want_chrome" in _src("http.py")
+    assert "close_extra_pages" in _src("cdp.py")
 
 
 def test_deploy_does_not_start_chrome():
