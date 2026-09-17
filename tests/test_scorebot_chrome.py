@@ -2,6 +2,7 @@ from hltv_bot.scorebot_chrome import (
     _SCOREBOT_JS,
     _pick_match_page,
     chrome_scorebot_enabled,
+    scorebot_js,
 )
 
 
@@ -47,6 +48,16 @@ def test_pick_match_page_skips_keeper_list():
 def test_scorebot_env_curl_disables_chrome(monkeypatch):
     monkeypatch.setenv("HLTV_SCOREBOT", "curl")
     assert chrome_scorebot_enabled() is False
+
+
+def test_scorebot_js_keeps_modulo_and_injects_ids():
+    js = scorebot_js("2398088", "https://scorebot-lb.hltv.org/")
+    assert '"2398088"' in js
+    assert '"https://scorebot-lb.hltv.org"' in js
+    assert "pingCount % 10" in js
+    assert "__LIST_ID__" not in js
+    assert "__HTTP_BASE__" not in js
+    assert "%s" not in js
 
 
 def test_iter_scorebot_tries_chrome_first():

@@ -251,8 +251,18 @@ _SCOREBOT_JS = r"""
     openWs(sid);
   }
   handshake();
-})(%s, %s);
+})(__LIST_ID__, __HTTP_BASE__);
 """
+
+
+def scorebot_js(list_id: str | int, http_base: str) -> str:
+    """Fill the page script. Do not use % formatting — JS has modulo."""
+    js = _SCOREBOT_JS
+    if "__LIST_ID__" not in js or "__HTTP_BASE__" not in js:
+        raise RuntimeError("scorebot js missing inject marks")
+    return js.replace("__LIST_ID__", json.dumps(str(list_id)), 1).replace(
+        "__HTTP_BASE__", json.dumps(http_base.rstrip("/")), 1
+    )
 
 
 def chrome_scorebot_enabled() -> bool:
@@ -335,7 +345,7 @@ def iter_scorebot_chrome(
             except CdpError:
                 pass
         client.call("Runtime.addBinding", {"name": "hltvBotEvent"}, timeout=5.0)
-        expr = _SCOREBOT_JS % (json.dumps(list_id), json.dumps(base.rstrip("/")))
+        expr = scorebot_js(list_id, base)
         ev = client.call(
             "Runtime.evaluate",
             {"expression": expr, "returnByValue": True},
