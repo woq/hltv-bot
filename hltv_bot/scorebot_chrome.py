@@ -30,8 +30,18 @@ _SCOREBOT_JS = r"""
   if (window.__hltvBotScorebot && window.__hltvBotScorebot.stop) {
     window.__hltvBotScorebot.stop();
   }
+  const pending = [];
+  let flushTimer = null;
+  function flush() {
+    flushTimer = null;
+    const batch = pending.splice(0, pending.length);
+    for (let i = 0; i < batch.length; i++) {
+      try { hltvBotEvent(JSON.stringify({name: batch[i][0], payload: batch[i][1]})); } catch (e) {}
+    }
+  }
   const emit = (name, payload) => {
-    try { hltvBotEvent(JSON.stringify({name: name, payload: payload})); } catch (e) {}
+    pending.push([name, payload]);
+    if (!flushTimer) flushTimer = setTimeout(flush, 0);
   };
   let ws = null;
   let stopped = false;
@@ -111,44 +121,43 @@ _SCOREBOT_JS = r"""
     }, wait * 1000);
   }
   function handlePkt(d, via) {
-    lastPkt = clip(d, 24);
-    if (d === "3probe") {
+    d = String(d || "");
+    const t = d.trim();
+    lastPkt = clip(t, 24);
+    armPing();
+    if (t === "3probe") {
       try { ws.send("5"); } catch (e) {}
       sendReady();
       emit("status", {state: "connected", transport: "ws"});
-      armPing();
       return;
     }
-    if (d === "2") {
+    if (t === "2" || t === "2probe") {
       pingCount += 1;
-      try { ws.send("3"); } catch (e) {}
+      try { ws.send(t === "2probe" ? "3probe" : "3"); } catch (e) {}
       if (pingCount === 1 || pingCount % 10 === 0) {
         emit("trace", {text: "ws ping n=" + pingCount + " pong"});
       }
-      armPing();
       return;
     }
-    if (d === "1") {
+    if (t === "1") {
       emit("trace", {text: "eio close packet via=" + via});
       try { if (ws) ws.close(); } catch (e) {}
       return;
     }
-    if (d.charAt(0) === "0") {
+    if (t.charAt(0) === "0") {
       try {
-        const o = JSON.parse(d.slice(1));
+        const o = JSON.parse(t.slice(1));
         if (o.pingInterval) pingInterval = o.pingInterval;
         if (o.pingTimeout) pingTimeout = o.pingTimeout;
         emit("trace", {text: "ws open sid=" + (o.sid || "") + " ping=" + pingInterval + "/" + pingTimeout});
       } catch (e) {}
-      try { ws.send("2probe"); } catch (e) {}
-      armPing();
       return;
     }
-    if (d === "40") {
+    if (t === "40") {
       sendReady();
       return;
     }
-    const evp = parseEvent(d);
+    const evp = parseEvent(t);
     if (evp) {
       evCount += 1;
       if (evp.name === "scoreboard") {
@@ -160,8 +169,8 @@ _SCOREBOT_JS = r"""
       emit(evp.name, evp.payload);
       return;
     }
-    if (d && d !== "3" && d !== "6") {
-      emit("trace", {text: "ws pkt via=" + via + " " + clip(d, 40)});
+    if (t && t !== "3" && t !== "6") {
+      emit("trace", {text: "ws pkt via=" + via + " " + clip(t, 40)});
     }
   }
   function openWs(sid) {
@@ -180,11 +189,16 @@ _SCOREBOT_JS = r"""
     lastBoard = "";
     sock.onopen = function() { sock.send("2probe"); };
     sock.onmessage = function(ev) {
-      const raw = ev.data;
+      let raw = ev.data;
       if (typeof raw !== "string") {
-        const kind = (raw && raw.constructor && raw.constructor.name) || typeof raw;
-        emit("trace", {text: "ws non-text " + kind});
-        return;
+        try {
+          if (raw && raw.buffer) raw = raw.buffer;
+          raw = new TextDecoder().decode(raw);
+        } catch (e) {
+          const kind = (ev.data && ev.data.constructor && ev.data.constructor.name) || typeof ev.data;
+          emit("trace", {text: "ws non-text " + kind});
+          return;
+        }
       }
       const parts = packets(raw);
       for (let i = 0; i < parts.length; i++) handlePkt(parts[i], "ws");

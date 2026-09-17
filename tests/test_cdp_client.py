@@ -4,7 +4,25 @@ from urllib.error import URLError
 
 import pytest
 
-from hltv_bot.cdp import CdpUnavailable, _CdpWs, fetch_keeper_snapshot
+from hltv_bot.cdp import CdpUnavailable, _CdpWs, _pick_keeper_page, fetch_keeper_snapshot
+
+
+def test_pick_keeper_prefers_list_over_match_tab():
+    pages = [
+        {
+            "type": "page",
+            "url": "https://www.hltv.org/matches/2398088/mouz-vs-nrg",
+            "id": "match",
+        },
+        {
+            "type": "page",
+            "url": "https://www.hltv.org/matches",
+            "id": "list",
+        },
+    ]
+    got = _pick_keeper_page(pages)
+    assert got is not None
+    assert got["id"] == "list"
 
 
 def test_cdp_origin_literal():

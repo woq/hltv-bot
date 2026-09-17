@@ -83,8 +83,13 @@ def chrome_cgroup_bytes() -> int | None:
         return None
 
 
+def _is_matches_list(url: str) -> bool:
+    return urlparse(url).path.rstrip("/") == "/matches"
+
+
 def _pick_keeper_page(pages: list[dict]) -> dict | None:
     found: list[dict] = []
+    lists: list[dict] = []
     for p in pages:
         if p.get("type") != "page":
             continue
@@ -94,10 +99,11 @@ def _pick_keeper_page(pages: list[dict]) -> dict | None:
         if "hltv.org" not in url:
             continue
         found.append(p)
-    if not found:
-        return None
-    matches = [p for p in found if "/matches" in str(p.get("url") or "")]
-    return (matches or found)[0]
+        if _is_matches_list(url):
+            lists.append(p)
+    if lists:
+        return lists[0]
+    return found[0] if found else None
 
 
 class _CdpWs:
