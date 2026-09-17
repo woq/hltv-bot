@@ -1,7 +1,9 @@
 [Unit]
 Description=HLTV Telegram bot
-After=network-online.target
+After=network-online.target hltv-chrome.service
 Wants=network-online.target
+# After= chrome only: wait if Chrome is already starting. Do NOT Wants=/Requires=
+# chrome — restart hltv-bot (deploy) must not start Chrome.
 
 [Service]
 Type=simple

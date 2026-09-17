@@ -13,6 +13,8 @@ TLS 按 MCP 里 Chrome 134 的头伪装（`curl_cffi` impersonate + 抄来的 `s
 | [docs/scorebot-data.md](docs/scorebot-data.md) | Scorebot / snapshot / log 归一化数据结构（全面） |
 | [docs/cloudflare.md](docs/cloudflare.md) | Cookie / TLS 伪装、403 处理、试过的方案 |
 | [docs/scorebot-transport.md](docs/scorebot-transport.md) | 为什么停在 poll；WS 403、Lightpanda、WebKit 实验结论 |
+| [docs/chrome-gateway.md](docs/chrome-gateway.md) | 常驻 Chrome 当过 CF 网关：方案评估（A 两步，不上 extension 后台 WS） |
+| [docs/chrome-keeper-step1.md](docs/chrome-keeper-step1.md) | Step 1 实现设计：keeper 自动续 cookie 保 poll（三 PR） |
 | [deploy/chrome-session/README.md](deploy/chrome-session/README.md) | VPS 常驻真 Chrome（备用，内存要求高） |
 
 ## 安装
@@ -40,14 +42,14 @@ python3 -m hltv_bot import-cookie -o data/session.json
 
 ## GitHub Actions 部署
 
-推到 `main` 会在 Actions 里 **checkout + rsync（SSH）** 到 **154.83.86.212:/opt/hltv-bot**，再 `uv sync` 并重启服务。VPS **不需要 git**。  
-`.env` / `data/session.json` 已存在则不覆盖。
+推到 `main` 会在 Actions 里 **checkout + rsync（SSH）** 到 **191.96.243.105:/opt/hltv-bot**，再 `uv sync` 并 **只** 重启 `hltv-bot`。VPS **不需要 git**。  
+`.env` / `data/session.json` 已存在则不覆盖。Chrome keeper（`hltv-chrome.service`）不跟 bot 重启；bootstrap 见 [deploy/chrome-session/README.md](deploy/chrome-session/README.md)。
 
 本机生成部署密钥并写入 GitHub Secret（**私钥不要进仓库**）：
 
 ```bash
 ssh-keygen -t ed25519 -C "github-hltv-bot-deploy" -f ./hltv-bot-deploy -N ""
-ssh-copy-id -i ./hltv-bot-deploy.pub root@154.83.86.212
+ssh-copy-id -i ./hltv-bot-deploy.pub -p 2233 root@191.96.243.105
 gh secret set DEPLOY_SSH_KEY --repo woq/hltv-bot < ./hltv-bot-deploy
 shred -u ./hltv-bot-deploy
 # 公钥可留着：./hltv-bot-deploy.pub

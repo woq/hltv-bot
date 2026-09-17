@@ -23,10 +23,11 @@ jobs:
           mkdir -p ~/.ssh
           printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
-          ssh-keyscan -H 154.83.86.212 >> ~/.ssh/known_hosts 2>/dev/null
-          HOST=root@154.83.86.212
-          ssh "$HOST" 'mkdir -p /opt/hltv-bot/data'
-          rsync -az \
+          ssh-keyscan -p 2233 -H 191.96.243.105 >> ~/.ssh/known_hosts 2>/dev/null
+          HOST=root@191.96.243.105
+          SSH="ssh -p 2233 -o IdentitiesOnly=yes"
+          $SSH "$HOST" 'mkdir -p /opt/hltv-bot/data'
+          rsync -az -e "$SSH" \
             --exclude '.git/' \
             --exclude '.github/' \
             --exclude '.venv/' \
@@ -37,7 +38,7 @@ jobs:
             --exclude 'data/chats.json' \
             --exclude 'data/settings.json' \
             ./ "$HOST:/opt/hltv-bot/"
-          ssh "$HOST" bash -s <<'REMOTE'
+          $SSH "$HOST" bash -s <<'REMOTE'
           set -euo pipefail
           export PATH="/root/.local/bin:/usr/local/bin:$PATH"
           export DEBIAN_FRONTEND=noninteractive
@@ -50,8 +51,13 @@ jobs:
           test -f data/session.json || cp data/session.example.json data/session.json
           uv sync
           install -m 644 deploy/hltv-bot.service /etc/systemd/system/hltv-bot.service
+          install -m 644 deploy/chrome-session/hltv-chrome.service /etc/systemd/system/hltv-chrome.service
+          install -m 644 deploy/chrome-session/xvfb@.service /etc/systemd/system/xvfb@.service
+          install -m 644 deploy/chrome-session/x11vnc@.service /etc/systemd/system/x11vnc@.service
+          install -m 644 deploy/chrome-session/novnc.service /etc/systemd/system/novnc.service
           systemctl daemon-reload
           systemctl enable hltv-bot
+          # Chrome/Xvfb units are installed above; do not enable or start them here.
           systemctl restart hltv-bot
           systemctl is-active hltv-bot
           REMOTE

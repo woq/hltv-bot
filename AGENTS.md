@@ -12,7 +12,7 @@
 ## 提交 / push 前
 
 ```bash
-python3 -m pytest tests/test_rich_message.py tests/test_format.py tests/test_watch_flush.py tests/test_gaps.py -q
+python3 -m pytest tests/test_rich_message.py tests/test_format.py tests/test_watch_flush.py tests/test_gaps.py tests/test_cdp_cookies.py tests/test_cdp_client.py tests/test_keeper.py tests/test_scorebot_cookie_refresh.py tests/test_cookie_cmd.py -q
 ```
 
 不要用「源码里禁止 sendMessage」这种检查。`test_gaps.py` 核对出站间隔有没有漏（HTML 3s、poll、握手退避、WS 重试、Telegram edit / 429 / getUpdates）。
@@ -23,3 +23,5 @@ python3 -m pytest tests/test_rich_message.py tests/test_format.py tests/test_wat
 - `docs/scorebot-data.md` — Scorebot / snapshot / 归一化 log 字段
 - `docs/cloudflare.md` — Cookie / TLS
 - `docs/scorebot-transport.md` — 传输层试过什么、为什么停在 poll
+- `docs/chrome-gateway.md` — 常驻 Chrome 过 CF 网关：方案评估与落地顺序
+- `docs/chrome-keeper-step1.md` — Step 1 实现设计（keeper 保 poll；三 PR）

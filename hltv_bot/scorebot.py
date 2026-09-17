@@ -84,6 +84,16 @@ def scorebot_base(url: str | None) -> str:
 OnEvent = Callable[[str, Any], None]
 
 
+def _refresh_cookie_header(headers: dict[str, str], sess: Any | None) -> dict[str, str]:
+    if sess is None:
+        return headers
+    cookie = sess.as_headers().get("cookie")
+    if cookie:
+        headers = dict(headers)
+        headers["cookie"] = cookie
+    return headers
+
+
 def _poll_url(base: str, extra: dict[str, str] | None = None) -> str:
     q = {"EIO": "3", "transport": "polling", "t": eio_t()}
     if extra:
@@ -419,6 +429,7 @@ def iter_poll_events(
 
     if not skip_ready:
         emit = encode_event("readyForMatch", ready_for_match_payload(list_id))
+        headers = _refresh_cookie_header(headers, sess)
         post_headers = dict(headers)
         post_headers["content-type"] = "text/plain;charset=UTF-8"
         post_url = _poll_url(base, {"sid": sid})
@@ -463,6 +474,7 @@ def iter_poll_events(
             next_ws = now + ws_retry_every
         t0 = time.monotonic()
         try:
+            headers = _refresh_cookie_header(headers, sess)
             resp = client.get(
                 _poll_url(base, {"sid": sid}),
                 headers=headers,
@@ -548,7 +560,6 @@ def iter_scorebot(
 
     from hltv_bot.http import CloudflareError
 
-    headers = sess.as_headers()
     log.info(
         "scorebot start listId=%s base=%s impersonate=%s transport=websocket",
         list_id,
@@ -558,6 +569,7 @@ def iter_scorebot(
 
     backoff = RECONNECT_MIN
     while True:
+        headers = sess.as_headers()
         client = Session(impersonate=sess.impersonate, timeout=timeout, verify=True)
         ws = None
         try:
@@ -569,6 +581,7 @@ def iter_scorebot(
                 try:
                     url = _poll_url(base)
                     log.debug("handshake GET %s attempt=%s", url, attempt)
+                    headers = _refresh_cookie_header(headers, sess)
                     resp = client.get(url, headers=headers)
                     log.debug(
                         "handshake status=%s bytes=%s",

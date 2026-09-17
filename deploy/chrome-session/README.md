@@ -1,63 +1,77 @@
-# 持久 Chrome（Ubuntu LTS VPS）
+# 持久 Chrome（root VPS）
 
-同一出口 IP 时，Cloudflare 拦的是 **headless / 一次性 profile**，不是 IP。  
-做法：真 Chrome（有显示）+ 固定 `user-data-dir` + 远程调试口。第一次用 noVNC 手过 challenge，cookie 和 profile 写在磁盘上。
+Chrome **默认拒绝 uid 0**。这台机是专用 root 盒，unit 用 `--no-sandbox --disable-setuid-sandbox` 跑 headed Chrome。不要再搞 `hltv` 系统用户。
 
-不要：每次 Python 里 `launch(headless=True)`。  
-要：Chrome 用 systemd 常驻，bot 只 `connect_over_cdp`。
+Bot **只 attach** `127.0.0.1:9222`，不 launch。首次 noVNC 过 Turnstile；之后 idle keeper tab 自己续 `__cf_bm`。
 
-## 1. 装 Google Chrome（别用 snap Chromium）
+不要：`--headless`、每次 Python `launch`、`Restart=always`（新进程会掉 clearance）。
+
+## 1. Bootstrap（root，一次性）
 
 ```bash
-sudo install -m 0755 -d /etc/apt/keyrings
+# 1G swap
+if ! swapon --show | grep -q /swapfile; then
+  fallocate -l 1G /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=1024
+  chmod 600 /swapfile
+  mkswap /swapfile
+  swapon /swapfile
+  grep -q /swapfile /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
+fi
+sysctl -w vm.swappiness=10
+echo 'vm.swappiness=10' > /etc/sysctl.d/99-hltv-swappiness.conf
+
+install -m 0755 -d /etc/apt/keyrings
 curl -fsSL https://dl.google.com/linux/linux_signing_key.pub \
-  | sudo gpg --dearmor -o /etc/apt/keyrings/google-chrome.gpg
+  | gpg --dearmor -o /etc/apt/keyrings/google-chrome.gpg
 echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" \
-  | sudo tee /etc/apt/sources.list.d/google-chrome.list
-sudo apt update
-sudo apt install -y google-chrome-stable xvfb x11vnc novnc websockify
-sudo useradd --system --home /var/lib/hltv-chrome --create-home --shell /usr/sbin/nologin hltv
-sudo mkdir -p /var/lib/hltv-chrome/profile
-sudo chown -R hltv:hltv /var/lib/hltv-chrome
+  > /etc/apt/sources.list.d/google-chrome.list
+apt-get update
+apt-get install -y google-chrome-stable xvfb x11vnc novnc websockify smem
+
+mkdir -p /var/lib/hltv-chrome/profile
+
+install -m 644 /opt/hltv-bot/deploy/chrome-session/*.service /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now xvfb@99 hltv-chrome
+systemctl start x11vnc@99 novnc
 ```
 
-## 2. systemd
-
-把本目录三个 unit 拷到 `/etc/systemd/system/`，然后：
+本机 **只转 6080**（不要转 9222）：
 
 ```bash
-sudo systemctl daemon-reload
-sudo systemctl enable --now xvfb@99 hltv-chrome x11vnc@99
-# 可选，只为第一次过人机：
-sudo systemctl enable --now novnc
+ssh -L 6080:127.0.0.1:6080 hytron
+# http://127.0.0.1:6080/vnc.html 过 Turnstile，不要清 profile
 ```
 
-Chrome 调试口只绑 `127.0.0.1:9222`。外网访问用 SSH：
+过完：`systemctl stop novnc x11vnc@99`。不要 disable xvfb/chrome。
 
 ```bash
-ssh -L 9222:127.0.0.1:9222 -L 6080:127.0.0.1:6080 user@vps
+curl -sS http://127.0.0.1:9222/json/list
+ss -lntp | grep -E '9222|5900|6080'   # 不得听 0.0.0.0
+python3 -m hltv_bot export-cookies
+smem -p -k | grep -i chrome
 ```
 
-浏览器打开 `http://127.0.0.1:6080/vnc.html`，在桌面里打开 HLTV，过完 challenge 后 **不要清 profile**。
+GitHub Actions **只** `restart hltv-bot`，绝不 start/restart Chrome。Chrome 挂了是维护事件：`systemctl start hltv-chrome` + 再 VNC。
 
-## 3. Bot 只复用这个浏览器
+## 2. 分辨率
 
-```python
-from playwright.sync_api import sync_playwright
+默认 Xvfb `800x600x16`、Chrome `--window-size=800,600`。Turnstile 白板则维护窗口改 unit 后 `systemctl start` Chrome（`Restart=no`）：
 
-with sync_playwright() as p:
-    browser = p.chromium.connect_over_cdp("http://127.0.0.1:9222")
-    context = browser.contexts[0]  # 已有登录/CF 的那个
-    page = context.pages[0] if context.pages else context.new_page()
-    page.goto("https://www.hltv.org/matches/2396932/x")
-    # evaluate extract.js …
+1. `1280x720x24` + `--window-size=1280,720`
+2. `1920x1080x24` + `--window-size=1920,1080`
+
+## 3. Cookie 导出
+
+```bash
+python3 -m hltv_bot export-cookies
+python3 -m hltv_bot export-cookies --write   # challenge 时拒绝写盘
 ```
 
-`cf_clearance` / `__cf_bm` 会过期；**profile 目录会自动再过一次轻量检查**。只要 Chrome 进程还在、不是 headless，通常不用你每次点。进程死了再起来，偶发要再开一次 VNC。
+`--write` 不是热更新。bot 里的 keeper 线程会原地改同一个 `BrowserSession`。
 
 ## 注意
 
-- 内存：常驻 Chrome 预留 **1GB+**。`/dev/shm` 小的机器已加 `--disable-dev-shm-usage`。
-- 升级 Chrome 后重启 `hltv-chrome` 即可，profile 可留。
-- 不要用 root 跑 Chrome。
-- Scorebot 也在 CF 后：在 **这个已过验证的 page 里** `fetch` / 注入 socket，不要把 cookie 拷到裸 urllib。
+- `MemoryMax=900M` 是 RAM 杀进程线。过夜 `smem`，Chrome RSS 目标 <700M。
+- 不要 `--disable-software-rasterizer`（和 `--disable-gpu` 一起关会没 canvas）。
+- 不要 `Page.reload` keeper。不要自动重启 Chrome。

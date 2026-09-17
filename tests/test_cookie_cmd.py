@@ -14,6 +14,10 @@ class FakeTg:
     def send_message(self, chat_id, text):
         return self.send_rich(chat_id, text)
 
+    def send_photo(self, chat_id, photo_bytes, caption="", filename="matches.png"):
+        self.sent.append(caption)
+        return {"message_id": 50}
+
     def delete_message(self, chat_id, message_id):
         self.deleted.append(message_id)
 
@@ -60,6 +64,7 @@ def test_cookie_command_waits_then_saves(tmp_path):
         user_id=DEFAULT_ADMIN_ID,
     )
     assert 1 not in bot._await_cookie
+    assert bot.session is sess
     assert bot.session.has_clearance()
     assert 99 in tg.deleted
     assert any("已更新" in t for t in tg.sent)

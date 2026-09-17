@@ -39,6 +39,15 @@ def main(argv: list[str] | None = None) -> int:
     ls = sub.add_parser("matches", help="fetch match list with impersonate+cookie")
     ls.add_argument("-s", "--session", default="data/session.json")
 
+    exp = sub.add_parser("export-cookies", help="CDP dump Chrome cookies (not hot reload)")
+    exp.add_argument("--cdp", default=os.environ.get("HLTV_CDP_URL") or "http://127.0.0.1:9222")
+    exp.add_argument("-s", "--session", default=os.environ.get("HLTV_SESSION") or "data/session.json")
+    exp.add_argument(
+        "--write",
+        action="store_true",
+        help="merge into session.json; refuses on challenge; not a live bot hot-reload",
+    )
+
     sub.add_parser("bot", help="run Telegram long-poll bot")
 
     args = p.parse_args(argv)
@@ -82,6 +91,29 @@ def main(argv: list[str] | None = None) -> int:
         sess = load_session(args.session)
         for row in fetch_matches(sess):
             print(("LIVE " if row["live"] == "1" else "     ") + row["id"], row["title"])
+        return 0
+    if args.cmd == "export-cookies":
+        from hltv_bot.cdp import fetch_keeper_snapshot
+        from hltv_bot.session import is_challenge_cdp, merge_cdp_cookies
+
+        snap = fetch_keeper_snapshot(args.cdp)
+        names = [str(c.get("name") or "") for c in snap.cookies]
+        print("title", snap.title)
+        print("url", snap.url)
+        print("cookies", ",".join(n for n in names if n))
+        challenge = is_challenge_cdp(snap.title, snap.url, snap.cookies)
+        print("challenge", challenge)
+        print("cf_clearance", any(n == "cf_clearance" for n in names) and not challenge)
+        if not args.write:
+            return 0
+        if challenge:
+            print("refusing --write on challenge", file=sys.stderr)
+            print("title", snap.title, file=sys.stderr)
+            return 1
+        sess = load_session(args.session)
+        merged = merge_cdp_cookies(sess.cookie, snap.cookies)
+        save_cookie(args.session, merged)
+        print("wrote", args.session)
         return 0
     if args.cmd == "bot":
         from hltv_bot.bot import bot_from_env

@@ -32,7 +32,7 @@ from hltv_bot.live import (
 from hltv_bot.matches import fetch_match_meta, fetch_matches
 from hltv_bot.scorebot import WS_RETRY_EVERY, iter_scorebot, scorebot_base
 from hltv_bot.ratelimit import Cooldown
-from hltv_bot.session import BrowserSession, load_session, save_cookie
+from hltv_bot.session import BrowserSession, load_session
 from hltv_bot.snapshot import snapshot_fingerprint
 from hltv_bot.telegram_api import Telegram, is_not_modified
 
@@ -218,13 +218,29 @@ class HltvTelegramBot:
         *,
         admin_ids: set[int] | None = None,
         bump_seconds: float = 0.0,
+        cdp_url: str | None = None,
+        keeper_url: str | None = None,
+        export_every: float = 300.0,
     ):
         self.tg = tg
         self.session = session
         self.admin_ids = admin_ids or {DEFAULT_ADMIN_ID}
         self.bump_seconds = bump_seconds
+        self.cdp_url = cdp_url
+        self.keeper_url = keeper_url or "https://www.hltv.org/matches"
+        self.export_every = float(export_every)
         self.watch: WatchState | None = None
         self._thread: threading.Thread | None = None
+        self._keeper_thread: threading.Thread | None = None
+        self._keeper_stop = threading.Event()
+        self.keeper_cdp = "down"
+        self.keeper_title = ""
+        self.keeper_url_seen = ""
+        self.keeper_exported_at = 0.0
+        self.keeper_clearance = False
+        self._was_challenge = False
+        self._challenge_alerted_at = 0.0
+        self._cdp_down_alerted_at = 0.0
         self._await_cookie: set[int] = set()
         self._cool = Cooldown()
         self._ws_fail = WsFailDigest()
@@ -586,6 +602,11 @@ class HltvTelegramBot:
         from datetime import datetime, timedelta, timezone
         cst = timezone(timedelta(hours=8))
         deployed_str = datetime.fromtimestamp(self.started_at, cst).strftime("%m-%d %H:%M:%S")
+        exported = "-"
+        if self.keeper_exported_at:
+            exported = f"{max(0.0, time.monotonic() - self.keeper_exported_at):.0f}s ago"
+        cdp_line = self.keeper_cdp if self.cdp_url else "off"
+        keeper_title = self.keeper_title or "-"
 
         self._reply(
             chat_id,
@@ -597,6 +618,9 @@ class HltvTelegramBot:
                     ("cf_clearance", "yes" if self.session.has_clearance() else "NO"),
                     ("cookies", h(", ".join(names) or "(none)")),
                     ("session", h(str(self.session.path or ""))),
+                    ("cdp", h(cdp_line)),
+                    ("keeper", h(keeper_title)),
+                    ("exported", h(exported)),
                     ("watch", h(watch_line)),
                     ("new card", "/bump only"),
                     ("admins", h(", ".join(str(i) for i in sorted(self.admin_ids)))),
@@ -733,10 +757,11 @@ class HltvTelegramBot:
 
     def _apply_cookie(self, chat_id: int, raw: str, *, message_id: int | None) -> None:
         self._await_cookie.discard(chat_id)
-        path = self._session_path()
-        save_cookie(path, raw)
-        self.session = load_session(path)
-        names = self.session.cookie_names()
+        orig = self.session
+        if not orig.path:
+            orig.path = self._session_path()
+        orig.apply_paste(raw)
+        names = orig.cookie_names()
         if not names:
             self._reply(chat_id, "Cookie 是空的，没写入有效内容")
             return
@@ -744,7 +769,7 @@ class HltvTelegramBot:
             self.tg.delete_message(chat_id, message_id)
         extra = ""
         if self.watch and not self.watch.stop.is_set():
-            extra = "\n正在 watch：新 cookie 下一轮请求会用上；仍 403 就 /stop 再 /watch。"
+            extra = "\n正在 watch：新 cookie 下一轮 poll 会用上；已经 403 的卡片不会自愈，再 /watch。"
         self._reply(
             chat_id,
             "Cookie 已更新\n"
@@ -936,6 +961,19 @@ class HltvTelegramBot:
                 self.tg.send_message(aid, text)
             except Exception:
                 log.exception("notify admin %s", aid)
+
+    def _notify_admins_photo(
+        self,
+        photo_bytes: bytes,
+        *,
+        caption: str,
+        filename: str = "cf-challenge.png",
+    ) -> None:
+        for aid in sorted(self.admin_ids):
+            try:
+                self.tg.send_photo(aid, photo_bytes, caption=caption[:1024], filename=filename)
+            except Exception:
+                log.exception("notify admin photo %s", aid)
 
     def _on_ws_fail(self, state: WatchState, payload: dict) -> None:
         err = str(payload.get("error") or "websocket failed")
@@ -1178,6 +1216,9 @@ class HltvTelegramBot:
 
     def run(self) -> None:
         log.info("bot start admins=%s", sorted(self.admin_ids))
+        from hltv_bot.keeper import start_keeper_thread
+
+        start_keeper_thread(self)
         try:
             self.register_commands()
             log.info("setMyCommands ok")
@@ -1252,9 +1293,14 @@ def bot_from_env() -> HltvTelegramBot:
     seed = os.environ.get("TELEGRAM_CHAT_ID") or ""
     if seed.strip().lstrip("-").isdigit():
         add_group(int(seed.strip()), "seed")
+    from hltv_bot.keeper import cdp_url_from_env, export_every_from_env
+
     return HltvTelegramBot(
         Telegram(token),
         load_session(session_path),
         admin_ids=admin_ids,
         bump_seconds=bump,
+        cdp_url=cdp_url_from_env(os.environ.get("HLTV_CDP_URL")),
+        keeper_url=os.environ.get("HLTV_KEEPER_URL") or None,
+        export_every=export_every_from_env(os.environ.get("HLTV_CDP_EXPORT_EVERY")),
     )

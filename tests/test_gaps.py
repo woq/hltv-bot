@@ -14,6 +14,7 @@ from hltv_bot.bot import (
 )
 from hltv_bot.http import HTML_MIN_GAP
 from hltv_bot.matches import MATCH_CACHE_TTL
+from hltv_bot.keeper import ADMIN_CHALLENGE_EVERY, CDP_EXPORT_EVERY
 from hltv_bot.scorebot import (
     POLL_5XX_GAP,
     POLL_EMPTY_GAP,
@@ -56,6 +57,8 @@ def test_delay_floors():
     assert CMD_COOLDOWN["/watch"] >= 6.0
     assert CMD_COOLDOWN["/bump"] >= 4.0
     assert DEFAULT_CMD_COOLDOWN >= 1.2
+    assert CDP_EXPORT_EVERY >= 60.0
+    assert ADMIN_CHALLENGE_EVERY >= 300.0
 
 
 def test_html_only_goes_through_gapped_request():
@@ -112,5 +115,29 @@ def test_urlopen_only_telegram_or_cli_probe():
         text = path.read_text(encoding="utf-8")
         if "urlopen" in text:
             hits.append(path.name)
-    assert set(hits) <= {"telegram_api.py", "scorebot.py"}
+    assert set(hits) <= {"telegram_api.py", "scorebot.py", "cdp.py"}
     assert "def probe_scorebot" in _src("scorebot.py")
+
+
+def test_cdp_and_keeper_do_not_use_curl_cffi():
+    assert "curl_cffi" not in _src("cdp.py")
+    assert "curl_cffi" not in _src("keeper.py")
+    assert 'origin="http://127.0.0.1:9222"' in _src("cdp.py")
+
+
+def test_deploy_does_not_start_chrome():
+    wf = (ROOT / ".github/workflows/deploy.yml").read_text(encoding="utf-8")
+    assert "systemctl restart hltv-bot" in wf
+    assert "ssh-keyscan -p 2233" in wf
+    assert 'SSH="ssh -p 2233' in wf
+    assert "systemctl restart hltv-chrome" not in wf
+    assert "systemctl enable hltv-chrome" not in wf
+    assert "systemctl start hltv-chrome" not in wf
+    assert "systemctl start xvfb@" not in wf
+    chrome = (ROOT / "deploy/chrome-session/hltv-chrome.service").read_text(encoding="utf-8")
+    assert "Restart=no" in chrome
+    assert "Restart=always" not in chrome
+    assert "--no-sandbox" in chrome
+    bot_unit = (ROOT / "deploy/hltv-bot.service").read_text(encoding="utf-8")
+    assert "Wants=hltv-chrome" not in bot_unit
+    assert "Requires=hltv-chrome" not in bot_unit

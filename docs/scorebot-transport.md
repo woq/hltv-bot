@@ -99,3 +99,5 @@ title=Just a moment... cf=True
 
 以后若要真 WS：给机器加内存，跑 `deploy/chrome-session/`，在**已打开的比赛页**里连，不要再抄 cookie 去 Upgrade，也不要再试 Lightpanda / WebKitGTK。
 
+2G 机上的分步评估（keeper 保 poll → 页内 WS；不上 MV3 后台 WS）见 [chrome-gateway.md](chrome-gateway.md)。
+

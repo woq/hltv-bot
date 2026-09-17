@@ -323,12 +323,12 @@ dependencies = [
     { name = "pypdfium2" },
     { name = "python-dotenv" },
     { name = "weasyprint" },
+    { name = "websocket-client" },
 ]
 
 [package.dev-dependencies]
 dev = [
     { name = "pytest" },
-    { name = "websocket-client" },
 ]
 
 [package.metadata]
@@ -338,13 +338,11 @@ requires-dist = [
     { name = "pypdfium2", specifier = ">=5.13.0" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "weasyprint", specifier = ">=70.0" },
+    { name = "websocket-client", specifier = ">=1.9.2" },
 ]
 
 [package.metadata.requires-dev]
-dev = [
-    { name = "pytest", specifier = ">=9.1.1" },
-    { name = "websocket-client", specifier = ">=1.9.2" },
-]
+dev = [{ name = "pytest", specifier = ">=9.1.1" }]
 
 [[package]]
 name = "iniconfig"
