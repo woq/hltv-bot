@@ -12,6 +12,19 @@ def test_js_is_page_ws_not_python_upgrade():
     assert "curl_cffi" not in _SCOREBOT_JS
 
 
+def test_js_reconnects_and_logs_close_code():
+    assert "scheduleReconnect" in _SCOREBOT_JS
+    assert "ev.code" in _SCOREBOT_JS
+    assert "ws ping timeout" in _SCOREBOT_JS
+    assert "handshake()" in _SCOREBOT_JS
+    assert "pingInterval" in _SCOREBOT_JS
+    assert "let pingTimeout = 60000" in _SCOREBOT_JS
+    assert "ws ping n=" in _SCOREBOT_JS
+    assert "readyForMatch listId=" in _SCOREBOT_JS
+    assert "ws non-text" in _SCOREBOT_JS
+    assert 'detail: "ws close"' not in _SCOREBOT_JS
+
+
 def test_pick_match_page_skips_keeper_list():
     pages = [
         {"type": "page", "url": "https://www.hltv.org/matches", "id": "a"},

@@ -79,6 +79,7 @@ def test_handshake_get_after_reconnect_sees_new_cookie(monkeypatch):
     sess = BrowserSession("chrome131", {"user-agent": "UA"}, "cf_clearance=tok; __cf_bm=before")
     _ReconnectSession.shared_gets = []
     _ReconnectSession.sess = sess
+    monkeypatch.setattr("hltv_bot.scorebot.chrome_scorebot_enabled", lambda: False)
     monkeypatch.setattr("curl_cffi.requests.Session", _ReconnectSession)
     monkeypatch.setattr("hltv_bot.scorebot.reconnect_wait", lambda *a, **k: 0)
     monkeypatch.setattr("hltv_bot.scorebot.time.sleep", lambda *a, **k: None)

@@ -35,8 +35,27 @@ _SCOREBOT_JS = r"""
   };
   let ws = null;
   let stopped = false;
-  window.__hltvBotScorebot = { stop: function() { stopped = true; try { if (ws) ws.close(); } catch (e) {} } };
+  let reconnectTimer = null;
+  let pingTimer = null;
+  let handshakeBusy = false;
+  let pingInterval = 25000;
+  let pingTimeout = 60000;
+  let lastPkt = "";
+  let pingCount = 0;
+  let evCount = 0;
+  let openedAt = 0;
+  let lastBoard = "";
+  window.__hltvBotScorebot = { stop: function() {
+    stopped = true;
+    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+    if (pingTimer) { clearTimeout(pingTimer); pingTimer = null; }
+    try { if (ws) ws.close(); } catch (e) {}
+  } };
 
+  function clip(s, n) {
+    s = String(s || "");
+    return s.length > n ? s.slice(0, n) : s;
+  }
   function packets(text) {
     if (!text) return [];
     if (text.indexOf("\x1e") >= 0) return text.split("\x1e").filter(Boolean);
@@ -71,62 +90,150 @@ _SCOREBOT_JS = r"""
     const inner = JSON.stringify({token: "", listId: String(listId)});
     return "42" + JSON.stringify(["readyForMatch", inner]);
   }
+  function sendReady() {
+    try { ws.send(readyPkt()); } catch (e) {}
+    emit("trace", {text: "readyForMatch listId=" + listId});
+  }
+  function armPing() {
+    if (pingTimer) clearTimeout(pingTimer);
+    pingTimer = setTimeout(function() {
+      emit("trace", {text: "ws ping timeout interval=" + pingInterval + " timeout=" + pingTimeout});
+      try { if (ws) ws.close(); } catch (e) {}
+    }, pingInterval + pingTimeout);
+  }
+  function scheduleReconnect(detail) {
+    if (stopped || reconnectTimer) return;
+    const wait = 15;
+    emit("status", {state: "reconnect", detail: detail, wait: wait});
+    reconnectTimer = setTimeout(function() {
+      reconnectTimer = null;
+      if (!stopped) handshake();
+    }, wait * 1000);
+  }
+  function handlePkt(d, via) {
+    lastPkt = clip(d, 24);
+    if (d === "3probe") {
+      try { ws.send("5"); } catch (e) {}
+      sendReady();
+      emit("status", {state: "connected", transport: "ws"});
+      armPing();
+      return;
+    }
+    if (d === "2") {
+      pingCount += 1;
+      try { ws.send("3"); } catch (e) {}
+      if (pingCount === 1 || pingCount % 10 === 0) {
+        emit("trace", {text: "ws ping n=" + pingCount + " pong"});
+      }
+      armPing();
+      return;
+    }
+    if (d === "1") {
+      emit("trace", {text: "eio close packet via=" + via});
+      try { if (ws) ws.close(); } catch (e) {}
+      return;
+    }
+    if (d.charAt(0) === "0") {
+      try {
+        const o = JSON.parse(d.slice(1));
+        if (o.pingInterval) pingInterval = o.pingInterval;
+        if (o.pingTimeout) pingTimeout = o.pingTimeout;
+        emit("trace", {text: "ws open sid=" + (o.sid || "") + " ping=" + pingInterval + "/" + pingTimeout});
+      } catch (e) {}
+      try { ws.send("2probe"); } catch (e) {}
+      armPing();
+      return;
+    }
+    if (d === "40") {
+      sendReady();
+      return;
+    }
+    const evp = parseEvent(d);
+    if (evp) {
+      evCount += 1;
+      if (evp.name === "scoreboard") {
+        let raw = "";
+        try { raw = JSON.stringify(evp.payload); } catch (e) {}
+        if (raw && raw === lastBoard) return;
+        lastBoard = raw;
+      }
+      emit(evp.name, evp.payload);
+      return;
+    }
+    if (d && d !== "3" && d !== "6") {
+      emit("trace", {text: "ws pkt via=" + via + " " + clip(d, 40)});
+    }
+  }
   function openWs(sid) {
+    if (ws) {
+      try { ws.onclose = null; ws.onerror = null; ws.onmessage = null; ws.close(); } catch (e) {}
+      ws = null;
+    }
     const wsBase = httpBase.replace(/^http/i, "ws");
     let u = wsBase.replace(/\/$/, "") + "/socket.io/?EIO=3&transport=websocket";
     if (sid) u += "&sid=" + encodeURIComponent(sid);
     const sock = new WebSocket(u);
     ws = sock;
+    openedAt = Date.now();
+    pingCount = 0;
+    evCount = 0;
+    lastBoard = "";
     sock.onopen = function() { sock.send("2probe"); };
     sock.onmessage = function(ev) {
-      const d = String(ev.data);
-      if (d === "3probe") {
-        sock.send("5");
-        sock.send(readyPkt());
-        emit("status", {state: "connected", transport: "ws"});
+      const raw = ev.data;
+      if (typeof raw !== "string") {
+        const kind = (raw && raw.constructor && raw.constructor.name) || typeof raw;
+        emit("trace", {text: "ws non-text " + kind});
         return;
       }
-      if (d === "2") { sock.send("3"); return; }
-      if (d.charAt(0) === "0") {
-        try {
-          const o = JSON.parse(d.slice(1));
-          emit("trace", {text: "ws open sid=" + (o.sid || sid || "")});
-        } catch (e) {}
-        sock.send("2probe");
-        return;
-      }
-      if (d === "40") { sock.send(readyPkt()); return; }
-      const evp = parseEvent(d);
-      if (evp) emit(evp.name, evp.payload);
+      const parts = packets(raw);
+      for (let i = 0; i < parts.length; i++) handlePkt(parts[i], "ws");
     };
-    sock.onerror = function() { emit("trace", {text: "ws error"}); };
-    sock.onclose = function() {
-      if (!stopped) emit("status", {state: "reconnect", detail: "ws close", wait: 15});
+    sock.onerror = function(ev) {
+      emit("trace", {text: "ws error " + clip(ev && (ev.message || ev.type), 60)});
+    };
+    sock.onclose = function(ev) {
+      if (pingTimer) { clearTimeout(pingTimer); pingTimer = null; }
+      const up = openedAt ? Math.round((Date.now() - openedAt) / 1000) : 0;
+      const detail = "ws close code=" + (ev && ev.code) + " clean=" + !!(ev && ev.wasClean)
+        + " reason=" + clip(ev && ev.reason, 40);
+      emit("trace", {text: detail + " last=" + lastPkt + " pings=" + pingCount + " ev=" + evCount + " up=" + up + "s"});
+      if (!stopped) scheduleReconnect("ws close code=" + (ev && ev.code));
     };
   }
   async function handshake() {
+    if (stopped || handshakeBusy) return;
+    handshakeBusy = true;
     emit("status", {state: "connecting", transport: "chrome"});
-    const u = httpBase.replace(/\/$/, "") + "/socket.io/?EIO=3&transport=polling&t=" + Date.now();
+    const u = httpBase.replace(/\/$/, "") + "/socket.io/?EIO=3&transport=polling&t=" + Date.now().toString(36);
     let sid = "";
+    let openBits = "";
     try {
       const r = await fetch(u, {credentials: "include", mode: "cors"});
       const text = await r.text();
-      emit("trace", {text: "handshake HTTP " + r.status + " bytes=" + text.length});
-      if (r.status === 403 || r.status === 429) {
-        emit("status", {state: "disconnected", detail: "Cloudflare " + r.status});
-        return;
-      }
       for (const pkt of packets(text)) {
         if (pkt.charAt(0) === "0") {
           const o = JSON.parse(pkt.slice(1));
           sid = o.sid || "";
+          if (o.pingInterval) pingInterval = o.pingInterval;
+          if (o.pingTimeout) pingTimeout = o.pingTimeout;
+          openBits = " sid=" + sid + " ping=" + pingInterval + "/" + pingTimeout;
         }
         const evp = parseEvent(pkt);
         if (evp) emit(evp.name, evp.payload);
       }
+      emit("trace", {text: "handshake HTTP " + r.status + " bytes=" + text.length + openBits});
+      if (r.status === 403 || r.status === 429) {
+        handshakeBusy = false;
+        emit("status", {state: "disconnected", detail: "Cloudflare " + r.status});
+        scheduleReconnect("Cloudflare " + r.status);
+        return;
+      }
     } catch (e) {
       emit("trace", {text: "handshake fetch " + String(e)});
     }
+    handshakeBusy = false;
+    if (stopped) return;
     openWs(sid);
   }
   handshake();

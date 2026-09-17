@@ -868,6 +868,7 @@ class HltvTelegramBot:
         round_seen: int | None = None
         prev_ct: int | None = None
         prev_t: int | None = None
+        last_board_brief = ""
         try:
             stream = iter_scorebot(
                 self.session,
@@ -882,7 +883,10 @@ class HltvTelegramBot:
                 log.debug("watch event %s %s", name, event_brief(name, payload))
                 status_changed = False
                 if name == "trace" and isinstance(payload, dict):
-                    append_trace(state.trace, payload.get("text") or "")
+                    text = str(payload.get("text") or "")
+                    append_trace(state.trace, text)
+                    if text:
+                        log.info("watch %s", clip(text, 200))
                 elif name == "ws_fail" and isinstance(payload, dict):
                     self._on_ws_fail(state, payload)
                     continue
@@ -922,7 +926,10 @@ class HltvTelegramBot:
                     feed, round_seen = mark_new_round(feed, board, round_seen)
                     feed, prev_ct, prev_t = mark_round_over(feed, board, prev_ct, prev_t)
                     state.last_data_at = time.time()
-                    log.info("watch scoreboard %s", event_brief(name, payload))
+                    brief = event_brief(name, payload)
+                    if brief != last_board_brief:
+                        last_board_brief = brief
+                        log.info("watch scoreboard %s", brief)
                 elif name == "log":
                     before = len(feed)
                     new_feed = merge_log(feed, payload)
