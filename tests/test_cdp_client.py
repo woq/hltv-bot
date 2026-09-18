@@ -183,8 +183,9 @@ def test_close_extra_pages_drops_unrelated_matches_and_keeps_keeper(monkeypatch)
 
     n = close_extra_pages(
         "http://127.0.0.1:9222",
-        keep_urls=["https://www.hltv.org/matches/2398102/vitality-vs-furia"],
+        keep_urls=["https://www.hltv.org/matches/2398102/x"],
     )
     assert n == 1
     assert closed == ["http://127.0.0.1:9222/json/close/t3"]
+
 

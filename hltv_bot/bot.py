@@ -20,6 +20,7 @@ from hltv_bot.format import (
     format_watch_debug_html,
     h,
     plain_to_rich,
+    round_kill_counts,
 )
 from hltv_bot.render import classify_event_tier, render_events_image, render_matches_image, tier_rank
 from hltv_bot.http import CloudflareError
@@ -1135,19 +1136,18 @@ class HltvTelegramBot:
                     head = (snap.get("log") or [{}])[0]
                     if isinstance(head, dict):
                         head_type = str(head.get("type") or "")
+                head_kill_n = 0
+                if isinstance(snap, dict):
+                    head = (snap.get("log") or [{}])[0]
+                    if isinstance(head, dict) and head.get("type") == "kill":
+                        kill_counts = round_kill_counts(snap.get("log") or [])
+                        head_kill_n = kill_counts.get(id(head), 0)
                 force = status_changed or mode_switch or head_type in {
                     "round_start",
                     "round_over",
                     "round_over_ct",
                     "round_over_t",
-                } or any(
-                    s in log_html
-                    for s in (
-                        "<mark>3K</mark>",
-                        "<mark>4K</mark>",
-                        "<mark>ACE</mark>",
-                    )
-                )
+                } or head_kill_n >= 3
                 wait = now - state.last_edit
                 if wait < watch_edit_interval(state) and not force:
                     log.debug(

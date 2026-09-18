@@ -337,7 +337,24 @@ def close_extra_pages(
         path = (parsed.path or "").rstrip("/")
         if path == keep_path.rstrip("/") or path == "":
             continue
-        if any(url.startswith(k) or k in url for k in keep):
+        # Keep if URL starts with or contains any keep target, or if same match id /matches/<id>/
+        def _matches_keep(u: str, targets: tuple[str, ...]) -> bool:
+            u_path = urlparse(u).path.rstrip("/")
+            for k in targets:
+                if not k:
+                    continue
+                if u.startswith(k) or k in u:
+                    return True
+                k_path = urlparse(k).path.rstrip("/")
+                # If /matches/12345/x, check /matches/12345/ prefix
+                k_parts = [p for p in k_path.split("/") if p]
+                u_parts = [p for p in u_path.split("/") if p]
+                if len(k_parts) >= 2 and len(u_parts) >= 2:
+                    if k_parts[0] == "matches" and u_parts[0] == "matches" and k_parts[1] == u_parts[1]:
+                        return True
+            return False
+
+        if _matches_keep(url, keep):
             continue
         tid = str(p.get("id") or "")
         if not tid:
