@@ -311,7 +311,22 @@ def build_matches_html(
     font-weight: 600;
     white-space: nowrap;
     margin-left: 12px;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
   }}
+  .event-tier-badge {{
+    font-size: 10.5px;
+    font-weight: 700;
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-family: monospace;
+    letter-spacing: 0.5px;
+  }}
+  .event-banner.T1 .event-tier-badge {{ background: #451a20; color: #fca5a5; border: 1px solid #7f1d1d; }}
+  .event-banner.T2 .event-tier-badge {{ background: #3b2a14; color: #fde68a; border: 1px solid #78350f; }}
+  .event-banner.T3 .event-tier-badge {{ background: #172554; color: #93c5fd; border: 1px solid #1e3a8a; }}
+  .event-banner.Other .event-tier-badge {{ background: #1e293b; color: #94a3b8; border: 1px solid #334155; }}
   .match-table {{
     width: 100%;
     table-layout: fixed;
@@ -487,11 +502,13 @@ def build_matches_html(
 
                 ms = sorted(ms, key=_row_sort_key)
                 m_count_str = f"{len(ms)} MATCH{'ES' if len(ms) > 1 else ''}"
+                tier_label = f"[{t}]" if t != "Other" else ""
+                tier_badge_html = f'<span class="event-tier-badge">{tier_label}</span>' if tier_label else ''
                 html_parts.append(f"""
                 <div class="event-block">
                   <div class="event-banner {t}">
                     <span class="event-name">{_render_event_icon(ev)}{html.escape(ev)}</span>
-                    <span class="event-meta">{m_count_str}</span>
+                    <span class="event-meta">{tier_badge_html}<span>{m_count_str}</span></span>
                   </div>
                   <table class="match-table">{colgroup_html}
                 """)
