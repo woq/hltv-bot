@@ -572,6 +572,18 @@ class HltvTelegramBot:
             self._reply(chat_id, text)
             return
 
+        from hltv_bot.events import cache_event_logo
+
+        # Pre-cache logos for upcoming events to render sharp event icons
+        for ev in filtered[:15]:
+            eid = ev.get("id") or ""
+            logo_url = ev.get("logo_url") or ""
+            if eid and logo_url:
+                try:
+                    cache_event_logo(eid, logo_url, sess=self.session)
+                except Exception:
+                    pass
+
         self.tg.send_chat_action(chat_id, "upload_photo")
         try:
             from datetime import datetime, timedelta, timezone

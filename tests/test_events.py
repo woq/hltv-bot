@@ -140,6 +140,51 @@ def test_format_events_html():
     assert "💰 $1,000,000" in html
 
 
+def test_country_code_to_emoji_and_format_location():
+    from hltv_bot.events import country_code_to_emoji, format_location
+
+    assert country_code_to_emoji("PL") == "🇵🇱"
+    assert country_code_to_emoji("RO") == "🇷🇴"
+    assert country_code_to_emoji("CN") == "🇨🇳"
+    assert country_code_to_emoji("EU") == "🇪🇺"
+    assert country_code_to_emoji("WORLD") == "🌐"
+    assert country_code_to_emoji("") == ""
+
+    assert format_location("Katowice, Poland", "PL") == "🇵🇱 Katowice"
+    assert format_location("Malta", "MT") == "🇲🇹 Malta"
+    assert format_location("Sheffield, United Kingdom |", "GB") == "🇬🇧 Sheffield"
+    assert format_location("TBA", "WORLD") == "🌐"
+    assert format_location("", "") == "-"
+
+
+def test_filter_and_sort_events_3_months():
+    now = datetime(2026, 9, 18, 12, 0, tzinfo=CST)
+    events = [
+        {
+            "id": "1",
+            "name": "BLAST Event 2027",
+            "live": False,
+            "start_ts": 1789639200 + 120 * 86400,  # 120 days out
+            "end_ts": 1789639200 + 125 * 86400,
+        },
+        {
+            "id": "2",
+            "name": "PGL Major Singapore 2026",
+            "live": False,
+            "start_ts": 1796295600,  # ~76 days out
+            "end_ts": 1797159600,
+        },
+    ]
+    # Filter with max_days=92 (3 months)
+    filtered = filter_and_sort_events(events, allowed_tiers=("Major", "T1"), max_days=92, now=now)
+    assert len(filtered) == 1
+    assert filtered[0]["id"] == "2"
+
+    # Filter with max_days=None includes further events
+    filtered_all = filter_and_sort_events(events, allowed_tiers=("Major", "T1"), max_days=None, now=now)
+    assert len(filtered_all) == 2
+
+
 def test_render_events_image():
     from hltv_bot.render import render_events_image
 
@@ -152,6 +197,7 @@ def test_render_events_image():
             "start_ts": 1789639200,
             "end_ts": 1789898400,
             "location": "",
+            "country_code": "",
             "prize": "",
             "days_left": -1,
         },
@@ -163,6 +209,7 @@ def test_render_events_image():
             "start_ts": 1791021600,
             "end_ts": 1791712800,
             "location": "Katowice, Poland",
+            "country_code": "PL",
             "prize": "$1,000,000",
             "days_left": 15,
         },

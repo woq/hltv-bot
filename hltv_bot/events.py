@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import base64
+import json
 import logging
 import re
 from datetime import datetime, timedelta, timezone
 from html import unescape
+from pathlib import Path
 from typing import Sequence
 
 from hltv_bot.http import request
@@ -20,6 +23,136 @@ CST = timezone(timedelta(hours=8))
 
 def _clean(text: str) -> str:
     return re.sub(r"\s+", " ", unescape(text)).strip()
+
+
+def country_code_to_emoji(cc: str) -> str:
+    """Convert country/region code to Flag emoji."""
+    if not cc:
+        return ""
+    cc_u = cc.upper().strip()
+    if len(cc_u) == 2 and all("A" <= c <= "Z" for c in cc_u):
+        return chr(ord("🇦") + ord(cc_u[0]) - ord("A")) + chr(ord("🇦") + ord(cc_u[1]) - ord("A"))
+    if cc_u in ("EU", "EUROPE"):
+        return "🇪🇺"
+    if cc_u in ("WORLD", "INT"):
+        return "🌐"
+    if cc_u in ("NAM", "SAM"):
+        return "🌎"
+    if cc_u in ("ASIA", "OCE"):
+        return "🌏"
+    return ""
+
+
+def format_location(loc: str, cc: str = "") -> str:
+    """Format location with flag emoji and city name."""
+    flag = country_code_to_emoji(cc)
+    city = (loc or "").strip()
+    if "," in city:
+        city = city.split(",")[0].strip()
+    city = city.rstrip("|").strip()
+    if city in ("-", "_", "TBA", "TBD"):
+        city = ""
+
+    if flag and city:
+        return f"{flag} {city}"
+    if flag:
+        return flag
+    return city or "-"
+
+
+_LOGO_CACHE_DIR = Path("data/event_logos")
+
+
+def get_cached_logo_data_uri(event_id: str, logo_url: str = "") -> str:
+    """Return data URI for cached event logo, or empty string."""
+    if not event_id:
+        return ""
+    _LOGO_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    cache_file = _LOGO_CACHE_DIR / f"{event_id}.png"
+    if cache_file.exists():
+        try:
+            b64 = base64.b64encode(cache_file.read_bytes()).decode("ascii")
+            return f"data:image/png;base64,{b64}"
+        except Exception:
+            pass
+    return ""
+
+
+def _fetch_image_via_cdp(image_url: str, timeout: float = 8.0) -> bytes | None:
+    """Fetch an image using Chrome tab canvas to bypass Cloudflare hotlink protection."""
+    try:
+        from hltv_bot.cdp import _connect_ws, _list_pages, _pick_keeper_page, DEFAULT_CDP
+
+        pages = _list_pages(DEFAULT_CDP, min(timeout, 3.0))
+        page = _pick_keeper_page(pages)
+        if not page or not page.get("webSocketDebuggerUrl"):
+            return None
+        client = _connect_ws(str(page["webSocketDebuggerUrl"]), timeout)
+        try:
+            client.call("Runtime.enable", timeout=min(timeout, 3.0))
+            js = """(async () => {
+                return new Promise((resolve) => {
+                    const img = new Image();
+                    img.crossOrigin = 'anonymous';
+                    img.onload = () => {
+                        const canvas = document.createElement('canvas');
+                        canvas.width = img.naturalWidth;
+                        canvas.height = img.naturalHeight;
+                        const ctx = canvas.getContext('2d');
+                        ctx.drawImage(img, 0, 0);
+                        resolve(canvas.toDataURL('image/png'));
+                    };
+                    img.onerror = () => resolve('');
+                    img.src = %s;
+                });
+            })()""" % json.dumps(image_url)
+            res = client.call("Runtime.evaluate", {"expression": js, "awaitPromise": True, "returnByValue": True}, timeout=timeout)
+            val = str(res.get("result", {}).get("value") or "")
+            if val.startswith("data:image/png;base64,"):
+                return base64.b64decode(val.split(",", 1)[1])
+        finally:
+            try:
+                client.ws.close()
+            except Exception:
+                pass
+    except Exception as e:
+        log.debug("cdp canvas image fetch failed: %s", e)
+    return None
+
+
+def cache_event_logo(event_id: str, logo_url: str, sess: BrowserSession | None = None) -> str:
+    """Fetch event logo and cache to disk. Returns data URI or empty string."""
+    if not event_id or not logo_url:
+        return ""
+    _LOGO_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    cache_file = _LOGO_CACHE_DIR / f"{event_id}.png"
+    if cache_file.exists():
+        try:
+            b64 = base64.b64encode(cache_file.read_bytes()).decode("ascii")
+            return f"data:image/png;base64,{b64}"
+        except Exception:
+            pass
+
+    clean_url = unescape(logo_url)
+    img_data = _fetch_image_via_cdp(clean_url)
+
+    if not img_data and sess is not None:
+        try:
+            st, body, _ = request(sess, "GET", clean_url, timeout=10.0)
+            if st == 200 and body and len(body) > 100:
+                img_data = body
+        except Exception as e:
+            log.debug("fetch event logo failed id=%s url=%s: %s", event_id, clean_url, e)
+
+    if img_data:
+        try:
+            cache_file.write_bytes(img_data)
+            b64 = base64.b64encode(img_data).decode("ascii")
+            return f"data:image/png;base64,{b64}"
+        except Exception as e:
+            log.warning("failed to save event logo cache id=%s: %s", event_id, e)
+
+    return ""
 
 
 def parse_events_list(html: str) -> list[dict]:
@@ -42,6 +175,15 @@ def parse_events_list(html: str) -> list[dict]:
             dates = re.findall(r'data-unix="(\d+)"', content)
             start_ts = int(dates[0]) // 1000 if dates else 0
             end_ts = int(dates[1]) // 1000 if len(dates) > 1 else start_ts
+
+            logo_m = re.search(r'<img[^>]+src="([^"]+)"', content)
+            logo_url = unescape(logo_m.group(1)) if logo_m else ""
+
+            flag_m = re.search(r'/img/static/flags/30x20/([A-Za-z0-9_]+)\.gif', content)
+            cc = flag_m.group(1) if flag_m else ""
+            loc_m = re.search(r'class="(?:big-event-location|smallCountry|location)[^"]*">([\s\S]*?)</span>', content)
+            loc = _clean(re.sub(r'<[^>]+>', '', loc_m.group(1))) if loc_m else ""
+
             events.append(
                 {
                     "id": eid,
@@ -50,14 +192,16 @@ def parse_events_list(html: str) -> list[dict]:
                     "live": True,
                     "start_ts": start_ts,
                     "end_ts": end_ts,
-                    "location": "",
+                    "location": loc,
+                    "country_code": cc,
+                    "logo_url": logo_url,
                     "prize": "",
                 }
             )
 
     # 2. Big events
     for m in re.finditer(
-        r'<a href="(/events/(\d+)/[^\"]+)"[^>]*class="[^\"]*big-event[^\"]*"[^>]*>([\s\S]*?)</a>',
+        r'<a href="(/events/(\d+)/[^\"]+)"[^>]*class="[^\"]*\bbig-event\b[^\"]*"[^>]*>([\s\S]*?)</a>',
         html,
     ):
         href, eid, content = m.group(1), m.group(2), m.group(3)
@@ -65,11 +209,17 @@ def parse_events_list(html: str) -> list[dict]:
         name = _clean(name_m.group(1)) if name_m else ""
         loc_m = re.search(r'class="big-event-location">([^<]+)', content)
         loc = _clean(loc_m.group(1)) if loc_m else ""
+        flag_m = re.search(r'/img/static/flags/30x20/([A-Za-z0-9_]+)\.gif', content)
+        cc = flag_m.group(1) if flag_m else ""
         prize_m = re.search(r'class="col-value"[^>]*title="([^\"]+)"', content)
         prize = _clean(prize_m.group(1)) if prize_m else ""
         dates = re.findall(r'data-unix="(\d+)"', content)
         start_ts = int(dates[0]) // 1000 if dates else 0
         end_ts = int(dates[1]) // 1000 if len(dates) > 1 else start_ts
+
+        logo_m = re.search(r'<img[^>]+src="([^"]+)"', content)
+        logo_url = unescape(logo_m.group(1)) if logo_m else ""
+
         events.append(
             {
                 "id": eid,
@@ -79,6 +229,8 @@ def parse_events_list(html: str) -> list[dict]:
                 "start_ts": start_ts,
                 "end_ts": end_ts,
                 "location": loc,
+                "country_code": cc,
+                "logo_url": logo_url,
                 "prize": prize,
             }
         )
@@ -90,7 +242,7 @@ def parse_events_list(html: str) -> list[dict]:
     )
     for mh in months_holder:
         for m in re.finditer(
-            r'<a href="(/events/(\d+)/[^\"]+)"[^>]*class="[^\"]*small-event[^\"]*"[^>]*>([\s\S]*?)</a>',
+            r'<a href="(/events/(\d+)/[^\"]+)"[^>]*class="[^\"]*\bsmall-event\b[^\"]*"[^>]*>([\s\S]*?)</a>',
             mh,
         ):
             href, eid, content = m.group(1), m.group(2), m.group(3)
@@ -99,6 +251,17 @@ def parse_events_list(html: str) -> list[dict]:
             dates = re.findall(r'data-unix="(\d+)"', content)
             start_ts = int(dates[0]) // 1000 if dates else 0
             end_ts = int(dates[1]) // 1000 if len(dates) > 1 else start_ts
+
+            logo_m = re.search(r'<img[^>]+src="([^"]+)"', content)
+            logo_url = unescape(logo_m.group(1)) if logo_m else ""
+
+            flag_m = re.search(r'/img/static/flags/30x20/([A-Za-z0-9_]+)\.gif', content)
+            cc = flag_m.group(1) if flag_m else ""
+            loc_m = re.search(r'class="smallCountry"[^>]*>([\s\S]*?)</span>', content)
+            loc = _clean(re.sub(r'<[^>]+>', '', loc_m.group(1))) if loc_m else ""
+            prize_m = re.search(r'class="col-value small-col prizePoolEllipsis"[^>]*title="([^\"]+)"', content)
+            prize = _clean(prize_m.group(1)) if prize_m else ""
+
             events.append(
                 {
                     "id": eid,
@@ -107,8 +270,10 @@ def parse_events_list(html: str) -> list[dict]:
                     "live": False,
                     "start_ts": start_ts,
                     "end_ts": end_ts,
-                    "location": "",
-                    "prize": "",
+                    "location": loc,
+                    "country_code": cc,
+                    "logo_url": logo_url,
+                    "prize": prize,
                 }
             )
 
@@ -135,9 +300,10 @@ def filter_and_sort_events(
     events: Sequence[dict],
     *,
     allowed_tiers: Sequence[str] = ("Major", "T1"),
+    max_days: int | None = 92,
     now: datetime | None = None,
 ) -> list[dict]:
-    """Filter events by tier and sort by (live first, then days left ascending, then start_ts)."""
+    """Filter events by tier and timeframe (default 3 months) and sort by live first then days left."""
     if now is None:
         now = datetime.now(CST)
     today = now.date()
@@ -158,6 +324,11 @@ def filter_and_sort_events(
         else:
             ev["start_date"] = None
             ev["days_left"] = 9999
+
+        if max_days is not None and not ev.get("live"):
+            days_left = ev["days_left"]
+            if days_left > max_days:
+                continue
 
         filtered.append(ev)
 

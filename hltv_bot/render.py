@@ -609,13 +609,14 @@ def build_events_html(
     updated_at: str = "",
     limit: int = 15,
 ) -> str:
-    """Build HTML for HLTV Events list image."""
+    """Build HTML for HLTV Events list image (English-only, high-res 880px layout)."""
     from datetime import datetime, timezone, timedelta
+    from hltv_bot.events import format_location, get_cached_logo_data_uri
 
     cst = timezone(timedelta(hours=8))
     events_slice = list(events[:limit])
     row_count = len(events_slice)
-    calc_height = max(130, 56 + row_count * 44 + 30)
+    calc_height = max(140, 68 + row_count * 48 + 32)
 
     html_parts = [
         f"""<!DOCTYPE html>
@@ -624,7 +625,7 @@ def build_events_html(
 <meta charset="utf-8">
 <style>
   @page {{
-    size: 780px {calc_height}px;
+    size: 880px {calc_height}px;
     margin: 0;
   }}
   * {{ box-sizing: border-box; margin: 0; padding: 0; }}
@@ -632,24 +633,24 @@ def build_events_html(
     background: #12151b;
     color: #e2e8f0;
     font-family: DejaVu Sans, Liberation Sans, -apple-system, sans-serif;
-    font-size: 13px;
-    width: 780px;
+    font-size: 13.5px;
+    width: 880px;
     height: {calc_height}px;
-    padding: 14px 18px 10px 18px;
+    padding: 16px 22px 14px 22px;
   }}
   .header {{
     display: flex;
     justify-content: space-between;
     align-items: flex-end;
     border-bottom: 2px solid #232936;
-    padding-bottom: 7px;
+    padding-bottom: 8px;
     margin-bottom: 12px;
   }}
   .header-title {{
-    font-size: 17px;
+    font-size: 18px;
     font-weight: 800;
     color: #ffffff;
-    letter-spacing: 0.5px;
+    letter-spacing: 0.6px;
   }}
   .header-sub {{
     font-size: 13px;
@@ -657,10 +658,10 @@ def build_events_html(
     font-weight: 500;
   }}
   .event-tier-badge {{
-    font-size: 10.5px;
+    font-size: 11px;
     font-weight: 700;
-    padding: 1px 7px;
-    border-radius: 3px;
+    padding: 2px 8px;
+    border-radius: 4px;
     font-family: monospace;
     letter-spacing: 0.5px;
     display: inline-block;
@@ -674,11 +675,11 @@ def build_events_html(
     width: 100%;
     table-layout: fixed;
     border-collapse: separate;
-    border-spacing: 0 4px;
+    border-spacing: 0 5px;
   }}
   .row {{
     background: #181d26;
-    height: 40px;
+    height: 43px;
   }}
   .row.live {{
     background: #24161b;
@@ -687,7 +688,7 @@ def build_events_html(
     vertical-align: middle;
     border-top: 1px solid #232a38;
     border-bottom: 1px solid #232a38;
-    padding: 0 6px;
+    padding: 0 8px;
   }}
   .row.live td {{
     border-top-color: #ef4444;
@@ -695,24 +696,24 @@ def build_events_html(
   }}
   .row td:first-child {{
     border-left: 1px solid #232a38;
-    border-top-left-radius: 5px;
-    border-bottom-left-radius: 5px;
-    padding-left: 10px;
+    border-top-left-radius: 6px;
+    border-bottom-left-radius: 6px;
+    padding-left: 12px;
   }}
   .row.live td:first-child {{
     border-left-color: #ef4444;
   }}
   .row td:last-child {{
     border-right: 1px solid #232a38;
-    border-top-right-radius: 5px;
-    border-bottom-right-radius: 5px;
-    padding-right: 12px;
+    border-top-right-radius: 6px;
+    border-bottom-right-radius: 6px;
+    padding-right: 14px;
   }}
   .row.live td:last-child {{
     border-right-color: #ef4444;
   }}
   .countdown-td {{
-    font-size: 12px;
+    font-size: 12.5px;
     font-weight: 700;
     color: #38bdf8;
     white-space: nowrap;
@@ -735,15 +736,28 @@ def build_events_html(
     text-overflow: ellipsis;
     font-weight: 700;
     color: #ffffff;
-    font-size: 13px;
+    font-size: 13.5px;
+  }}
+  .event-logo-wrap {{
+    display: inline-block;
+    vertical-align: middle;
+    width: 22px;
+    height: 22px;
+    margin-right: 8px;
+  }}
+  .event-logo-img {{
+    width: 22px;
+    height: 22px;
+    object-fit: contain;
+    vertical-align: middle;
   }}
   .date-td {{
-    font-size: 11.5px;
+    font-size: 12px;
     color: #cbd5e1;
     white-space: nowrap;
   }}
   .loc-td {{
-    font-size: 11px;
+    font-size: 12px;
     color: #94a3b8;
     white-space: nowrap;
     overflow: hidden;
@@ -751,8 +765,8 @@ def build_events_html(
   }}
   .prize-td {{
     text-align: right;
-    font-size: 12px;
-    font-weight: 600;
+    font-size: 12.5px;
+    font-weight: 700;
     color: #fbbf24;
     white-space: nowrap;
   }}
@@ -768,18 +782,18 @@ def build_events_html(
 
     if not events_slice:
         html_parts.append(
-            f'<div style="text-align:center;padding:30px;color:#64748b;font-size:14px;">No events found for {html.escape(tier_filter)}</div>'
+            f'<div style="text-align:center;padding:36px;color:#64748b;font-size:14px;">No tournaments scheduled in next 3 months ({html.escape(tier_filter)})</div>'
         )
     else:
         html_parts.append("""
   <table class="match-table">
     <colgroup>
-      <col style="width: 76px;">
-      <col style="width: 105px;">
-      <col style="width: 245px;">
-      <col style="width: 154px;">
-      <col style="width: 100px;">
-      <col style="width: 64px;">
+      <col style="width: 82px;">
+      <col style="width: 110px;">
+      <col style="width: 290px;">
+      <col style="width: 178px;">
+      <col style="width: 135px;">
+      <col style="width: 85px;">
     </colgroup>
         """)
         for ev in events_slice:
@@ -791,7 +805,12 @@ def build_events_html(
                 row_cls = "row live"
             else:
                 d = ev.get("days_left", 9999)
-                cnt_text = "今天开赛" if d == 0 else f"{d} 天后"
+                if d == 0:
+                    cnt_text = "TODAY"
+                elif d == 1:
+                    cnt_text = "TOMORROW"
+                else:
+                    cnt_text = f"IN {d} DAYS"
                 countdown_html = html.escape(cnt_text)
                 cnt_cls = "countdown-td"
                 row_cls = "row"
@@ -808,17 +827,30 @@ def build_events_html(
                 else:
                     date_range = start_str
             else:
-                date_range = "待定"
+                date_range = "TBD"
 
-            loc = ev.get("location") or "-"
+            raw_loc = ev.get("location") or ""
+            cc = ev.get("country_code") or ""
+            loc = format_location(raw_loc, cc)
+
             prize = ev.get("prize") or "-"
+            if prize in ("_", "TBA", "Other"):
+                prize = "-"
             name = ev.get("name") or "Unknown Event"
+
+            # Event logo: local asset fallback or cached data uri or trophy svg
+            eid = ev.get("id") or ""
+            cached_uri = get_cached_logo_data_uri(eid)
+            if cached_uri:
+                logo_html = f'<span class="event-logo-wrap"><img class="event-logo-img" src="{cached_uri}" alt="" /></span>'
+            else:
+                logo_html = _render_event_icon(name)
 
             html_parts.append(f"""
             <tr class="{row_cls}">
               <td>{badge_html}</td>
               <td class="{cnt_cls}">{countdown_html}</td>
-              <td class="event-name-td" title="{html.escape(name)}">{html.escape(name)}</td>
+              <td class="event-name-td" title="{html.escape(name)}">{logo_html}{html.escape(name)}</td>
               <td class="date-td">{html.escape(date_range)}</td>
               <td class="loc-td">{html.escape(loc)}</td>
               <td class="prize-td">{html.escape(prize)}</td>
