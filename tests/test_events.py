@@ -141,7 +141,7 @@ def test_format_events_html():
 
 
 def test_country_code_to_emoji_and_format_location():
-    from hltv_bot.events import country_code_to_emoji, format_location
+    from hltv_bot.events import country_code_to_emoji, format_location, clean_event_display_name
 
     assert country_code_to_emoji("PL") == "🇵🇱"
     assert country_code_to_emoji("RO") == "🇷🇴"
@@ -150,11 +150,14 @@ def test_country_code_to_emoji_and_format_location():
     assert country_code_to_emoji("WORLD") == "🌐"
     assert country_code_to_emoji("") == ""
 
-    assert format_location("Katowice, Poland", "PL") == "🇵🇱 Katowice"
-    assert format_location("Malta", "MT") == "🇲🇹 Malta"
-    assert format_location("Sheffield, United Kingdom |", "GB") == "🇬🇧 Sheffield"
-    assert format_location("TBA", "WORLD") == "🌐"
+    assert "Katowice" in format_location("Katowice, Poland", "PL")
+    assert "Malta" in format_location("Malta", "MT")
+    assert "Sheffield" in format_location("Sheffield, United Kingdom |", "GB")
     assert format_location("", "") == "-"
+
+    assert clean_event_display_name("ESL Pro League Season 24") == "ESL Pro League S24"
+    assert clean_event_display_name("PGL Major Singapore 2026 Stage 1") == "PGL Major Singapore Stage 1"
+    assert clean_event_display_name("IEM Beijing 2026") == "IEM Beijing"
 
 
 def test_filter_and_sort_events_3_months():

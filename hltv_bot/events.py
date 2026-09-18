@@ -43,9 +43,54 @@ def country_code_to_emoji(cc: str) -> str:
     return ""
 
 
-def format_location(loc: str, cc: str = "") -> str:
-    """Format location with flag emoji and city name."""
-    flag = country_code_to_emoji(cc)
+def clean_event_display_name(name: str) -> str:
+    """Shorten event name cleanly: Season -> S, remove redundant year."""
+    s = (name or "").strip()
+    s = re.sub(r"\bSeason\s+(\d+)\b", r"S\1", s, flags=re.I)
+    s = re.sub(r"\s+202[4-9]\b", "", s)
+    return s.strip()
+
+
+_FLAGS_CACHE_DIR = Path("data/flags")
+
+
+def get_flag_img_html(cc: str, sess: BrowserSession | None = None) -> str:
+    """Return an HTML <img> tag with inlined base64 flag image (cached on disk)."""
+    if not cc:
+        return ""
+    cc_u = cc.strip().upper()
+    _FLAGS_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    flag_file = _FLAGS_CACHE_DIR / f"{cc_u}.gif"
+    if not flag_file.exists():
+        # Try downloading via request if sess available or cdp
+        flag_url = f"https://www.hltv.org/img/static/flags/30x20/{cc_u}.gif"
+        data = _fetch_image_via_cdp(flag_url, timeout=4.0)
+        if not data and sess is not None:
+            try:
+                st, body, _ = request(sess, "GET", flag_url, timeout=5.0)
+                if st == 200 and body:
+                    data = body
+            except Exception:
+                pass
+        if data:
+            try:
+                flag_file.write_bytes(data)
+            except Exception:
+                pass
+
+    if flag_file.exists():
+        try:
+            b64 = base64.b64encode(flag_file.read_bytes()).decode("ascii")
+            return f'<img class="flag-img" src="data:image/gif;base64,{b64}" alt="" />'
+        except Exception:
+            pass
+
+    return ""
+
+
+def format_location(loc: str, cc: str = "", sess: BrowserSession | None = None) -> str:
+    """Format location with flag image and clean city name."""
+    flag_html = get_flag_img_html(cc, sess=sess)
     city = (loc or "").strip()
     if "," in city:
         city = city.split(",")[0].strip()
@@ -53,10 +98,10 @@ def format_location(loc: str, cc: str = "") -> str:
     if city in ("-", "_", "TBA", "TBD"):
         city = ""
 
-    if flag and city:
-        return f"{flag} {city}"
-    if flag:
-        return flag
+    if flag_html and city:
+        return f"{flag_html}<span>{city}</span>"
+    if flag_html:
+        return flag_html
     return city or "-"
 
 
@@ -412,7 +457,32 @@ def fetch_events(sess: BrowserSession, timeout: float = 25.0) -> list[dict]:
             "sec-fetch-site": "none",
         },
     )
-    rows = parse_events_list(body.decode("utf-8", "replace"))
+    html_text = body.decode("utf-8", "replace")
+    rows = parse_events_list(html_text)
+
+    # Enrich event logos with true icons from homepage sidebar if available
+    try:
+        _st_home, home_body, _ = request(
+            sess,
+            "GET",
+            "https://www.hltv.org/",
+            timeout=10.0,
+            headers={"accept": "text/html"},
+        )
+        home_html = home_body.decode("utf-8", "replace")
+        aside = re.search(r'<aside><h1><a href="/events"[^>]*>EVENTS</a></h1>([\s\S]*?)</aside>', home_html)
+        if aside:
+            for m in re.finditer(r'<a href="/events/(\d+)/[^"]*"[^>]*>([\s\S]*?)</a>', aside.group(1)):
+                eid, content = m.group(1), m.group(2)
+                img_m = re.search(r'<img[^>]+src="([^"]+)"', content)
+                if img_m:
+                    aside_logo = unescape(img_m.group(1))
+                    for r in rows:
+                        if r.get("id") == eid and not r.get("logo_url"):
+                            r["logo_url"] = aside_logo
+    except Exception as e:
+        log.debug("failed to enrich logos from homepage aside: %s", e)
+
     log.info("events fetched n=%s bytes=%s", len(rows), len(body))
     _EVENTS_CACHE["at"] = now
     _EVENTS_CACHE["rows"] = rows

@@ -572,15 +572,21 @@ class HltvTelegramBot:
             self._reply(chat_id, text)
             return
 
-        from hltv_bot.events import cache_event_logo
+        from hltv_bot.events import cache_event_logo, get_flag_img_html
 
-        # Pre-cache logos for upcoming events to render sharp event icons
+        # Pre-cache logos and country flags for upcoming events
         for ev in filtered[:15]:
             eid = ev.get("id") or ""
             logo_url = ev.get("logo_url") or ""
             if eid and logo_url:
                 try:
                     cache_event_logo(eid, logo_url, sess=self.session)
+                except Exception:
+                    pass
+            cc = ev.get("country_code") or ""
+            if cc:
+                try:
+                    get_flag_img_html(cc, sess=self.session)
                 except Exception:
                     pass
 

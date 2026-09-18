@@ -611,7 +611,7 @@ def build_events_html(
 ) -> str:
     """Build HTML for HLTV Events list image (English-only, high-res 880px layout)."""
     from datetime import datetime, timezone, timedelta
-    from hltv_bot.events import format_location, get_cached_logo_data_uri
+    from hltv_bot.events import format_location, get_cached_logo_data_uri, clean_event_display_name
 
     cst = timezone(timedelta(hours=8))
     events_slice = list(events[:limit])
@@ -625,7 +625,7 @@ def build_events_html(
 <meta charset="utf-8">
 <style>
   @page {{
-    size: 880px {calc_height}px;
+    size: 960px {calc_height}px;
     margin: 0;
   }}
   * {{ box-sizing: border-box; margin: 0; padding: 0; }}
@@ -633,8 +633,8 @@ def build_events_html(
     background: #12151b;
     color: #e2e8f0;
     font-family: DejaVu Sans, Liberation Sans, -apple-system, sans-serif;
-    font-size: 13.5px;
-    width: 880px;
+    font-size: 13px;
+    width: 960px;
     height: {calc_height}px;
     padding: 16px 22px 14px 22px;
   }}
@@ -672,14 +672,14 @@ def build_events_html(
   .event-tier-badge.T3 {{ background: #172554; color: #93c5fd; border: 1px solid #1e3a8a; }}
   .event-tier-badge.Other {{ background: #1e293b; color: #94a3b8; border: 1px solid #334155; }}
   .match-table {{
-    width: 100%;
+    width: 916px;
     table-layout: fixed;
     border-collapse: separate;
     border-spacing: 0 5px;
   }}
   .row {{
     background: #181d26;
-    height: 43px;
+    height: 42px;
   }}
   .row.live {{
     background: #24161b;
@@ -707,13 +707,13 @@ def build_events_html(
     border-right: 1px solid #232a38;
     border-top-right-radius: 6px;
     border-bottom-right-radius: 6px;
-    padding-right: 14px;
+    padding-right: 16px;
   }}
   .row.live td:last-child {{
     border-right-color: #ef4444;
   }}
   .countdown-td {{
-    font-size: 12.5px;
+    font-size: 12px;
     font-weight: 700;
     color: #38bdf8;
     white-space: nowrap;
@@ -736,7 +736,7 @@ def build_events_html(
     text-overflow: ellipsis;
     font-weight: 700;
     color: #ffffff;
-    font-size: 13.5px;
+    font-size: 13px;
   }}
   .event-logo-wrap {{
     display: inline-block;
@@ -763,12 +763,22 @@ def build_events_html(
     overflow: hidden;
     text-overflow: ellipsis;
   }}
+  .flag-img {{
+    width: 17px;
+    height: 12px;
+    vertical-align: middle;
+    margin-right: 6px;
+    border-radius: 2px;
+    display: inline-block;
+  }}
   .prize-td {{
     text-align: right;
-    font-size: 12.5px;
+    font-size: 12px;
     font-weight: 700;
     color: #fbbf24;
     white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }}
 </style>
 </head>
@@ -788,12 +798,12 @@ def build_events_html(
         html_parts.append("""
   <table class="match-table">
     <colgroup>
-      <col style="width: 82px;">
-      <col style="width: 110px;">
-      <col style="width: 290px;">
-      <col style="width: 178px;">
-      <col style="width: 135px;">
-      <col style="width: 85px;">
+      <col style="width: 70px;">
+      <col style="width: 105px;">
+      <col style="width: 325px;">
+      <col style="width: 165px;">
+      <col style="width: 126px;">
+      <col style="width: 125px;">
     </colgroup>
         """)
         for ev in events_slice:
@@ -831,28 +841,35 @@ def build_events_html(
 
             raw_loc = ev.get("location") or ""
             cc = ev.get("country_code") or ""
-            loc = format_location(raw_loc, cc)
+            loc_html = format_location(raw_loc, cc)
 
-            prize = ev.get("prize") or "-"
-            if prize in ("_", "TBA", "Other"):
+            raw_prize = (ev.get("prize") or "").strip()
+            if not raw_prize or raw_prize in ("_", "TBA", "Other"):
                 prize = "-"
-            name = ev.get("name") or "Unknown Event"
+            elif raw_prize.lower().startswith("spots in"):
+                # e.g. "Spots in Stage 2" -> "Spots to S2"
+                prize = re.sub(r"^spots\s+in\s+", "Spots to ", raw_prize, flags=re.I)
+                prize = re.sub(r"\bStage\s+(\d+)\b", r"S\1", prize, flags=re.I)
+            else:
+                prize = raw_prize
+            raw_name = ev.get("name") or "Unknown Event"
+            display_name = clean_event_display_name(raw_name)
 
-            # Event logo: local asset fallback or cached data uri or trophy svg
+            # Event logo: cached data uri or local asset fallback or trophy svg
             eid = ev.get("id") or ""
             cached_uri = get_cached_logo_data_uri(eid)
             if cached_uri:
                 logo_html = f'<span class="event-logo-wrap"><img class="event-logo-img" src="{cached_uri}" alt="" /></span>'
             else:
-                logo_html = _render_event_icon(name)
+                logo_html = _render_event_icon(raw_name)
 
             html_parts.append(f"""
             <tr class="{row_cls}">
               <td>{badge_html}</td>
               <td class="{cnt_cls}">{countdown_html}</td>
-              <td class="event-name-td" title="{html.escape(name)}">{logo_html}{html.escape(name)}</td>
+              <td class="event-name-td" title="{html.escape(raw_name)}">{logo_html}{html.escape(display_name)}</td>
               <td class="date-td">{html.escape(date_range)}</td>
-              <td class="loc-td">{html.escape(loc)}</td>
+              <td class="loc-td">{loc_html}</td>
               <td class="prize-td">{html.escape(prize)}</td>
             </tr>
             """)

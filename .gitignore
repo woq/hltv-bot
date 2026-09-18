@@ -3,6 +3,8 @@ data/session.json
 data/chats.json
 data/settings.json
 data/wpe-profile/
+data/event_logos/
+data/flags/
 __pycache__/
 *.pyc
 .pytest_cache/
