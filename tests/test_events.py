@@ -1,0 +1,173 @@
+from datetime import datetime, timedelta, timezone
+from hltv_bot.events import (
+    classify_tier,
+    filter_and_sort_events,
+    format_events_html,
+    parse_events_list,
+)
+
+CST = timezone(timedelta(hours=8))
+
+
+def test_classify_tier():
+    assert classify_tier("PGL CS2 Major Copenhagen 2024") == "Major"
+    assert classify_tier("Perfect World Shanghai Major 2027") == "Major"
+    assert classify_tier("ESL Pro League Season 24") == "T1"
+    assert classify_tier("IEM Cologne 2026") == "T1"
+    assert classify_tier("BLAST Rivals 2026 Season 2") == "T1"
+    assert classify_tier("CCT 2026 Europe Series 9") == "T2"
+    assert classify_tier("Thunderpick World Championship 2026") == "T2"
+    assert classify_tier("StarLadder StarSeries Fall 2026") == "T2"
+    assert classify_tier("Random Qualifier") == "T3"
+    assert classify_tier("Local LAN Cup") == "Other"
+
+
+def test_parse_events_list_and_dedup():
+    html = """
+    <div class="ongoing-events-holder">
+      <div class="ongoing-event-holder">
+        <a href="/events/8057/starladder-fall" class="a-reset ongoing-event">
+          <div class="text-ellipsis">StarLadder StarSeries Fall 2026</div>
+          <span data-unix="1789639200000"></span>
+          <span data-unix="1789898400000"></span>
+        </a>
+      </div>
+      <!-- Duplicate entry in ongoing -->
+      <div class="ongoing-event-holder">
+        <a href="/events/8057/starladder-fall" class="a-reset ongoing-event">
+          <div class="text-ellipsis">StarLadder StarSeries Fall 2026</div>
+          <span data-unix="1789639200000"></span>
+          <span data-unix="1789898400000"></span>
+        </a>
+      </div>
+    </div>
+    <div class="big-events">
+      <a href="/events/8244/esl-pro-league-season-24" class="a-reset standard-box big-event">
+        <div class="big-event-name">ESL Pro League Season 24</div>
+        <div class="big-event-location">Katowice, Poland</div>
+        <div class="col-value" title="$1,000,000">$1,000,000</div>
+        <span data-unix="1791021600000"></span>
+        <span data-unix="1791712800000"></span>
+      </a>
+    </div>
+    """
+    events = parse_events_list(html)
+    assert len(events) == 2
+    by_id = {e["id"]: e for e in events}
+    assert by_id["8057"]["name"] == "StarLadder StarSeries Fall 2026"
+    assert by_id["8057"]["live"] is True
+    assert by_id["8244"]["name"] == "ESL Pro League Season 24"
+    assert by_id["8244"]["live"] is False
+    assert by_id["8244"]["location"] == "Katowice, Poland"
+    assert by_id["8244"]["prize"] == "$1,000,000"
+
+
+def test_filter_and_sort_events():
+    now = datetime(2026, 9, 18, 12, 0, tzinfo=CST)
+    events = [
+        {
+            "id": "1",
+            "name": "Local Small Qualifier",
+            "live": False,
+            "start_ts": 1789639200,
+            "end_ts": 1789898400,
+        },
+        {
+            "id": "2",
+            "name": "PGL Major Singapore 2026",
+            "live": False,
+            "start_ts": 1796295600,
+            "end_ts": 1797159600,
+        },
+        {
+            "id": "3",
+            "name": "ESL Pro League Season 24",
+            "live": False,
+            "start_ts": 1791021600,
+            "end_ts": 1791712800,
+        },
+        {
+            "id": "4",
+            "name": "StarLadder StarSeries Fall 2026",
+            "live": True,
+            "start_ts": 1789639200,
+            "end_ts": 1789898400,
+        },
+    ]
+    filtered = filter_and_sort_events(events, now=now)
+    assert len(filtered) == 2
+    # Sooner event: EPL 24 (Oct 2026) before Major (Dec 2026)
+    assert filtered[0]["id"] == "3"
+    assert filtered[0]["tier"] == "T1"
+    assert filtered[0]["days_left"] > 0
+
+    assert filtered[1]["id"] == "2"
+    assert filtered[1]["tier"] == "Major"
+    assert filtered[1]["days_left"] > filtered[0]["days_left"]
+
+
+def test_format_events_html():
+    events = [
+        {
+            "id": "2",
+            "name": "PGL Major Singapore 2026",
+            "tier": "Major",
+            "live": False,
+            "start_ts": 1796295600,
+            "end_ts": 1797159600,
+            "location": "Singapore",
+            "prize": "$1,250,000",
+            "days_left": 76,
+        },
+        {
+            "id": "3",
+            "name": "ESL Pro League Season 24",
+            "tier": "T1",
+            "live": False,
+            "start_ts": 1791021600,
+            "end_ts": 1791712800,
+            "location": "Katowice, Poland",
+            "prize": "$1,000,000",
+            "days_left": 15,
+        },
+    ]
+    html = format_events_html(events)
+    assert "<b>🏆 近期赛事 (Major / T1)</b>" in html
+    assert "👑 [Major] <b>PGL Major Singapore 2026</b>" in html
+    assert "🥇 [T1] <b>ESL Pro League Season 24</b>" in html
+    assert "⏳ <b>还有 15 天开赛</b>" in html
+    assert "📍 Katowice, Poland" in html
+    assert "💰 $1,000,000" in html
+
+
+def test_render_events_image():
+    from hltv_bot.render import render_events_image
+
+    events = [
+        {
+            "id": "4",
+            "name": "StarLadder StarSeries Fall 2026",
+            "tier": "T2",
+            "live": True,
+            "start_ts": 1789639200,
+            "end_ts": 1789898400,
+            "location": "",
+            "prize": "",
+            "days_left": -1,
+        },
+        {
+            "id": "3",
+            "name": "ESL Pro League Season 24",
+            "tier": "T1",
+            "live": False,
+            "start_ts": 1791021600,
+            "end_ts": 1791712800,
+            "location": "Katowice, Poland",
+            "prize": "$1,000,000",
+            "days_left": 15,
+        },
+    ]
+    img_bytes = render_events_image(events, tier_filter="Major / T1 / T2")
+    assert len(img_bytes) > 1000
+    assert img_bytes[:8] == b"\x89PNG\r\n\x1a\n"
+

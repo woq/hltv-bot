@@ -190,7 +190,7 @@ def _star_svg(count: int) -> str:
 def build_matches_html(
     rows: Sequence[dict],
     *,
-    tier_filter: str = "T2",
+    tier_filter: str = "T1",
     updated_at: str = "",
 ) -> str:
     max_rank = tier_rank(tier_filter)
@@ -205,6 +205,10 @@ def build_matches_html(
 
     filtered = []
     for r in rows:
+        _u1 = (r.get("team1") or "").strip().upper()
+        _u2 = (r.get("team2") or "").strip().upper()
+        if (not _u1 or _u1 in ("?", "TBD")) and (not _u2 or _u2 in ("?", "TBD")):
+            continue
         stars = int(r.get("stars") or 0)
         ev = r.get("event") or "Other Matches"
         t = event_tier_map.get(ev, classify_event_tier(ev, stars))
@@ -567,7 +571,7 @@ def build_matches_html(
 def render_matches_image(
     rows: Sequence[dict],
     *,
-    tier_filter: str = "T2",
+    tier_filter: str = "T1",
     title_suffix: str = "",
     updated_at: str = "",
 ) -> bytes:
@@ -596,3 +600,265 @@ def render_matches_image(
     out = io.BytesIO()
     pil_image.save(out, format="PNG")
     return out.getvalue()
+
+
+def build_events_html(
+    events: Sequence[dict],
+    *,
+    tier_filter: str = "Major / T1",
+    updated_at: str = "",
+    limit: int = 15,
+) -> str:
+    """Build HTML for HLTV Events list image."""
+    from datetime import datetime, timezone, timedelta
+
+    cst = timezone(timedelta(hours=8))
+    events_slice = list(events[:limit])
+    row_count = len(events_slice)
+    calc_height = max(130, 56 + row_count * 44 + 30)
+
+    html_parts = [
+        f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  @page {{
+    size: 780px {calc_height}px;
+    margin: 0;
+  }}
+  * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+  body {{
+    background: #12151b;
+    color: #e2e8f0;
+    font-family: DejaVu Sans, Liberation Sans, -apple-system, sans-serif;
+    font-size: 13px;
+    width: 780px;
+    height: {calc_height}px;
+    padding: 14px 18px 10px 18px;
+  }}
+  .header {{
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    border-bottom: 2px solid #232936;
+    padding-bottom: 7px;
+    margin-bottom: 12px;
+  }}
+  .header-title {{
+    font-size: 17px;
+    font-weight: 800;
+    color: #ffffff;
+    letter-spacing: 0.5px;
+  }}
+  .header-sub {{
+    font-size: 13px;
+    color: #94a3b8;
+    font-weight: 500;
+  }}
+  .event-tier-badge {{
+    font-size: 10.5px;
+    font-weight: 700;
+    padding: 1px 7px;
+    border-radius: 3px;
+    font-family: monospace;
+    letter-spacing: 0.5px;
+    display: inline-block;
+  }}
+  .event-tier-badge.Major {{ background: #3b1848; color: #e9d5ff; border: 1px solid #86198f; }}
+  .event-tier-badge.T1 {{ background: #451a20; color: #fca5a5; border: 1px solid #7f1d1d; }}
+  .event-tier-badge.T2 {{ background: #3b2a14; color: #fde68a; border: 1px solid #78350f; }}
+  .event-tier-badge.T3 {{ background: #172554; color: #93c5fd; border: 1px solid #1e3a8a; }}
+  .event-tier-badge.Other {{ background: #1e293b; color: #94a3b8; border: 1px solid #334155; }}
+  .match-table {{
+    width: 100%;
+    table-layout: fixed;
+    border-collapse: separate;
+    border-spacing: 0 4px;
+  }}
+  .row {{
+    background: #181d26;
+    height: 40px;
+  }}
+  .row.live {{
+    background: #24161b;
+  }}
+  .row td {{
+    vertical-align: middle;
+    border-top: 1px solid #232a38;
+    border-bottom: 1px solid #232a38;
+    padding: 0 6px;
+  }}
+  .row.live td {{
+    border-top-color: #ef4444;
+    border-bottom-color: #ef4444;
+  }}
+  .row td:first-child {{
+    border-left: 1px solid #232a38;
+    border-top-left-radius: 5px;
+    border-bottom-left-radius: 5px;
+    padding-left: 10px;
+  }}
+  .row.live td:first-child {{
+    border-left-color: #ef4444;
+  }}
+  .row td:last-child {{
+    border-right: 1px solid #232a38;
+    border-top-right-radius: 5px;
+    border-bottom-right-radius: 5px;
+    padding-right: 12px;
+  }}
+  .row.live td:last-child {{
+    border-right-color: #ef4444;
+  }}
+  .countdown-td {{
+    font-size: 12px;
+    font-weight: 700;
+    color: #38bdf8;
+    white-space: nowrap;
+  }}
+  .countdown-td.live {{
+    color: #f87171;
+  }}
+  .live-dot {{
+    width: 7px;
+    height: 7px;
+    background: #ef4444;
+    border-radius: 50%;
+    display: inline-block;
+    margin-right: 5px;
+    vertical-align: middle;
+  }}
+  .event-name-td {{
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-weight: 700;
+    color: #ffffff;
+    font-size: 13px;
+  }}
+  .date-td {{
+    font-size: 11.5px;
+    color: #cbd5e1;
+    white-space: nowrap;
+  }}
+  .loc-td {{
+    font-size: 11px;
+    color: #94a3b8;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }}
+  .prize-td {{
+    text-align: right;
+    font-size: 12px;
+    font-weight: 600;
+    color: #fbbf24;
+    white-space: nowrap;
+  }}
+</style>
+</head>
+<body>
+  <div class="header">
+    <div class="header-title">HLTV TOURNAMENTS</div>
+    <div class="header-sub">{html.escape(f"{updated_at} · {tier_filter}" if updated_at else tier_filter)}</div>
+  </div>
+"""
+    ]
+
+    if not events_slice:
+        html_parts.append(
+            f'<div style="text-align:center;padding:30px;color:#64748b;font-size:14px;">No events found for {html.escape(tier_filter)}</div>'
+        )
+    else:
+        html_parts.append("""
+  <table class="match-table">
+    <colgroup>
+      <col style="width: 76px;">
+      <col style="width: 105px;">
+      <col style="width: 245px;">
+      <col style="width: 154px;">
+      <col style="width: 100px;">
+      <col style="width: 64px;">
+    </colgroup>
+        """)
+        for ev in events_slice:
+            tier = ev.get("tier") or "T2"
+            badge_html = f'<span class="event-tier-badge {tier}">{tier}</span>'
+            if ev.get("live"):
+                countdown_html = '<span class="live-dot"></span>LIVE'
+                cnt_cls = "countdown-td live"
+                row_cls = "row live"
+            else:
+                d = ev.get("days_left", 9999)
+                cnt_text = "今天开赛" if d == 0 else f"{d} 天后"
+                countdown_html = html.escape(cnt_text)
+                cnt_cls = "countdown-td"
+                row_cls = "row"
+
+            start_ts = ev.get("start_ts") or 0
+            end_ts = ev.get("end_ts") or 0
+            if start_ts:
+                start_dt = datetime.fromtimestamp(start_ts, cst)
+                start_str = start_dt.strftime("%Y-%m-%d")
+                if end_ts and end_ts != start_ts:
+                    end_dt = datetime.fromtimestamp(end_ts, cst)
+                    end_fmt = "%m-%d" if end_dt.year == start_dt.year else "%Y-%m-%d"
+                    date_range = start_str + " ~ " + end_dt.strftime(end_fmt)
+                else:
+                    date_range = start_str
+            else:
+                date_range = "待定"
+
+            loc = ev.get("location") or "-"
+            prize = ev.get("prize") or "-"
+            name = ev.get("name") or "Unknown Event"
+
+            html_parts.append(f"""
+            <tr class="{row_cls}">
+              <td>{badge_html}</td>
+              <td class="{cnt_cls}">{countdown_html}</td>
+              <td class="event-name-td" title="{html.escape(name)}">{html.escape(name)}</td>
+              <td class="date-td">{html.escape(date_range)}</td>
+              <td class="loc-td">{html.escape(loc)}</td>
+              <td class="prize-td">{html.escape(prize)}</td>
+            </tr>
+            """)
+        html_parts.append("</table>")
+
+    html_parts.append("</body></html>")
+    return "".join(html_parts)
+
+
+def render_events_image(
+    events: Sequence[dict],
+    *,
+    tier_filter: str = "Major / T1",
+    updated_at: str = "",
+    limit: int = 15,
+) -> bytes:
+    """Render events using Python native WeasyPrint (HTML+CSS) with pypdfium2."""
+    if weasyprint is None or pypdfium2 is None:
+        raise RuntimeError("weasyprint and pypdfium2 are required for HTML/CSS rendering")
+
+    html_content = build_events_html(events, tier_filter=tier_filter, updated_at=updated_at, limit=limit)
+    pdf_bytes = weasyprint.HTML(string=html_content).write_pdf()
+    doc = pypdfium2.PdfDocument(pdf_bytes)
+    page = doc[0]
+    pixmap = page.render(scale=1.5)
+    pil_image = pixmap.to_pil()
+
+    if ImageChops is not None:
+        try:
+            bg = Image.new("RGB", pil_image.size, (18, 21, 27))
+            diff = ImageChops.difference(pil_image.convert("RGB"), bg)
+            bbox = diff.getbbox()
+            if bbox and bbox[3] < pil_image.height - 10:
+                pil_image = pil_image.crop((0, 0, pil_image.width, min(pil_image.height, bbox[3] + 18)))
+        except Exception as e:
+            log.debug("events autocrop skipped: %s", e)
+
+    out = io.BytesIO()
+    pil_image.save(out, format="PNG")
+    return out.getvalue()
+

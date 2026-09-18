@@ -57,6 +57,7 @@ def test_delay_floors():
     assert ADMIN_WS_FAIL_MIN >= 2
     assert ADMIN_WS_FAIL_EVERY >= 300.0
     assert CMD_COOLDOWN["/matches"] >= 8.0
+    assert CMD_COOLDOWN["/events"] >= 8.0
     assert CMD_COOLDOWN["/watch"] >= 6.0
     assert CMD_COOLDOWN["/bump"] >= 4.0
     assert DEFAULT_CMD_COOLDOWN >= 1.2
@@ -71,6 +72,10 @@ def test_html_only_goes_through_gapped_request():
     assert "from hltv_bot.http import request" in matches
     assert "curl_cffi" not in matches
     assert "urlopen" not in matches
+    events = _src("events.py")
+    assert "from hltv_bot.http import request" in events
+    assert "curl_cffi" not in events
+    assert "urlopen" not in events
 
 
 def test_curl_cffi_only_in_http_and_scorebot():

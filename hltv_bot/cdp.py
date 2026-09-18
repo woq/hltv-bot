@@ -158,11 +158,18 @@ def _connect_ws(ws_url: str, timeout: float) -> _CdpWs:
     import websocket
 
     try:
-        ws = websocket.create_connection(
-            ws_url,
-            origin="http://127.0.0.1:9222",
-            timeout=timeout,
-        )
+        try:
+            ws = websocket.create_connection(
+                ws_url,
+                origin="http://127.0.0.1:9222",
+                timeout=timeout,
+            )
+        except Exception:
+            ws = websocket.create_connection(
+                ws_url,
+                suppress_origin=True,
+                timeout=timeout,
+            )
     except Exception as e:
         raise CdpUnavailable(str(e)) from e
     return _CdpWs(ws)

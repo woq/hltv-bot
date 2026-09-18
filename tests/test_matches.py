@@ -52,6 +52,10 @@ def test_parse_match_list_placeholder_tbd():
     assert rows[0]["title"] == "TBD vs TBD"
     assert "StarLadder" in rows[0]["event"]
 
+    # When exclude_tbd is True
+    rows_filtered = parse_match_list(html, exclude_tbd=True)
+    assert len(rows_filtered) == 0
+
 
 def test_parse_match_list_container_isolation():
     html = """

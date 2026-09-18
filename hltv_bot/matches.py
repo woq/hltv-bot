@@ -174,7 +174,7 @@ def _chunk_around(html: str, pos: int, span: int = 1800) -> str:
     return html[start:end]
 
 
-def parse_match_list(html: str, *, limit: int = 100) -> list[dict[str, str]]:
+def parse_match_list(html: str, *, limit: int = 100, exclude_tbd: bool = False) -> list[dict[str, str]]:
     seen: set[str] = set()
     rows: list[dict[str, str]] = []
     for m in MATCH_HREF.finditer(html):
@@ -239,6 +239,11 @@ def parse_match_list(html: str, *, limit: int = 100) -> list[dict[str, str]]:
             tm = MATCH_TIME_TEXT.search(chunk)
             if tm:
                 time_s = tm.group(1)
+        # If both teams are TBD / placeholder, optionally exclude
+        _u1, _u2 = t1.strip().upper(), t2.strip().upper()
+        if exclude_tbd and (not _u1 or _u1 in ("?", "TBD")) and (not _u2 or _u2 in ("?", "TBD")):
+            continue
+
         rows.append(
             {
                 "id": mid,

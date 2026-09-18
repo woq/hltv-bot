@@ -364,3 +364,18 @@ def test_format_kv_table_standard_html():
     assert "• <b>b</b>: 2" in out
     for tag in ("<h3>", "<table", "<tr>", "<td>", "<th>"):
         assert tag not in out
+
+
+def test_format_match_list_excludes_both_tbd():
+    from hltv_bot.format import format_match_list
+
+    matches = [
+        {"id": "1", "team1": "Spirit", "team2": "G2", "event": "IEM", "stars": "3"},
+        {"id": "2", "team1": "TBD", "team2": "TBD", "event": "IEM", "stars": "3"},
+        {"id": "3", "team1": "?", "team2": "", "event": "IEM", "stars": "3"},
+    ]
+    res = format_match_list(matches)
+    assert "Spirit — G2" in res
+    assert "TBD — TBD" not in res
+    assert "id=2" not in res
+

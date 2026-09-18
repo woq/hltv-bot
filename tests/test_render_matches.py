@@ -61,6 +61,13 @@ def test_build_matches_html_unified_event_tier():
     # Both matches should be grouped under that single event banner
     assert "2 MATCHES" in html
 
+    # Test both TBD are excluded
+    matches_with_tbd = matches + [
+        {"id": "3", "team1": "TBD", "team2": "TBD", "event": "BLAST Premier", "live": "0", "stars": "3", "time": "18:00"}
+    ]
+    html2 = build_matches_html(matches_with_tbd, tier_filter="T2")
+    assert "2 MATCHES" in html2
+
 
 def test_localize_team():
     assert localize_team("The MongolZ") == "The MongolZ"

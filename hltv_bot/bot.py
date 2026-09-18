@@ -21,7 +21,7 @@ from hltv_bot.format import (
     h,
     plain_to_rich,
 )
-from hltv_bot.render import classify_event_tier, render_matches_image, tier_rank
+from hltv_bot.render import classify_event_tier, render_events_image, render_matches_image, tier_rank
 from hltv_bot.http import CloudflareError
 from hltv_bot.live import (
     mark_new_round,
@@ -31,6 +31,7 @@ from hltv_bot.live import (
     patch_board_from_log,
     snapshot_from_scoreboard,
 )
+from hltv_bot.events import fetch_events, filter_and_sort_events, format_events_html
 from hltv_bot.matches import fetch_match_meta, fetch_matches
 from hltv_bot.scorebot import WS_RETRY_EVERY, iter_scorebot, scorebot_base
 from hltv_bot.ratelimit import Cooldown
@@ -43,6 +44,7 @@ DEFAULT_ADMIN_ID = 1442477170
 HELP = """\
 <b>hltv-bot</b>
 • <code>/matches</code> — 今日比赛
+• <code>/events</code> — 近期赛事 (Major/T1)
 • <code>/watch</code> — 本群观赛（已有场次发 /watch 加入）
 • <code>/bump</code> — 顶到最新
 • <code>/stop</code> — 本群退出（/stop all 停全部）
@@ -73,6 +75,7 @@ CMD_COOLDOWN = {
     "/matches": 8.0,
     "/matchs": 8.0,
     "/match": 8.0,
+    "/events": 8.0,
     "/watch": 6.0,
     "/bump": 4.0,
     "/new": 4.0,
@@ -92,6 +95,7 @@ _KEEP_USER_CMDS = frozenset({"/watch"})
 
 USER_BOT_COMMANDS = [
     {"command": "matches", "description": "今日比赛"},
+    {"command": "events", "description": "近期赛事(Major/T1)"},
     {"command": "watch", "description": "本群观赛(已有场次 /watch 加入)"},
     {"command": "bump", "description": "顶到最新"},
     {"command": "stop", "description": "本群退出(/stop all 停全部)"},
@@ -386,6 +390,9 @@ class HltvTelegramBot:
         elif cmd in ("/matches", "/matchs", "/match"):
             self._await_cookie.discard(chat_id)
             self._cmd_matches(chat_id, arg)
+        elif cmd in ("/events", "/event"):
+            self._await_cookie.discard(chat_id)
+            self._cmd_events(chat_id, arg)
         elif cmd == "/watch":
             self._await_cookie.discard(chat_id)
             self._cmd_watch(chat_id, arg)
@@ -408,20 +415,27 @@ class HltvTelegramBot:
         text_only = "text" in raw_arg or "txt" in raw_arg
         if "all" in raw_arg or "全部" in raw_arg or "*" in raw_arg or "full" in raw_arg:
             tier_filter = "Other"
-        elif "t1" in raw_arg or "top" in raw_arg:
-            tier_filter = "T1"
         elif "t3" in raw_arg:
             tier_filter = "T3"
+        elif "t2" in raw_arg:
+            tier_filter = "T2"
         else:
-            tier_filter = "T2"  # Default: Tier 2 and above
+            tier_filter = "T1"  # Global default: Tier 1 (including Major)
 
         try:
             rows = fetch_matches(self.session)
         except CloudflareError as e:
             self._reply(chat_id, f"Cloudflare 拦了列表页：{e}\n发 /cookie 更新 Cookie")
             return
+        # Exclude matches where both teams are TBD
+        def _both_tbd(r: dict) -> bool:
+            _u1 = (r.get("team1") or "").strip().upper()
+            _u2 = (r.get("team2") or "").strip().upper()
+            return (not _u1 or _u1 in ("?", "TBD")) and (not _u2 or _u2 in ("?", "TBD"))
+
+        rows = [r for r in rows if not _both_tbd(r)]
         if not rows:
-            self._reply(chat_id, "列表是空的（或解析失败）")
+            self._reply(chat_id, "暂无可显示的比赛（或双方均为 TBD）")
             return
 
         if text_only:
@@ -520,6 +534,80 @@ class HltvTelegramBot:
         except Exception as e:
             log.exception("matches image render failed, falling back to text: %s", e)
             text = format_match_list(rows, starred_only=(tier_filter != "Other"))
+            self._reply(chat_id, text)
+
+    def _cmd_events(self, chat_id: int, arg: str = "") -> None:
+        raw_arg = arg.strip().lower()
+        text_only = "text" in raw_arg or "txt" in raw_arg
+        if "all" in raw_arg or "全部" in raw_arg or "*" in raw_arg:
+            allowed_tiers = ("Major", "T1", "T2", "T3", "Other")
+            tier_label = "All Events"
+        elif "t2" in raw_arg:
+            allowed_tiers = ("Major", "T1", "T2")
+            tier_label = "Major / T1 / T2"
+        elif "major" in raw_arg:
+            allowed_tiers = ("Major",)
+            tier_label = "Major"
+        else:
+            allowed_tiers = ("Major", "T1")
+            tier_label = "Major / T1"
+
+        try:
+            raw_events = fetch_events(self.session)
+        except CloudflareError as e:
+            self._reply(chat_id, f"Cloudflare 拦了赛事页：{e}\n发 /cookie 更新 Cookie")
+            return
+        except Exception as e:
+            log.exception("fetch_events error: %s", e)
+            self._reply(chat_id, f"获取赛事列表失败：{e}")
+            return
+
+        filtered = filter_and_sort_events(raw_events, allowed_tiers=allowed_tiers)
+        if not filtered:
+            self._reply(chat_id, "未找到符合条件的赛事。发 <code>/events all</code> 查看全部。")
+            return
+
+        if text_only:
+            text = format_events_html(filtered, limit=15)
+            self._reply(chat_id, text)
+            return
+
+        self.tg.send_chat_action(chat_id, "upload_photo")
+        try:
+            from datetime import datetime, timedelta, timezone
+
+            cst = timezone(timedelta(hours=8))
+            push_time = datetime.now(cst).strftime("%H:%M")
+
+            cache_sig = tier_label + ":" + ",".join(
+                f"{ev.get('id')}:{ev.get('live')}:{ev.get('days_left')}" for ev in filtered[:15]
+            )
+            now_ts = time.time()
+            cached = getattr(self, "_events_img_cache", {}).get(tier_label)
+            if cached and cached[0] == cache_sig and (now_ts - cached[1] < 120.0):
+                img_bytes = cached[2]
+                log.debug("events image cache hit for %s", tier_label)
+            else:
+                img_bytes = render_events_image(
+                    filtered,
+                    tier_filter=tier_label,
+                    updated_at=f"{push_time} UTC+8",
+                    limit=15,
+                )
+                if not hasattr(self, "_events_img_cache"):
+                    self._events_img_cache = {}
+                self._events_img_cache[tier_label] = (cache_sig, now_ts, img_bytes)
+
+            caption_lines = [
+                f"<b>HLTV Events</b> · <code>{push_time} UTC+8</code>",
+                f"<i>Filter: {tier_label} · /events [t2|major|all|text]</i>",
+            ]
+            self._reply_photo(chat_id, img_bytes, caption="\n".join(caption_lines), filename="events.png")
+            log.info("events photo sent chat=%s tier=%s events=%s", chat_id, tier_label, len(filtered))
+            return
+        except Exception as e:
+            log.exception("events image render failed, falling back to text: %s", e)
+            text = format_events_html(filtered, limit=15)
             self._reply(chat_id, text)
 
     def _watch_hint(self, list_id: str) -> str:
