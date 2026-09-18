@@ -255,7 +255,16 @@ def parse_match_list(html: str, *, limit: int = 100) -> list[dict[str, str]]:
         )
         if len(rows) >= limit:
             break
-    rows.sort(key=lambda r: (0 if r["live"] == "1" else 1, -int(r["stars"])))
+
+    def _match_sort_key(r: dict) -> tuple:
+        live = 0 if r.get("live") == "1" else 1
+        t1 = (r.get("team1") or "").strip().upper()
+        t2 = (r.get("team2") or "").strip().upper()
+        has_tbd = 1 if (not t1 or not t2 or t1 in ("?", "TBD") or t2 in ("?", "TBD")) else 0
+        stars = int(r.get("stars") or 0)
+        return (live, has_tbd, -stars)
+
+    rows.sort(key=_match_sort_key)
     return rows
 
 

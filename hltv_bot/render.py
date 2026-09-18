@@ -476,6 +476,16 @@ def build_matches_html(
                 ev_map.setdefault(ev, []).append(m)
 
             for ev, ms in ev_map.items():
+                def _row_sort_key(m: dict) -> tuple:
+                    is_live = 0 if m.get("live") == "1" else 1
+                    _t1 = (m.get("team1") or "").strip().upper()
+                    _t2 = (m.get("team2") or "").strip().upper()
+                    has_tbd = 1 if (not _t1 or not _t2 or _t1 in ("?", "TBD") or _t2 in ("?", "TBD")) else 0
+                    stars_val = int(m.get("stars") or 0)
+                    time_val = str(m.get("time") or "")
+                    return (is_live, has_tbd, -stars_val, time_val)
+
+                ms = sorted(ms, key=_row_sort_key)
                 m_count_str = f"{len(ms)} MATCH{'ES' if len(ms) > 1 else ''}"
                 html_parts.append(f"""
                 <div class="event-block">

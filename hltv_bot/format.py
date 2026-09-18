@@ -765,7 +765,11 @@ def format_match_list(
         return (-max(stars, default=0), -live_n, name.lower())
 
     def match_key(r: dict) -> tuple:
-        return (-star_n(r), 0 if r.get("live") == "1" else 1)
+        live = 0 if r.get("live") == "1" else 1
+        t1 = (r.get("team1") or "").strip().upper()
+        t2 = (r.get("team2") or "").strip().upper()
+        has_tbd = 1 if (not t1 or not t2 or t1 in ("?", "TBD") or t2 in ("?", "TBD")) else 0
+        return (live, has_tbd, -star_n(r))
 
     blocks: list[str] = []
     for event, matches in sorted(grouped.items(), key=event_key):
@@ -832,7 +836,11 @@ def format_match_list_rich(
         return (-max(stars, default=0), -live_n, name.lower())
 
     def match_key(r: dict) -> tuple:
-        return (-star_n(r), 0 if r.get("live") == "1" else 1)
+        live = 0 if r.get("live") == "1" else 1
+        t1 = (r.get("team1") or "").strip().upper()
+        t2 = (r.get("team2") or "").strip().upper()
+        has_tbd = 1 if (not t1 or not t2 or t1 in ("?", "TBD") or t2 in ("?", "TBD")) else 0
+        return (live, has_tbd, -star_n(r))
 
     parts = ["<h3>Matches</h3>"]
     for event, matches in sorted(grouped.items(), key=event_key):
