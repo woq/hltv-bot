@@ -30,14 +30,21 @@ def snapshot_stats_fingerprint(snap: dict) -> str:
 
 
 def snapshot_log_fingerprint(snap: dict) -> str:
-    log0 = (snap.get("log") or [{}])[0]
+    log_rows = snap.get("log") or []
+    visible_log = []
+    for item in log_rows[:15]:
+        if not isinstance(item, dict):
+            continue
+        visible_log.append(
+            f"{item.get('type')}:{item.get('killer')}:{item.get('victim')}:{item.get('assister')}:{item.get('text')}:{item.get('weapon')}:{1 if item.get('headshot') else 0}"
+        )
+    log_s = ";".join(visible_log)
     teams = snap.get("teams") or []
     return "|".join(
         [
             str(snap.get("scoreText") or ""),
             str(snap.get("roundText") or ""),
-            str(log0.get("text") or ""),
-            str(log0.get("type") or ""),
+            log_s,
             str(snap.get("transport") or ""),
             "b1" if snap.get("bombPlanted") else "b0",
             "f1" if snap.get("frozen") else "f0",

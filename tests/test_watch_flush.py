@@ -326,3 +326,54 @@ def test_command_replies_have_no_unsupported_tags():
     for chat_id, text in bot.tg.sent:
         for tag in unsupported:
             assert tag not in text, f"Found {tag} in reply: {text}"
+
+
+def test_snapshot_log_fingerprint_detects_assist_and_mid_log_changes():
+    from hltv_bot.snapshot import snapshot_log_fingerprint
+
+    snap1 = {
+        "scoreText": "0-1",
+        "roundText": "1 - Mirage",
+        "live": True,
+        "log": [
+            {"type": "kill", "killer": "sh1ro", "victim": "huNter-", "text": "sh1ro huNter-", "weapon": "awp", "headshot": True},
+            {"type": "round_start", "text": "start"},
+        ],
+    }
+    fp1 = snapshot_log_fingerprint(snap1)
+
+    # Adding assist to the existing kill entry (same log[0].text) must change fingerprint
+    snap2 = {
+        "scoreText": "0-1",
+        "roundText": "1 - Mirage",
+        "live": True,
+        "log": [
+            {
+                "type": "kill",
+                "killer": "sh1ro",
+                "victim": "huNter-",
+                "text": "sh1ro huNter-",
+                "weapon": "awp",
+                "headshot": True,
+                "assister": "donk",
+            },
+            {"type": "round_start", "text": "start"},
+        ],
+    }
+    fp2 = snapshot_log_fingerprint(snap2)
+    assert fp1 != fp2
+
+    # A change in the 2nd row must also change the fingerprint
+    snap3 = {
+        "scoreText": "0-1",
+        "roundText": "1 - Mirage",
+        "live": True,
+        "log": [
+            snap2["log"][0],
+            {"type": "kill", "killer": "m0NESY", "victim": "b1t", "text": "m0NESY b1t", "weapon": "ak47", "headshot": False},
+            {"type": "round_start", "text": "start"},
+        ],
+    }
+    fp3 = snapshot_log_fingerprint(snap3)
+    assert fp2 != fp3
+

@@ -17,6 +17,11 @@ python3 -m pytest tests/test_rich_message.py tests/test_format.py tests/test_wat
 
 不要用「源码里禁止 sendMessage」这种检查。`test_gaps.py` 核对出站间隔有没有漏（HTML 3s、poll、握手退避、WS 重试、Telegram edit / 429 / getUpdates）。
 
+## 部署与服务器
+
+- **主部署服务器**：`191.96.243.105`（通过系统 proxy 连接 / SSH `root@191.96.243.105`）。
+- 代码 push 到 GitHub `main` 分支后会自动部署到该服务器。
+
 ## 其它文档
 
 - `docs/hltv-api.md` — HLTV 非官方接口
@@ -25,3 +30,4 @@ python3 -m pytest tests/test_rich_message.py tests/test_format.py tests/test_wat
 - `docs/scorebot-transport.md` — 传输层试过什么、为什么停在 poll
 - `docs/chrome-gateway.md` — 常驻 Chrome 过 CF 网关：方案评估与落地顺序
 - `docs/chrome-keeper-step1.md` — Step 1 实现设计（keeper 保 poll；三 PR）
+
