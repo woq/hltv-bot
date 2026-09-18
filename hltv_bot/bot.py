@@ -443,9 +443,17 @@ class HltvTelegramBot:
             if tier_filter == "Other":
                 matches_in_tier = list(rows)
             else:
+                event_tier_map: dict[str, str] = {}
+                for r in rows:
+                    ev = r.get("event") or "Other Matches"
+                    st = int(r.get("stars") or 0)
+                    t = classify_event_tier(ev, st)
+                    if ev not in event_tier_map or tier_rank(t) < tier_rank(event_tier_map[ev]):
+                        event_tier_map[ev] = t
+
                 matches_in_tier = [
                     r for r in rows
-                    if tier_rank(classify_event_tier(r.get("event") or "", int(r.get("stars") or 0))) <= max_rank
+                    if tier_rank(event_tier_map.get(r.get("event") or "Other Matches", classify_event_tier(r.get("event") or "", int(r.get("stars") or 0)))) <= max_rank
                     and int(r.get("stars") or 0) >= 1
                 ]
 
@@ -498,9 +506,10 @@ class HltvTelegramBot:
                 for r in upcoming_top:
                     t1 = h(r.get("team1") or "?")
                     t2 = h(r.get("team2") or "?")
-                    clock = h(r.get("time") or "")
+                    clock = h((r.get("time") or "").strip())
                     mid = h(r.get("id") or "")
-                    caption_lines.append(f"• [{clock}] {t1} vs {t2} ➔ <code>/watch {mid}</code>")
+                    time_prefix = f"[{clock}] " if clock else ""
+                    caption_lines.append(f"• {time_prefix}{t1} vs {t2} ➔ <code>/watch {mid}</code>")
 
             caption_lines.append("<i>Filter: /matches [t1|t2|t3|all|text]</i>")
             caption = "\n".join(caption_lines)

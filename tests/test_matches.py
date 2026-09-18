@@ -102,6 +102,27 @@ def test_parse_match_list_container_isolation():
     assert by_id["2398105"]["event"] == "CCT Season 3"
 
 
+def test_parse_match_list_fallback_time_text():
+    html = """
+    <div class="upcomingMatch" data-stars="3">
+      <div class="matchTime">19:30</div>
+      <a href="/matches/2398102/vitality-vs-furia-blast-bounty" class="match">
+        <div class="matchTeams">
+          <div class="matchTeam"><div class="matchTeamName">Vitality</div></div>
+          <div class="matchTeam"><div class="matchTeamName">FURIA</div></div>
+        </div>
+        <div class="matchEventName">BLAST Bounty</div>
+      </a>
+    </div>
+    """
+    rows = parse_match_list(html)
+    assert len(rows) == 1
+    assert rows[0]["id"] == "2398102"
+    assert rows[0]["time"] == "19:30"
+    assert rows[0]["team1"] == "Vitality"
+    assert rows[0]["team2"] == "FURIA"
+
+
 def test_format_start_time_clock():
     import re
 

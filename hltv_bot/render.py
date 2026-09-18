@@ -194,13 +194,22 @@ def build_matches_html(
     updated_at: str = "",
 ) -> str:
     max_rank = tier_rank(tier_filter)
+    # 1. 统一赛事的最高 Tier：避免同一个赛事因比赛星级不同被分拆到多个 Tier 横幅
+    event_tier_map: dict[str, str] = {}
+    for r in rows:
+        ev = r.get("event") or "Other Matches"
+        st = int(r.get("stars") or 0)
+        t = classify_event_tier(ev, st)
+        if ev not in event_tier_map or tier_rank(t) < tier_rank(event_tier_map[ev]):
+            event_tier_map[ev] = t
+
     filtered = []
     for r in rows:
         stars = int(r.get("stars") or 0)
-        t = classify_event_tier(r.get("event") or "", stars)
+        ev = r.get("event") or "Other Matches"
+        t = event_tier_map.get(ev, classify_event_tier(ev, stars))
         r_copy = dict(r)
         r_copy["_tier"] = t
-        # Double filter: 1. Event meets tier standard AND 2. Match has >= 1 star (unless viewing All/Other)
         if tier_filter == "Other":
             filtered.append(r_copy)
         elif tier_rank(t) <= max_rank and stars >= 1:

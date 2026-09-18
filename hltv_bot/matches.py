@@ -27,6 +27,7 @@ EVENT_NAME = re.compile(
 )
 DATA_STARS = re.compile(r'data-(?:stars|star-rating|rating)="(\d)"', re.I)
 DATA_UNIX = re.compile(r'data-unix="(\d{10,13})"')
+MATCH_TIME_TEXT = re.compile(r'class="[^"]*(?:matchTime|time)[^"]*"[^>]*>\s*(\d{1,2}:\d{2})\s*<', re.I)
 CST = timezone(timedelta(hours=8))
 
 
@@ -227,7 +228,17 @@ def parse_match_list(html: str, *, limit: int = 100) -> list[dict[str, str]]:
         if unix is None:
             um = DATA_UNIX.search(chunk)
             unix = um.group(1) if um else None
+        if unix is None:
+            # Look backwards up to 3000 chars for the parent date/time container
+            wide_before = html[max(0, m.start() - 3000):m.start()]
+            for um in DATA_UNIX.finditer(wide_before):
+                unix = um.group(1)
+
         time_s = format_start_time(unix, live=live)
+        if not time_s and not live:
+            tm = MATCH_TIME_TEXT.search(chunk)
+            if tm:
+                time_s = tm.group(1)
         rows.append(
             {
                 "id": mid,

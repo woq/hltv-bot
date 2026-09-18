@@ -32,6 +32,36 @@ def test_tier_rank_ordering():
     assert tier_rank("T3") < tier_rank("Other")
 
 
+def test_build_matches_html_unified_event_tier():
+    from hltv_bot.render import build_matches_html
+    # Matches from the same event with different stars (e.g., 5-star and 2-star)
+    matches = [
+        {
+            "id": "1",
+            "team1": "A",
+            "team2": "B",
+            "event": "BLAST Premier",
+            "live": "0",
+            "stars": "5",
+            "time": "12:00",
+        },
+        {
+            "id": "2",
+            "team1": "C",
+            "team2": "D",
+            "event": "BLAST Premier",
+            "live": "0",
+            "stars": "2",
+            "time": "15:00",
+        },
+    ]
+    html = build_matches_html(matches, tier_filter="T2")
+    # BLAST Premier should only appear once in event-name
+    assert html.count("BLAST Premier") == 1
+    # Both matches should be grouped under that single event banner
+    assert "2 MATCHES" in html
+
+
 def test_localize_team():
     assert localize_team("The MongolZ") == "The MongolZ"
     assert localize_team("Spirit") == "Spirit"
