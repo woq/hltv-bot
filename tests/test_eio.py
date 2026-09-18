@@ -294,3 +294,41 @@ def test_iter_poll_events_emits_ws_fail():
     fail = next(p for n, p in out if n == "ws_fail")
     assert fail["n"] == 1
     assert "403" in fail["error"]
+
+
+def test_iter_poll_events_upgrades_ws_and_sends_ready():
+    from hltv_bot.scorebot import iter_poll_events
+
+    class _UpgradedWS:
+        def __init__(self):
+            self.sent = []
+
+        def send(self, pkt):
+            self.sent.append(pkt)
+
+        def recv_str(self):
+            # immediately raise after receiving subscription
+            raise TimeoutError("done")
+
+    fake_ws = _UpgradedWS()
+    out = []
+    try:
+        for ev in iter_poll_events(
+            _StopPoll(),
+            base="https://scorebot-lb.hltv.org",
+            headers={},
+            sid="abc",
+            list_id="2398000",
+            timeout=1,
+            skip_ready=True,
+            ws_factory=lambda: (fake_ws, [], None),
+            ws_retry_every=999,
+        ):
+            out.append(ev)
+    except TimeoutError:
+        pass
+
+    assert any(n == "status" and p.get("transport") == "ws" for n, p in out)
+    assert fake_ws.sent[0] == "40"
+    assert "readyForMatch" in fake_ws.sent[1]
+    assert "2398000" in fake_ws.sent[1]

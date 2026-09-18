@@ -41,6 +41,7 @@ WS 是另一条：**新 TCP + HTTP/1.1 `Connection: Upgrade`**。Cloudflare 对�
 - HTTP `accept-encoding` 加 zstd。
 - Cookie 顺序：`io` → `_cfuvid` → `__cflb` → `cf_clearance` → `__cf_bm`。
 - **不要** 在 WS 上声明 `permessage-deflate`，也 **不要** 带 `Accept-Encoding`：`curl_cffi` 会 101 成功然后 `WS_RECV` 空包（curl 52）。
+- 升级到 WebSocket 成功后，必须立即主动补发 Socket.IO 连接包 `40` 以及 `42["readyForMatch", ...]` 订阅包，否则服务端虽然保持 ping/pong，但不会向新流下发比赛事件。
 - 两种 `default_headers` 之间隔 1s；第一次就是 403 不再打第二次。
 
 本机完整 cookie 时曾经 `PROBE_OK` 并收到 `42["log",…]`。VPS 上常见 cookie 只剩 `io,__cf_bm,__cflb`（没有 clearance），Upgrade 仍 403。不要把那一次成功理解成「Python 已经稳定过 CF WS」。

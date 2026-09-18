@@ -156,6 +156,8 @@ _SCOREBOT_JS = r"""
         emit("trace", {text: "ws open sid=" + (o.sid || "") + " ping=" + pingInterval + "/" + pingTimeout});
       } catch (e) {}
       try { ws.send("40"); } catch (e) {}
+      sendReady();
+      emit("status", {state: "connected", transport: "ws"});
       return;
     }
     if (t === "40") {

@@ -84,7 +84,10 @@ format_rich_html  →  多群各自 edit 同一份 HTML
 | 回合史 | `ctMatchHistory` / `terroristMatchHistory`（`firstHalf` + `secondHalf`） |
 | 拆包中 | `bombPlanted` |
 | freeze | `frozen` |
+| 回合状态 | `currentRoundState`, `roundState` |
 | 是否直播 | `live` |
+
+`roundState` 若服务端仍残留为 `warmup` / `warmingup`，但在已有比分（`ctScore + tScore > 0`）、回合数大于 1、已有回合史或选手已有 K/D 时，归一化层会自动将其校正为 `live`，避免展示卡死在热身。
 
 `ctTeamScore` / `tTeamScore` 在现网里经常就是**本图回合分**，不是 BO3 系列分。系列分 Scorebot **不保证**提供。
 

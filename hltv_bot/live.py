@@ -693,7 +693,12 @@ def snapshot_from_scoreboard(
     state = str(board.get("currentRoundState") or board.get("roundState") or "").strip()
     st = state.lower().replace(" ", "")
     frozen = bool(board.get("frozen")) or st in {"freezeperiod", "freezetime", "freeze"}
-    if st in {"warmup", "warmingup"} and (hist or any(p.get("kills") or p.get("deaths") for p in ct_pl + t_pl)):
+    if st in {"warmup", "warmingup"} and (
+        hist
+        or (round_n is not None and round_n > 1)
+        or (ct_score + t_score > 0)
+        or any(p.get("kills") or p.get("deaths") for p in ct_pl + t_pl)
+    ):
         state = "live"
         frozen = False
     return {

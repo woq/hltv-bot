@@ -519,3 +519,19 @@ def test_merge_scoreboard_keeps_ahead_header():
     assert got["currentRound"] == 6
     assert got["terroristScore"] == 5
     assert got["CT"][0]["nick"] == "x"
+
+
+def test_snapshot_warmup_overridden_when_round_or_score_advanced():
+    # round > 1 but roundState left as warmup
+    snap = snapshot_from_scoreboard(
+        {
+            "currentRound": 5,
+            "currentRoundState": "warmup",
+            "mapName": "de_ancient",
+            "counterTerroristScore": 2,
+            "terroristScore": 2,
+        }
+    )
+    assert snap["roundState"] == "live"
+    assert snap["frozen"] is False
+    assert snap["scoreText"] == "2-2"

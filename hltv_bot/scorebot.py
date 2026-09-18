@@ -461,6 +461,13 @@ def iter_poll_events(
                 ws_fails = 0
                 yield _trace("ws upgraded")
                 yield ("status", {"state": "connected", "transport": "ws"})
+                # Socket.IO handshake + subscribe match
+                try:
+                    send_eio(ws, "40")
+                    emit_pkt = encode_event("readyForMatch", ready_for_match_payload(list_id))
+                    send_eio(ws, emit_pkt)
+                except Exception as e:
+                    log.warning("failed to send readyForMatch on ws upgrade: %s", e)
                 yield ("tick", None)
                 for ev in iter_ws_events(ws, extra=extra):
                     yield ev
