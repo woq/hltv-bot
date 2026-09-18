@@ -420,15 +420,52 @@ def format_log_item(item: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
+def _is_descending_items(items: list[dict[str, Any]]) -> bool:
+    """Check if a log dump is sorted descending (newest first).
+
+    HLTV scorebot full history dumps are typically delivered newest-first
+    (e.g. current round down to warmup), with descending round totals or eventIds.
+    Live in-match event bursts (kill -> assist) are chronological (ascending).
+    """
+    if len(items) <= 1:
+        return False
+    eids: list[int] = []
+    rounds: list[int] = []
+    for it in items:
+        for v in it.values():
+            if isinstance(v, dict):
+                eid = v.get("eventId")
+                if eid is not None:
+                    try:
+                        eids.append(int(eid))
+                    except (ValueError, TypeError):
+                        pass
+                if "counterTerroristScore" in v and "terroristScore" in v:
+                    try:
+                        rounds.append(int(v["counterTerroristScore"]) + int(v["terroristScore"]))
+                    except (ValueError, TypeError):
+                        pass
+    if len(rounds) >= 2 and rounds[0] != rounds[-1]:
+        return rounds[0] > rounds[-1]
+    if len(eids) >= 2 and eids[0] != eids[-1]:
+        return eids[0] > eids[-1]
+    return False
+
+
 def _log_items(incoming: Any) -> list[dict[str, Any]] | None:
     block = incoming
     if isinstance(incoming, dict) and "log" in incoming:
         block = incoming["log"]
+    items: list[dict[str, Any]]
     if isinstance(block, list):
-        return [x for x in block if isinstance(x, dict)]
-    if isinstance(block, dict):
-        return [block]
-    return None
+        items = [x for x in block if isinstance(x, dict)]
+    elif isinstance(block, dict):
+        items = [block]
+    else:
+        return None
+    if _is_descending_items(items):
+        items = list(reversed(items))
+    return items
 
 
 def merge_log(existing: list[dict[str, Any]], incoming: Any) -> list[dict[str, Any]]:

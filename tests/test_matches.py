@@ -409,6 +409,26 @@ def test_merge_log_allows_reused_event_id_after_round_start():
     assert sum(1 for x in nxt if x.get("type") == "kill") == 2
 
 
+def test_merge_log_normalizes_descending_dump():
+    # When scorebot sends full match dump, it sends newest first:
+    # [Round 2 kill (eid 20), RoundEnd 1-0, Round 1 kill (eid 10)]
+    dump = {
+        "log": [
+            {"Kill": {"killerNick": "m0NESY", "victimNick": "b1t", "weapon": "awp", "headShot": True, "eventId": 20}},
+            {"RoundEnd": {"counterTerroristScore": 1, "terroristScore": 0, "winner": "CT", "winType": "CTs_Win"}},
+            {"Kill": {"killerNick": "donk", "victimNick": "s1mple", "weapon": "ak47", "headShot": True, "eventId": 10}},
+        ]
+    }
+    merged = merge_log([], dump)
+    # merged[0] must be the latest event in the match (m0NESY kill in Round 2)
+    assert merged[0]["killer"] == "m0NESY"
+    assert merged[0]["event_id"] == "20"
+    # merged[-1] should be the earliest event (donk kill in Round 1)
+    assert merged[-1]["killer"] == "donk"
+    assert merged[-1]["event_id"] == "10"
+
+
+
 def test_mark_new_round_inserts_start():
     feed = [{"type": "kill", "killer": "a", "victim": "b", "weapon": "ak47"}]
     out, n = mark_new_round(feed, {"currentRound": 13}, 12)

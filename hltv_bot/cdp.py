@@ -49,7 +49,10 @@ def _http_json(method: str, url: str, timeout: float) -> Any:
         raise CdpUnavailable(str(e)) from e
     if not raw:
         return None
-    return json.loads(raw)
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return raw
 
 
 def _list_pages(base: str, timeout: float) -> list[dict]:
