@@ -331,7 +331,8 @@ def close_extra_pages(
         if "hltv.org" not in url:
             continue
         parsed = urlparse(url)
-        if keep_path in (parsed.path or ""):
+        path = (parsed.path or "").rstrip("/")
+        if path == keep_path.rstrip("/") or path == "":
             continue
         if any(url.startswith(k) or k in url for k in keep):
             continue
