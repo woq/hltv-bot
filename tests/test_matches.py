@@ -53,6 +53,55 @@ def test_parse_match_list_placeholder_tbd():
     assert "StarLadder" in rows[0]["event"]
 
 
+def test_parse_match_list_container_isolation():
+    html = """
+    <div class="upcomingMatch" data-stars="3">
+      <div class="matchRating" data-stars="3"><i class="fa fa-star"></i><i class="fa fa-star"></i><i class="fa fa-star"></i></div>
+      <div class="matchTime" data-unix="1787923200000">18:00</div>
+      <a href="/matches/2398099/mouz-vs-natus-vincere-starladder-starseries-fall-2026" class="match">
+        <div class="matchTeams">
+          <div class="matchTeam"><div class="matchTeamName">MOUZ</div></div>
+          <div class="matchTeam"><div class="matchTeamName">Natus Vincere</div></div>
+        </div>
+        <div class="matchEventName">StarLadder StarSeries Fall 2026</div>
+      </a>
+    </div>
+
+    <div class="upcomingMatch" data-stars="0">
+      <div class="matchTime" data-unix="1788009600000">01:00</div>
+      <a href="/matches/2398106/starladder-starseries-fall-2026-lower-bracket-final-starladder-starseries-fall-2026" class="match">
+        <div class="matchEventName">StarLadder StarSeries Fall 2026 Lower Bracket Final</div>
+      </a>
+    </div>
+
+    <div class="upcomingMatch" data-stars="1">
+      <div class="matchRating" data-stars="1"><i class="fa fa-star"></i></div>
+      <div class="matchTime" data-unix="1788019600000">03:00</div>
+      <a href="/matches/2398105/ryvex-vs-tbd-cct-season-3" class="match">
+        <div class="matchTeams">
+          <div class="matchTeam"><div class="matchTeamName">Ryvex</div></div>
+        </div>
+        <div class="matchEventName">CCT Season 3</div>
+      </a>
+    </div>
+    """
+    rows = parse_match_list(html)
+    by_id = {r["id"]: r for r in rows}
+    assert by_id["2398099"]["team1"] == "MOUZ"
+    assert by_id["2398099"]["team2"] == "Natus Vincere"
+    assert by_id["2398099"]["stars"] == "3"
+
+    assert by_id["2398106"]["team1"] == "TBD"
+    assert by_id["2398106"]["team2"] == "TBD"
+    assert by_id["2398106"]["stars"] == "0"
+    assert "Lower Bracket Final" in by_id["2398106"]["event"]
+
+    assert by_id["2398105"]["team1"] == "Ryvex"
+    assert by_id["2398105"]["team2"] == "Tbd"
+    assert by_id["2398105"]["stars"] == "1"
+    assert by_id["2398105"]["event"] == "CCT Season 3"
+
+
 def test_format_start_time_clock():
     import re
 

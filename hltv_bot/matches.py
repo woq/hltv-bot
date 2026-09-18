@@ -181,15 +181,21 @@ def parse_match_list(html: str, *, limit: int = 100) -> list[dict[str, str]]:
         if mid in seen:
             continue
         seen.add(mid)
-        start = max(0, m.start() - 1200)
-        end = min(len(html), m.start() + 2400)
-        chunk = html[start:end]
-        prefix = html[start : m.start()]
-        live_at = [x.start() for x in re.finditer(r"liveMatch|live-match|matchLive", prefix, re.I)]
-        up_at = [x.start() for x in re.finditer(r"upcomingMatch|upcoming-match", prefix, re.I)]
-        last_live = max(live_at) if live_at else -1
-        last_up = max(up_at) if up_at else -1
-        live = last_live > last_up
+        # Locate match container boundary instead of broad 3600-char window
+        before_pos = html.rfind('<div class="upcomingMatch', 0, m.start())
+        live_pos = html.rfind('<div class="liveMatch', 0, m.start())
+        c_start = max(before_pos, live_pos)
+        if c_start == -1 or (m.start() - c_start > 1500):
+            c_start = max(0, m.start() - 400)
+
+        next_up = html.find('<div class="upcomingMatch', m.end())
+        next_live = html.find('<div class="liveMatch', m.end())
+        candidates_end = [x for x in (next_up, next_live) if x != -1]
+        c_end = min(candidates_end) if candidates_end else min(len(html), m.end() + 1000)
+        chunk = html[c_start:c_end]
+
+        prefix = html[c_start:m.start()]
+        live = "liveMatch" in html[c_start:m.start() + 100] or "matchLive" in html[c_start:m.start() + 100]
 
         teams: list[str] = []
         mt = MATCH_TEAMS_BLOCK.search(chunk)
