@@ -131,7 +131,7 @@ def _teams_event_from_slug(slug: str) -> tuple[str, str, str]:
     slug = unescape(slug)
     if "-vs-" not in slug:
         pretty = slug.replace("-", " ")
-        return pretty, "", ""
+        return "TBD", "TBD", pretty
     left, right = slug.split("-vs-", 1)
     t1 = left.replace("-", " ")
     # event tokens often start at known series names
@@ -203,6 +203,8 @@ def parse_match_list(html: str, *, limit: int = 100) -> list[dict[str, str]]:
             t1, t2 = teams[0], teams[1]
         elif len(teams) == 1:
             t1 = teams[0]
+            if not t2 or t2 == "TBD":
+                t2 = "TBD"
 
         ev_attr = EVENT_ATTR.search(chunk)
         if ev_attr:

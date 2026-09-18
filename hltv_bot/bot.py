@@ -471,7 +471,19 @@ class HltvTelegramBot:
             # Build caption with quick /watch shortcuts for live & top matches
             caption_lines = [f"<b>HLTV Matches</b> · <code>{push_time} UTC+8</code>"]
             live_matches = [r for r in matches_in_tier if r.get("live") == "1"]
-            upcoming_top = [r for r in matches_in_tier if r.get("live") != "1" and int(r.get("stars") or 0) >= 2][:4]
+            def _is_determined_match(m: dict) -> bool:
+                _t1 = (m.get("team1") or "").strip().upper()
+                _t2 = (m.get("team2") or "").strip().upper()
+                if not _t1 or not _t2 or _t1 in ("?", "TBD") or _t2 in ("?", "TBD"):
+                    return False
+                return True
+
+            upcoming_top = [
+                r for r in matches_in_tier
+                if r.get("live") != "1"
+                and int(r.get("stars") or 0) >= 2
+                and _is_determined_match(r)
+            ][:4]
 
             if live_matches:
                 caption_lines.append("🔴 <b>LIVE:</b>")

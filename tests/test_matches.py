@@ -36,6 +36,23 @@ def test_parse_match_list_dedupes():
     assert rows[1]["live"] == "0"
 
 
+def test_parse_match_list_placeholder_tbd():
+    html = """
+    <div class="upcomingMatch" data-stars="3">
+      <div class="matchRating" data-stars="3"><i class="fa fa-star"></i><i class="fa fa-star"></i><i class="fa fa-star"></i></div>
+      <a href="/matches/2398106/starladder-starseries-fall-2026-lower-bracket-final-starladder-starseries-fall-2026" class="match">
+        <div class="matchEventName">StarLadder StarSeries Fall 2026</div>
+      </a>
+    </div>
+    """
+    rows = parse_match_list(html)
+    assert len(rows) == 1
+    assert rows[0]["team1"] == "TBD"
+    assert rows[0]["team2"] == "TBD"
+    assert rows[0]["title"] == "TBD vs TBD"
+    assert "StarLadder" in rows[0]["event"]
+
+
 def test_format_start_time_clock():
     import re
 
