@@ -260,8 +260,7 @@ def chrome_scorebot_enabled() -> bool:
 
 
 def _pick_match_page(pages: list[dict], match_url: str, list_id: str) -> dict | None:
-    found: list[dict] = []
-    needle = str(list_id or "")
+    needle = f"/{list_id}/" if list_id else ""
     want = (match_url or "").split("?")[0].rstrip("/")
     for p in pages:
         if p.get("type") != "page":
@@ -271,12 +270,13 @@ def _pick_match_page(pages: list[dict], match_url: str, list_id: str) -> dict | 
             continue
         if "/matches" == urlparse(url).path.rstrip("/"):
             continue
-        found.append(p)
-        if want and url.startswith(want):
+        if want and url.rstrip("/").startswith(want):
             return p
         if needle and needle in url:
             return p
-    return found[0] if found else None
+        if list_id and str(list_id) in url:
+            return p
+    return None
 
 
 def _ensure_match_tab(

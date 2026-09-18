@@ -52,6 +52,17 @@ def test_pick_match_page_skips_keeper_list():
     assert got["id"] == "b"
 
 
+def test_pick_match_page_does_not_pick_unrelated_match():
+    pages = [
+        {"type": "page", "url": "https://www.hltv.org/matches/2398088/mouz-vs-nrg", "id": "mouz"},
+        {"type": "page", "url": "https://www.hltv.org/matches", "id": "list"},
+    ]
+    # Looking for match 2398102 must NOT return mouz
+    got = _pick_match_page(pages, "https://www.hltv.org/matches/2398102/x", "2398102")
+    assert got is None
+
+
+
 def test_scorebot_env_curl_disables_chrome(monkeypatch):
     monkeypatch.setenv("HLTV_SCOREBOT", "curl")
     assert chrome_scorebot_enabled() is False
