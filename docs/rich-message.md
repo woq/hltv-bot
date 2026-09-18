@@ -26,13 +26,13 @@ Watch 规则不变：默认只 edit 同一条；`not modified` 当成功；新�
 
 Rich **没有 CSS**。单元格只能行内标签。不要用 h3/ul/footer 文章壳。
 
-每群 **两条** Rich（`/watch` / `/bump` 连发，`/stop` 两条都删）：
+每群 **单条** Rich（`/watch` / `/bump` 发送单条，`/stop` 删除）：
 
-1. **战绩消息**：回合史 + 名单表 CT / T，默认展开（已拆成独立消息，不再包 `<details>`）。只在 K/A/D/ADR/回合史/地图分变时 edit，Kill 不碰这条。
-2. **Log 消息**：比分条 `table bordered compact` → Log 表（两列：选手 / 事件；无 Who 表头；文案英语）→ 最下一行链接状态（手机约 68 字）：`connected · freeze · bomb · 3v5 · R19 · Inferno · 18:32:05`；异常时带 notice / next。
+- **整合卡片**：比分条 `table bordered compact` → 回合历史 → 名单表 CT / T → Log 表（两列：选手 / 事件；无 Who 表头；文案英语）→ 最下一行链接状态（手机约 68 字）：`connected · freeze · bomb · 3v5 · R19 · Inferno · 18:32:05`；异常时带 notice / next。
+- **频控与防抖**：最小 edit 间隔 1.5s，滑动窗口限制每分钟最多 20 次 edit，超出时合并（coalesce）并在窗口释放后刷新。
 
 未出分用 `–`，不要 0-0。
 
-拿不到可用记分板时（从未出分、或 60s 无 scorebot）**只把 log 那条**改成 DEBUG：`pre` 里最近运输层痕迹。战绩那条不动。瞬时 5xx 时有新数据就留记分板，只在底栏带 notice / next。有过比分后断开则 LIVE 改 SCORE 结算，不另发新消息。
+拿不到可用记分板时（从未出分、或 60s 无 scorebot）改成 DEBUG：`pre` 里最近运输层痕迹。瞬时 5xx 时有新数据就留记分板，只在底栏带 notice / next。有过比分后断开则 LIVE 改 SCORE 结算，不另发新消息。
 
 限制（官方）：正文 ≤ 32768；块 ≤ 500；表 ≤ 20 列；嵌套 ≤ 16。

@@ -123,39 +123,45 @@ def test_flush_without_message_id_does_not_send():
     assert bot.tg.sent == []
 
 
-def test_flush_send_new_two_messages():
+def test_flush_send_new_single_message():
     bot = _bot()
     st = _state()
     bot._flush_watch(
         st,
-        stats_html="<details>s</details>",
-        log_html="<table>log</table>",
+        log_html="<table>card</table>",
         send_new=True,
         chat_id=1,
     )
-    assert len(bot.tg.sent) == 2
+    assert len(bot.tg.sent) == 1
     card = st.cards[1]
-    assert card.stats_id != card.log_id
-    assert card.stats_id and card.log_id
+    assert card.message_id is not None
+    assert card.message_id == card.log_id == card.stats_id
 
 
-def test_kill_edit_does_not_touch_stats_message():
+def test_edit_rate_limit_sliding_window():
+    import time
     bot = _bot()
     st = _state(
         cards={
             1: WatchCard(
                 chat_id=1,
-                stats_id=6,
-                log_id=7,
-                sent_stats="<details>s</details>",
-                sent_log="oldlog",
+                message_id=7,
+                sent_html="old",
             )
         }
     )
-    bot._flush_watch(st, stats_html="<details>s</details>", log_html="newlog")
-    edited_ids = [m for _, m, _ in bot.tg.edited]
-    assert 6 not in edited_ids
-    assert 7 in edited_ids
+    now = time.time()
+    # 20 edits in the past minute -> should defer
+    st.cards[1].edit_timestamps = [now - i for i in range(20, 0, -1)]
+    bot._flush_watch(st, log_html="new")
+    assert bot.tg.edited == []
+    assert st.pending is True
+
+    # After clearing timestamps, edit is allowed
+    st.cards[1].edit_timestamps = []
+    bot._flush_watch(st, log_html="new")
+    assert len(bot.tg.edited) == 1
+    assert bot.tg.edited[0][1] == 7
 
 
 def test_bump_is_the_only_new_send():
@@ -171,12 +177,11 @@ def test_bump_is_the_only_new_send():
     assert bot.tg.sent[0][0] == 1
 
 
-def test_watch_edit_interval_ws_is_faster_than_poll():
+def test_watch_edit_interval_is_1_5():
     poll = _state()
     ws = _state(transport="ws")
-    assert watch_edit_interval(poll) == MIN_EDIT_INTERVAL
-    assert watch_edit_interval(ws) == MIN_EDIT_INTERVAL_WS
-    assert watch_edit_interval(ws) < watch_edit_interval(poll)
+    assert watch_edit_interval(poll) == 1.5
+    assert watch_edit_interval(ws) == 1.5
 
 
 def test_watch_debug_mode_healthy_vs_down():

@@ -47,9 +47,8 @@ def test_delay_floors():
     assert RECONNECT_MAX >= 180.0
     assert WS_RETRY_EVERY >= 15.0
     assert WS_ATTEMPT_GAP >= 1.0
-    assert MIN_EDIT_INTERVAL >= 1.8
-    assert 0.3 <= MIN_EDIT_INTERVAL_WS <= 0.8
-    assert MIN_EDIT_INTERVAL_WS < MIN_EDIT_INTERVAL
+    assert MIN_EDIT_INTERVAL >= 1.5
+    assert MIN_EDIT_INTERVAL_WS >= 1.5
     assert MSG_TTL >= 30.0
     assert GET_UPDATES_FAIL_SLEEP >= 3.0
     assert TG_COMMANDS_GAP >= 0.3

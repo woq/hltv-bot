@@ -67,19 +67,10 @@ def test_format_contains_score_and_log():
     assert "<mark>CT</mark>" in rich
     assert "<b>T</b>" in rich
     assert "<aside>" not in rich
-    assert "<p>Stats" in rich
     assert "<details>" not in rich
-    from hltv_bot.format import format_rich_log_html, format_rich_stats_html
-
-    stats = format_rich_stats_html(SNAP)
-    live = format_rich_log_html(SNAP)
-    assert "<p>Stats" in stats
-    assert "<details>" not in stats
-    assert "killed" not in stats
-    assert "<details>" not in live
-    assert "killed" in live or "huNter-" in live
     assert "connected" in rich
     assert "R19" in rich
+    assert "killed" in rich or "huNter-" in rich
 
 
 def test_scoreboard_notice_and_next_clock():
@@ -224,10 +215,10 @@ def test_stats_expanded_and_history_on_top():
     ]
     rich = format_rich_html(snap)
     assert "<details>" not in rich
-    assert rich.startswith("<p>Stats")
     assert "R1 CT elim" in rich
     assert "R2 T bomb" in rich
-    assert rich.index("R1 CT elim") < rich.index("<table bordered compact>")
+    # In single card: score table comes first, then history line, then side tables
+    assert rich.index("<table bordered compact>") < rich.index("R1 CT elim")
     assert rich.rfind("<p><i>") > rich.rfind("<table")
 
 

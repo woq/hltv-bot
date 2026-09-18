@@ -17,6 +17,7 @@ from hltv_bot.format import (
     format_match_list,
     format_rich_log_html,
     format_rich_stats_html,
+    format_rich_watch_card,
     format_watch_debug_html,
     h,
     plain_to_rich,
@@ -83,8 +84,9 @@ CMD_COOLDOWN = {
     "/cookie": 3.0,
 }
 DEFAULT_CMD_COOLDOWN = 1.2
-MIN_EDIT_INTERVAL = 1.8
-MIN_EDIT_INTERVAL_WS = 0.5
+MIN_EDIT_INTERVAL = 1.5
+MIN_EDIT_INTERVAL_WS = 1.5
+MAX_EDITS_PER_MINUTE = 20
 WATCH_STALE = 60.0
 MSG_TTL = 60.0
 GET_UPDATES_FAIL_SLEEP = 3.0
@@ -121,6 +123,7 @@ class WatchCard:
     sent_html: str = ""
     sent_stats: str = ""
     sent_log: str = ""
+    edit_timestamps: list[float] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if self.log_id is None and self.message_id is not None:
@@ -129,6 +132,20 @@ class WatchCard:
             self.message_id = self.log_id
         if not self.sent_log and self.sent_html:
             self.sent_log = self.sent_html
+
+    def can_edit(self, now: float) -> bool:
+        cutoff = now - 60.0
+        self.edit_timestamps = [t for t in self.edit_timestamps if t > cutoff]
+        if len(self.edit_timestamps) >= MAX_EDITS_PER_MINUTE:
+            return False
+        if self.edit_timestamps and (now - self.edit_timestamps[-1]) < MIN_EDIT_INTERVAL:
+            return False
+        return True
+
+    def record_edit(self, now: float) -> None:
+        cutoff = now - 60.0
+        self.edit_timestamps = [t for t in self.edit_timestamps if t > cutoff]
+        self.edit_timestamps.append(now)
 
 
 @dataclass
@@ -1281,17 +1298,13 @@ class HltvTelegramBot:
         send_new: bool = False,
         chat_id: int | None = None,
     ) -> None:
-        if log_html is None:
-            log_html = html or ""
-        if stats_html is None and html is not None:
-            stats_html = ""
-        if not log_html and not stats_html:
+        body = log_html if log_html is not None else (html or stats_html or "")
+        if not body:
             return
         now = time.time()
         snap = state.last_snap or {}
-        if log_html:
-            state.log_html = log_html
-            state.text = log_html
+        state.log_html = body
+        state.text = body
         if stats_html:
             state.stats_html = stats_html
         if send_new:
@@ -1300,26 +1313,22 @@ class HltvTelegramBot:
                 log.warning("watch send skipped: no chat")
                 return
             card = state.card(cid)
-            if stats_html:
-                msg = self._send_rich(cid, stats_html)
-                if isinstance(msg, dict) and msg.get("message_id"):
-                    card.stats_id = msg["message_id"]
-                card.sent_stats = stats_html
-            if log_html:
-                msg = self._send_rich(cid, log_html)
-                if isinstance(msg, dict) and msg.get("message_id"):
-                    card.log_id = msg["message_id"]
-                    card.message_id = card.log_id
-                card.sent_log = log_html
-                card.sent_html = log_html
+            msg = self._send_rich(cid, body)
+            if isinstance(msg, dict) and msg.get("message_id"):
+                card.message_id = msg["message_id"]
+                card.log_id = card.message_id
+                card.stats_id = card.message_id
+            card.sent_html = body
+            card.sent_log = body
+            card.sent_stats = body
+            card.record_edit(now)
             state.last_bump = now
             state.last_edit = now
             state.pending = False
             log.info(
-                "watch send chat=%s stats=%s log=%s %s",
+                "watch send chat=%s msg=%s %s",
                 cid,
-                card.stats_id,
-                card.log_id,
+                card.message_id,
                 snap_brief(snap),
             )
             return
@@ -1329,47 +1338,48 @@ class HltvTelegramBot:
             return
         edited = False
         for card in targets:
-            for kind, mid, body, attr in (
-                ("stats", card.stats_id, stats_html, "sent_stats"),
-                ("log", card.log_id or card.message_id, log_html, "sent_log"),
-            ):
-                if not body or body == getattr(card, attr):
-                    continue
-                if not mid:
+            mid = card.message_id or card.log_id or card.stats_id
+            if not body or body == card.sent_html:
+                continue
+            if not mid:
+                log.warning(
+                    "watch edit skipped: no message id chat=%s (will not send a new card)",
+                    card.chat_id,
+                )
+                continue
+            if not card.can_edit(now):
+                state.pending = True
+                log.debug("watch edit rate limited chat=%s msg=%s", card.chat_id, mid)
+                continue
+            try:
+                self.tg.edit_rich(card.chat_id, mid, body)
+                card.record_edit(now)
+                log.info(
+                    "watch edit chat=%s msg=%s %s",
+                    card.chat_id,
+                    mid,
+                    snap_brief(snap),
+                )
+            except Exception as e:
+                if is_not_modified(e):
+                    log.debug("watch not modified chat=%s msg=%s", card.chat_id, mid)
+                else:
                     log.warning(
-                        "watch edit skipped: no %s id chat=%s (will not send a new card)",
-                        kind,
+                        "watch edit_rich failed chat=%s: %s html=%s",
                         card.chat_id,
+                        e,
+                        clip(body, 240),
                     )
                     continue
-                try:
-                    self.tg.edit_rich(card.chat_id, mid, body)
-                    log.info(
-                        "watch edit %s chat=%s msg=%s %s",
-                        kind,
-                        card.chat_id,
-                        mid,
-                        snap_brief(snap),
-                    )
-                except Exception as e:
-                    if is_not_modified(e):
-                        log.debug("watch not modified %s chat=%s msg=%s", kind, card.chat_id, mid)
-                    else:
-                        log.warning(
-                            "watch edit_rich %s failed chat=%s: %s html=%s",
-                            kind,
-                            card.chat_id,
-                            e,
-                            clip(body, 240),
-                        )
-                        continue
-                setattr(card, attr, body)
-                if kind == "log":
-                    card.sent_html = body
-                    card.message_id = mid
-                edited = True
-        state.pending = False
+            card.sent_html = body
+            card.sent_log = body
+            card.sent_stats = body
+            card.message_id = mid
+            card.log_id = mid
+            card.stats_id = mid
+            edited = True
         if edited:
+            state.pending = False
             state.last_edit = now
 
     def _watch_pair(
@@ -1400,16 +1410,7 @@ class HltvTelegramBot:
                 next_at=state.next_at,
                 lines=list(state.trace),
             )
-            stats_html = state.stats_html or format_rich_stats_html(
-                {
-                    "ctScore": "–",
-                    "tScore": "–",
-                    "team1": {"name": state.meta.get("team1")},
-                    "team2": {"name": state.meta.get("team2")},
-                    "teams": [],
-                }
-            )
-            return stats_html, log_html
+            return log_html, log_html
         if board:
             snap = snapshot_from_scoreboard(board, meta=state.meta, log=feed)
             snap["link"] = state.link
@@ -1418,7 +1419,8 @@ class HltvTelegramBot:
             snap["transport"] = state.transport
             if live is not None:
                 snap["live"] = live
-            return format_rich_stats_html(snap), format_rich_log_html(snap)
+            card_html = format_rich_watch_card(snap)
+            return card_html, card_html
         connecting = format_connecting_html(
             team1=str(state.meta.get("team1") or "?"),
             team2=str(state.meta.get("team2") or "?"),
@@ -1428,16 +1430,7 @@ class HltvTelegramBot:
             notice=state.notice,
             next_at=state.next_at,
         )
-        stats = format_rich_stats_html(
-            {
-                "ctScore": "–",
-                "tScore": "–",
-                "team1": {"name": state.meta.get("team1")},
-                "team2": {"name": state.meta.get("team2")},
-                "teams": [],
-            }
-        )
-        return stats, connecting
+        return connecting, connecting
 
     def _watch_card_html(
         self,

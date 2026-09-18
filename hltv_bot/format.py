@@ -633,41 +633,54 @@ def format_rich_stats_html(snap: dict) -> str:
     return f"<p>{summary}</p>" + "".join(stats_inner)
 
 
-def format_rich_log_html(snap: dict, *, log_limit: int = 12) -> str:
-    """Score strip + kill log + link line. Separate message; safe to edit every kill."""
+def format_rich_watch_card(snap: dict, *, log_limit: int = 10) -> str:
+    """Unified scoreboard card: score strip + round history + roster + kill log + link line."""
     teams = list(snap.get("teams") or [])
     ct_team = teams[0] if teams else {"name": (snap.get("team2") or {}).get("name") or "CT", "players": []}
     t_team = teams[1] if len(teams) > 1 else {"name": (snap.get("team1") or {}).get("name") or "T", "players": []}
     ct, t = _score_parts(snap)
     map_name, round_n = _map_and_round(snap)
-    return "".join(
-        [
-            _score_board(
-                left_name=str(ct_team.get("name") or "CT"),
-                right_name=str(t_team.get("name") or "T"),
-                left_score=ct,
-                right_score=t,
-                left_side="CT",
-                right_side="T",
-                map_name=map_name,
-                round_n=round_n,
-                live=bool(snap.get("live")),
-                url=str(snap.get("url") or ""),
-            ),
-            _log_table(snap.get("log") or [], limit=log_limit),
-            _status_line(
-                str(snap.get("link") or "connected"),
-                str(snap.get("notice") or ""),
-                snap.get("next_at"),
-                snap=snap,
-            ),
-        ]
+    history = list(snap.get("history") or [])
+    parts = [
+        _score_board(
+            left_name=str(ct_team.get("name") or "CT"),
+            right_name=str(t_team.get("name") or "T"),
+            left_score=ct,
+            right_score=t,
+            left_side="CT",
+            right_side="T",
+            map_name=map_name,
+            round_n=round_n,
+            live=bool(snap.get("live")),
+            url=str(snap.get("url") or ""),
+        )
+    ]
+    hist_html = _history_line(history)
+    if hist_html:
+        parts.append(hist_html)
+    if _sorted_players(ct_team) or _sorted_players(t_team):
+        parts.append(_side_table("CT", ct_team, ct=True))
+        parts.append(_side_table("T", t_team, ct=False))
+    parts.append(_log_table(snap.get("log") or [], limit=log_limit))
+    parts.append(
+        _status_line(
+            str(snap.get("link") or "connected"),
+            str(snap.get("notice") or ""),
+            snap.get("next_at"),
+            snap=snap,
+        )
     )
+    return "".join(parts)
+
+
+def format_rich_log_html(snap: dict, *, log_limit: int = 10) -> str:
+    """Compatibility alias for format_rich_watch_card."""
+    return format_rich_watch_card(snap, log_limit=log_limit)
 
 
 def format_rich_html(snap: dict, *, log_limit: int = 12) -> str:
-    """Concatenation for tests; live watch sends stats and log as two messages."""
-    return format_rich_stats_html(snap) + format_rich_log_html(snap, log_limit=log_limit)
+    """Watch card HTML."""
+    return format_rich_watch_card(snap, log_limit=log_limit)
 
 
 def format_telegram(snap: dict, *, log_limit: int = 15) -> str:
