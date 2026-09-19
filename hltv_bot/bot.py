@@ -1160,6 +1160,7 @@ class HltvTelegramBot:
                         kill_counts = round_kill_counts(snap.get("log") or [])
                         head_kill_n = kill_counts.get(id(head), 0)
                 force = status_changed or mode_switch or head_type in {
+                    "bomb",
                     "round_start",
                     "round_over",
                     "round_over_ct",

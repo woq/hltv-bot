@@ -360,6 +360,8 @@ def _status_line(
         st = str(snap.get("roundState") or "").strip().lower().replace(" ", "")
         if snap.get("frozen") or st in {"freezeperiod", "freezetime", "freeze"}:
             extra.append("freeze")
+        elif st in {"warmup", "warmingup"}:
+            extra.append("warmup")
         if (
             st
             and st not in {"", "live", "normal", "started", "playing", "warmup", "warmingup"}
@@ -484,6 +486,8 @@ def _log_table(log: list[dict], *, limit: int = 12) -> str:
                 )
             )
         elif typ == "round_start":
+            if rows and rows[-1].startswith("<tr><td><b>Round</b></td><td><b>start</b></td>"):
+                continue
             rows.append(_log_row("Round", "start", strong=True))
         elif typ == "assist":
             kid = str(entry.get("kill_event_id") or "")
@@ -503,7 +507,7 @@ def _log_table(log: list[dict], *, limit: int = 12) -> str:
                 parts = str(entry.get("text") or "").split(" ", 1)
                 nick = h(parts[0] if parts else "")
                 action = h(parts[1] if len(parts) > 1 else action)
-            rows.append(_log_row(nick, action))
+            rows.append(_log_row(nick, action, strong=True))
         else:
             text = entry.get("text") or ""
             if not text:
@@ -641,6 +645,10 @@ def format_rich_watch_card(snap: dict, *, log_limit: int = 10) -> str:
     ct, t = _score_parts(snap)
     map_name, round_n = _map_and_round(snap)
     history = list(snap.get("history") or [])
+    status_badge = ""
+    st_raw = str(snap.get("roundState") or "").strip().lower().replace(" ", "")
+    if st_raw in {"warmup", "warmingup"}:
+        status_badge = "Warmup"
     parts = [
         _score_board(
             left_name=str(ct_team.get("name") or "CT"),
@@ -653,6 +661,7 @@ def format_rich_watch_card(snap: dict, *, log_limit: int = 10) -> str:
             round_n=round_n,
             live=bool(snap.get("live")),
             url=str(snap.get("url") or ""),
+            status=status_badge,
         )
     ]
     hist_html = _history_line(history)

@@ -184,13 +184,33 @@ def test_log_bomb_and_round_are_two_columns():
         {"type": "assist", "killer": "huNter-", "victim": "donk", "detail": "assist donk"},
     ]
     rich = format_rich_html(snap)
-    assert "<td><b>donk</b></td><td>planted A</td>" in rich
+    assert "<td><b>donk</b></td><td><b>planted A</b></td>" in rich
     assert "<td><b>Round</b></td>" in rich
     assert "Round over · CT · elimination" in rich
     assert "<td><b>Round</b></td><td><b>start</b></td>" in rich
     assert "<td><b>huNter-</b></td><td>assist donk</td>" in rich
     assert ">Who<" not in rich
     assert "回合" not in rich
+
+
+def test_log_consecutive_round_start_dedup():
+    snap = dict(SNAP)
+    snap["log"] = [
+        {"type": "round_start", "killer": "Round", "text": "start", "detail": "start"},
+        {"type": "round_start", "killer": "Round", "text": "start", "detail": "start"},
+        {"type": "round_start", "killer": "Round", "text": "start", "detail": "start"},
+        {"type": "kill", "killer": "sh1ro", "victim": "donk", "weapon": "awp"},
+    ]
+    rich = format_rich_html(snap)
+    assert rich.count("<td><b>Round</b></td><td><b>start</b></td>") == 1
+
+
+def test_warmup_status_display():
+    snap = dict(SNAP)
+    snap["roundState"] = "warmup"
+    rich = format_rich_html(snap)
+    assert "<i>Warmup</i>" in rich
+    assert "warmup" in rich
     plus = dict(SNAP)
     plus["log"] = [
         {
@@ -355,6 +375,52 @@ def test_format_kv_table_standard_html():
     assert "• <b>b</b>: 2" in out
     for tag in ("<h3>", "<table", "<tr>", "<td>", "<th>"):
         assert tag not in out
+
+
+def test_bomb_planted_format_includes_situation():
+    from hltv_bot.live import format_log_item
+
+    item = {
+        "BombPlanted": {
+            "playerName": "molodoy",
+            "playerNick": "molodoy",
+            "ctPlayers": 3,
+            "tPlayers": 2,
+            "bombSite": "B",
+        }
+    }
+    res = format_log_item(item)
+    assert res is not None
+    assert res["type"] == "bomb"
+    assert res["killer"] == "molodoy"
+    assert res["detail"] == "planted B (2on3)"
+    assert res["site"] == "B"
+    assert res["t_players"] == 2
+    assert res["ct_players"] == 3
+
+
+def test_merge_log_deduplicates_consecutive_round_start():
+    from hltv_bot.live import merge_log
+
+    existing = [{"type": "round_start", "text": "start", "killer": "Round"}]
+    incoming = [{"RoundStart": {}}]
+    merged = merge_log(existing, incoming)
+    assert len(merged) == 1
+
+
+def test_snapshot_from_scoreboard_preserves_warmup_without_score():
+    from hltv_bot.live import snapshot_from_scoreboard
+
+    board = {
+        "currentRoundState": "warmup",
+        "ctTeamScore": 0,
+        "tTeamScore": 0,
+        "currentRound": 1,
+        "ctPlayers": [{"nick": "xertioN", "kills": 3, "deaths": 1}],
+        "tPlayers": [{"nick": "FalleN", "kills": 1, "deaths": 2}],
+    }
+    snap = snapshot_from_scoreboard(board)
+    assert snap["roundState"] == "warmup"
 
 
 def test_format_match_list_excludes_both_tbd():

@@ -370,12 +370,21 @@ def format_log_item(item: dict[str, Any]) -> dict[str, Any] | None:
         b = item["BombPlanted"]
         site = str(b.get("bombSite") or "").strip()
         nick = b.get("playerNick") or b.get("playerName") or ""
+        t_pl = b.get("tPlayers")
+        ct_pl = b.get("ctPlayers")
+        sit_suffix = ""
+        if t_pl is not None and ct_pl is not None:
+            sit_suffix = f" ({t_pl}on{ct_pl})"
         action = f"planted {site}".strip() if site else "planted"
+        detail = f"{action}{sit_suffix}".strip()
         return {
             "type": "bomb",
             "killer": nick,
-            "text": action,
-            "detail": action,
+            "text": detail,
+            "detail": detail,
+            "site": site,
+            "t_players": t_pl,
+            "ct_players": ct_pl,
         }
     if "BombDefused" in item:
         b = item["BombDefused"]
@@ -604,6 +613,12 @@ def merge_log(existing: list[dict[str, Any]], incoming: Any) -> list[dict[str, A
             seen_ids_round.add(str(eid))
         if fb:
             seen_fb.add(str(fb))
+        if (
+            formatted.get("type") == "round_start"
+            and out
+            and out[0].get("type") == "round_start"
+        ):
+            continue
         if sem:
             seen_sem.add(sem)
         out.insert(0, formatted)
@@ -734,7 +749,6 @@ def snapshot_from_scoreboard(
         hist
         or (round_n is not None and round_n > 1)
         or (ct_score + t_score > 0)
-        or any(p.get("kills") or p.get("deaths") for p in ct_pl + t_pl)
     ):
         state = "live"
         frozen = False
