@@ -90,15 +90,16 @@ title=Just a moment... cf=True
 
 ---
 
-## 4. 现在怎么跑
+## 4. 现在怎么跑（已彻底去除 poll 回落）
 
-- `/watch`：`iter_scorebot` → poll，WS 每 30s 再试，403 就继续 poll。
-- 瞬时 poll 5xx：底栏 `poll HTTP 502 · next …`，有记分板不切 DEBUG。
+- `/watch`：纯 WebSocket 链路。
+  - Chrome 模式下：在已受 CF 保护的比赛页内直接建立真 WebSocket（`iter_scorebot_chrome`）。
+  - Python 模式下：仅通过 HTTP GET 握手获取 `sid`，随后直接升级 WebSocket（`try_open_ws`）并以 `40` + `readyForMatch` 接收实时推送；若升级失败（如 403）或断开，直接进入指数退避重试，**坚决不回落到 xhr-polling**。
 - WS 连续失败：管理员私聊汇总（满 2 次、每 5 分钟一批）。
 - Cookie：同出口 Chrome 烤整行，`/cookie`。过期再贴。
-- 提交前：`pytest tests/test_rich_message.py tests/test_format.py tests/test_watch_flush.py tests/test_gaps.py -q`。
+- 提交前：`pytest tests/test_rich_message.py tests/test_format.py tests/test_watch_flush.py tests/test_gaps.py tests/test_cdp_cookies.py tests/test_cdp_client.py tests/test_keeper.py tests/test_scorebot_cookie_refresh.py tests/test_cookie_cmd.py tests/test_http_chrome.py tests/test_scorebot_chrome.py -q`。
 
 以后若要真 WS：给机器加内存，跑 `deploy/chrome-session/`，在**已打开的比赛页**里连，不要再抄 cookie 去 Upgrade，也不要再试 Lightpanda / WebKitGTK。
 
-2G 机上的分步评估（keeper 保 poll → 页内 WS；不上 MV3 后台 WS）见 [chrome-gateway.md](chrome-gateway.md)。
+2G 机上的分步评估（keeper 保连 → 页内 WS；不上 MV3 后台 WS）见 [chrome-gateway.md](chrome-gateway.md)。
 

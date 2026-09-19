@@ -91,7 +91,7 @@ WATCH_STALE = 60.0
 MSG_TTL = 60.0
 GET_UPDATES_FAIL_SLEEP = 3.0
 TG_COMMANDS_GAP = 0.4
-# WS retries every 30s on poll; ping admin after 2 fails, then batch every 5m.
+# WS upgrade failures: ping admin after 2 fails, then batch every 5m.
 ADMIN_WS_FAIL_MIN = 2
 ADMIN_WS_FAIL_EVERY = 300.0
 _KEEP_USER_CMDS = frozenset({"/watch"})
@@ -181,7 +181,7 @@ class WatchState:
 
 
 def watch_edit_interval(state: WatchState) -> float:
-    """Poll coalesced at 1.8s; Chrome WS can edit about twice a second."""
+    """Watch edit interval, min 1.5s for rich scoreboard updates."""
     if (state.transport or "") == "ws":
         return MIN_EDIT_INTERVAL_WS
     return MIN_EDIT_INTERVAL
@@ -247,7 +247,7 @@ def watch_debug_mode(
 ) -> bool:
     """DEBUG only when the session is dead or the board is missing/stale.
 
-    Transient poll 5xx / handshake retry must not replace a live scoreboard.
+    Transient handshake / reconnect retry must not replace a live scoreboard.
     """
     if str(link or "") == "disconnected":
         return True
@@ -970,7 +970,7 @@ class HltvTelegramBot:
             self.tg.delete_message(chat_id, message_id)
         extra = ""
         if self.watch and not self.watch.stop.is_set():
-            extra = "\n正在 watch：新 cookie 下一轮 poll 会用上；已经 403 的卡片不会自愈，再 /watch。"
+            extra = "\n正在 watch：新 cookie 会在下一轮连接中使用；已断开的卡片重新 /watch。"
         self._reply(
             chat_id,
             "Cookie 已更新\n"
@@ -1233,7 +1233,7 @@ class HltvTelegramBot:
         text = (
             f"<b>scorebot WS 持续失败</b> ×{info['total']} / {_fmt_span(info['elapsed'])}\n"
             f"listId=<code>{h(state.list_id)}</code> {h(t1)} vs {h(t2)}\n"
-            f"本批 {info['n']} 次 · 仍走 poll · 每 {int(WS_RETRY_EVERY)}s 再试\n"
+            f"本批 {info['n']} 次 · 退避重试中 · 每 {int(WS_RETRY_EVERY)}s 再试\n"
             f"last: <code>{h(info['error'])}</code>"
         )
         log.info(

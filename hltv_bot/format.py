@@ -355,7 +355,7 @@ def _status_line(
     extra: list[str] = []
     if snap:
         tr = str(snap.get("transport") or "").lower()
-        if tr in ("ws", "poll"):
+        if tr == "ws":
             extra.append(tr)
         st = str(snap.get("roundState") or "").strip().lower().replace(" ", "")
         if snap.get("frozen") or st in {"freezeperiod", "freezetime", "freeze"}:

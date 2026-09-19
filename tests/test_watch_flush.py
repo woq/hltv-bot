@@ -280,7 +280,7 @@ def test_ws_fail_notifies_admin_not_watch_chat(monkeypatch):
     assert chat == 1
     assert "403" in text
     assert "G2" in text
-    assert "poll" in text
+    assert "退避重试" in text
     bot._on_ws_fail(st, {"error": "upgrade: 403"})
     assert len(bot.tg.sent) == 1
     bot._on_ws_fail(st, {"error": "upgrade: 502"})

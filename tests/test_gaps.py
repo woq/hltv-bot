@@ -17,9 +17,6 @@ from hltv_bot.http import HTML_MIN_GAP
 from hltv_bot.matches import MATCH_CACHE_TTL
 from hltv_bot.keeper import ADMIN_CHALLENGE_EVERY, CDP_EXPORT_EVERY
 from hltv_bot.scorebot import (
-    POLL_5XX_GAP,
-    POLL_EMPTY_GAP,
-    POLL_MIN_GAP,
     RECONNECT_5XX,
     RECONNECT_MAX,
     RECONNECT_MIN,
@@ -39,9 +36,6 @@ def _src(name: str) -> str:
 def test_delay_floors():
     assert HTML_MIN_GAP >= 3.0
     assert MATCH_CACHE_TTL >= 45.0
-    assert POLL_MIN_GAP >= 5.0
-    assert POLL_EMPTY_GAP >= 20.0
-    assert POLL_5XX_GAP >= 30.0
     assert RECONNECT_MIN >= 15.0
     assert RECONNECT_5XX >= 25.0
     assert RECONNECT_MAX >= 180.0
@@ -84,14 +78,11 @@ def test_curl_cffi_only_in_http_and_scorebot():
             assert path.name in {"http.py", "scorebot.py", "profile.py"}, path.name
 
 
-def test_scorebot_sleeps_on_poll_reconnect_ws_and_handshake():
+def test_scorebot_sleeps_on_reconnect_ws_and_handshake():
     src = _src("scorebot.py")
-    assert "gap = poll_gap(" in src
-    assert "time.sleep(gap)" in src
     assert "wait = reconnect_wait(" in src
     assert "time.sleep(wait)" in src
     assert "time.sleep(RECONNECT_MIN)" in src
-    assert "next_ws = now + ws_retry_every" in src
     assert "time.sleep(WS_ATTEMPT_GAP)" in src
     assert "if ws_upgrade_refused(last):" in src
 

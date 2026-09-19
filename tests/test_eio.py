@@ -10,26 +10,21 @@ from hltv_bot.eio import (
 )
 from hltv_bot.scorebot import (
     WS_RETRY_EVERY,
-    POLL_5XX_GAP,
-    POLL_EMPTY_GAP,
-    POLL_MIN_GAP,
     RECONNECT_5XX,
     RECONNECT_MAX,
     RECONNECT_MIN,
+    _handshake_url,
     _http_status_from_exc,
     _is_http_error,
     _is_timeout,
-    _poll_url,
     _ws_headers,
     _ws_url,
     cookie_header,
     http_to_ws,
-    is_poll_5xx,
     iter_ws_events,
     merged_ws_cookies,
     next_backoff,
     ws_upgrade_refused,
-    poll_gap,
     probe_upgrade,
     reconnect_wait,
 )
@@ -89,23 +84,9 @@ def test_next_backoff_doubles_and_caps():
 
 
 def test_http_502_is_http_error():
-    assert _is_http_error(RuntimeError("scorebot poll HTTP 502"))
+    assert _is_http_error(RuntimeError("scorebot HTTP 502"))
     assert not _is_http_error(RuntimeError("curl: (28) timed out"))
-    assert not _is_http_error(RuntimeError("scorebot poll HTTP 400"))
-    assert is_poll_5xx(502)
-    assert is_poll_5xx(524)
-    assert not is_poll_5xx(400)
-    assert not is_poll_5xx(403)
-
-
-def test_poll_gap_empty_vs_event_vs_timeout():
-    assert POLL_MIN_GAP >= 5.0
-    assert POLL_EMPTY_GAP >= 20.0
-    assert poll_gap(0.4, got_event=False) == POLL_EMPTY_GAP - 0.4
-    assert poll_gap(0.4, got_event=True) == POLL_MIN_GAP - 0.4
-    assert poll_gap(30.0, got_event=False, timed_out=True) == POLL_MIN_GAP
-    assert poll_gap(25.0, got_event=False) == 0.0
-    assert poll_gap(0.4, got_event=False, http_5xx=True) == POLL_5XX_GAP
+    assert not _is_http_error(RuntimeError("scorebot HTTP 400"))
 
 
 def test_merged_ws_cookies_keep_io_over_header():
@@ -127,7 +108,7 @@ def test_ws_upgrade_refused():
     assert ws_upgrade_refused(
         RuntimeError("Failed to perform, curl: (22) Refused WebSocket upgrade: 403")
     )
-    assert not ws_upgrade_refused(RuntimeError("scorebot poll HTTP 502"))
+    assert not ws_upgrade_refused(RuntimeError("scorebot HTTP 502"))
 
 
 def test_yeast_t_matches_engine_io_client():
@@ -142,7 +123,7 @@ def test_yeast_t_matches_engine_io_client():
     assert c == a + ".1"
     d = clock.next(1_788_092_239_001)
     assert d != a and "." not in d
-    assert "t=" in _poll_url("https://scorebot-lb.hltv.org")
+    assert "t=" in _handshake_url("https://scorebot-lb.hltv.org")
     ws = _ws_url("https://scorebot-lb.hltv.org", {"sid": "abc"})
     assert "transport=websocket" in ws
     t = [p.split("=", 1)[1] for p in ws.split("?")[1].split("&") if p.startswith("t=")][0]
@@ -267,37 +248,53 @@ def test_ready_event_is_not_xhr_framed():
     assert not s.startswith("\x00")
 
 
-class _StopPoll:
-    def get(self, url, headers=None, timeout=None):
-        raise RuntimeError("stop poll")
+def test_iter_scorebot_emits_ws_fail_and_retries(monkeypatch):
+    from hltv_bot.scorebot import iter_scorebot
+    from hltv_bot.session import BrowserSession
+    from hltv_bot.eio import encode_payload
 
+    class _FakeClient:
+        def __init__(self, *a, **k):
+            self.cookies = None
 
-def test_iter_poll_events_emits_ws_fail():
-    from hltv_bot.scorebot import iter_poll_events
+        def get(self, url, headers=None, timeout=None):
+            body = encode_payload(
+                '0{"sid":"abc","upgrades":["websocket"],"pingInterval":25000,"pingTimeout":60000}'
+            )
+            class _Resp:
+                status_code = 200
+                content = body
+                cookies = None
+                url = "https://scorebot-lb.hltv.org/socket.io/"
+            return _Resp()
 
-    out = []
-    try:
-        for ev in iter_poll_events(
-            _StopPoll(),
-            base="https://scorebot-lb.hltv.org",
-            headers={},
-            sid="abc",
-            list_id="1",
-            timeout=1,
-            skip_ready=True,
-            ws_factory=lambda: (None, [], RuntimeError("Refused WebSocket upgrade: 403")),
-            ws_retry_every=999,
-        ):
-            out.append(ev)
-    except RuntimeError as e:
-        assert "stop poll" in str(e)
-    fail = next(p for n, p in out if n == "ws_fail")
+        def ws_connect(self, *a, **k):
+            raise RuntimeError("Refused WebSocket upgrade: 403")
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("hltv_bot.scorebot.chrome_scorebot_enabled", lambda: False)
+    monkeypatch.setattr("curl_cffi.requests.Session", _FakeClient)
+    monkeypatch.setattr("hltv_bot.scorebot.reconnect_wait", lambda *a, **k: 0)
+    monkeypatch.setattr("hltv_bot.scorebot.time.sleep", lambda *a, **k: None)
+
+    sess = BrowserSession("chrome131", {}, "cf_clearance=tok")
+    events = []
+    for ev in iter_scorebot(sess, "1", timeout=1):
+        events.append(ev)
+        if any(n == "ws_fail" for n, _ in events):
+            break
+
+    fail = next(p for n, p in events if n == "ws_fail")
     assert fail["n"] == 1
     assert "403" in fail["error"]
 
 
-def test_iter_poll_events_upgrades_ws_and_sends_ready():
-    from hltv_bot.scorebot import iter_poll_events
+def test_iter_scorebot_connects_ws_and_sends_ready(monkeypatch):
+    from hltv_bot.scorebot import iter_scorebot
+    from hltv_bot.session import BrowserSession
+    from hltv_bot.eio import encode_payload
 
     class _UpgradedWS:
         def __init__(self):
@@ -307,28 +304,48 @@ def test_iter_poll_events_upgrades_ws_and_sends_ready():
             self.sent.append(pkt)
 
         def recv_str(self):
-            # immediately raise after receiving subscription
             raise TimeoutError("done")
 
-    fake_ws = _UpgradedWS()
-    out = []
-    try:
-        for ev in iter_poll_events(
-            _StopPoll(),
-            base="https://scorebot-lb.hltv.org",
-            headers={},
-            sid="abc",
-            list_id="2398000",
-            timeout=1,
-            skip_ready=True,
-            ws_factory=lambda: (fake_ws, [], None),
-            ws_retry_every=999,
-        ):
-            out.append(ev)
-    except TimeoutError:
-        pass
+        def close(self):
+            pass
 
-    assert any(n == "status" and p.get("transport") == "ws" for n, p in out)
+    fake_ws = _UpgradedWS()
+
+    class _FakeClient:
+        def __init__(self, *a, **k):
+            self.cookies = None
+
+        def get(self, url, headers=None, timeout=None):
+            body = encode_payload(
+                '0{"sid":"abc","upgrades":["websocket"],"pingInterval":25000,"pingTimeout":60000}'
+            )
+            class _Resp:
+                status_code = 200
+                content = body
+                cookies = None
+                url = "https://scorebot-lb.hltv.org/socket.io/"
+            return _Resp()
+
+        def ws_connect(self, *a, **k):
+            return fake_ws
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("hltv_bot.scorebot.chrome_scorebot_enabled", lambda: False)
+    monkeypatch.setattr("hltv_bot.scorebot.probe_upgrade", lambda *a, **k: [])
+    monkeypatch.setattr("curl_cffi.requests.Session", _FakeClient)
+    monkeypatch.setattr("hltv_bot.scorebot.reconnect_wait", lambda *a, **k: 0)
+    monkeypatch.setattr("hltv_bot.scorebot.time.sleep", lambda *a, **k: None)
+
+    sess = BrowserSession("chrome131", {}, "cf_clearance=tok")
+    events = []
+    for ev in iter_scorebot(sess, "2398000", timeout=1):
+        events.append(ev)
+        if any(n == "status" and p.get("transport") == "ws" for n, p in events):
+            break
+
+    assert any(n == "status" and p.get("transport") == "ws" for n, p in events)
     assert fake_ws.sent[0] == "40"
     assert "readyForMatch" in fake_ws.sent[1]
     assert "2398000" in fake_ws.sent[1]

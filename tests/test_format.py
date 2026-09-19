@@ -110,10 +110,10 @@ def test_status_line_packs_match_bits():
             ],
         },
     ]
-    snap["transport"] = "poll"
+    snap["transport"] = "ws"
     line = _status_line("connected", "", None, snap=snap)
     assert "connected" in line
-    assert "poll" in line
+    assert "ws" in line
     assert "freeze" in line
     assert "bomb" in line
     assert "1v2" in line
