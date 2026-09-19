@@ -348,7 +348,13 @@ def _status_line(
     label = _LINK_LABEL.get(link, link or "connected")
     core = [label]
     if notice and notice.lower() != label.lower():
-        core.append(str(notice).replace("\n", " ")[:40])
+        n_clean = str(notice).replace("\n", " ").strip()
+        if "ws close code=" in n_clean:
+            n_clean = ""
+        elif "server rotation" in n_clean:
+            n_clean = ""
+        if n_clean:
+            core.append(n_clean[:40])
     nxt = format_next_clock(next_at)
     if nxt:
         core.append(f"next {nxt}")

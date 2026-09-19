@@ -278,12 +278,16 @@ def parse_match_meta(html: str, url: str = "") -> dict[str, str | None]:
         m = rx.search(html)
         return unescape(m.group(1)) if m else None
 
+    countdown = g(re.compile(r'<div class="countdown"[^>]*>([\s\S]*?)</div>', re.I))
+    status = _clean(countdown) if countdown else ""
     return {
         "url": url or None,
         "scorebotId": g(re.compile(r'data-scorebot-id="(\d+)"')),
         "scorebotUrl": g(re.compile(r'data-scorebot-url="([^"]+)"')),
         "team1": g(re.compile(r'data-team1-name="([^"]*)"')),
         "team2": g(re.compile(r'data-team2-name="([^"]*)"')),
+        "status": status,
+        "live": "1" if status.upper() == "LIVE" else ("0" if status else None),
     }
 
 

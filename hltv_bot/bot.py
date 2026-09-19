@@ -1100,6 +1100,20 @@ class HltvTelegramBot:
                         and (now - state.last_data_at) >= WATCH_STALE
                         and not state.debug_view
                     ):
+                        # Verify if the whole match has finished on HLTV before marking stale/debug
+                        match_ended = False
+                        match_url = str(state.meta.get("url") or "")
+                        if match_url:
+                            try:
+                                meta_chk = fetch_match_meta(self.session, match_url, timeout=6.0)
+                                if meta_chk and meta_chk.get("live") == "0":
+                                    match_ended = True
+                            except Exception:
+                                pass
+                        if match_ended:
+                            log.info("match finished confirmed listId=%s url=%s", state.list_id, match_url)
+                            self._settle_watch(state, board, feed)
+                            return
                         append_trace(
                             state.trace,
                             f"stale no scoreboard/log {int(now - state.last_data_at)}s",

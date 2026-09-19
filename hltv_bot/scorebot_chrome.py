@@ -49,6 +49,7 @@ _SCOREBOT_JS = r"""
   let stopped = false;
   let reconnectTimer = null;
   let pingTimer = null;
+  let keepaliveTimer = null;
   let handshakeBusy = false;
   let pingInterval = 25000;
   let pingTimeout = 60000;
@@ -62,6 +63,7 @@ _SCOREBOT_JS = r"""
     stopped = true;
     if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
     if (pingTimer) { clearTimeout(pingTimer); pingTimer = null; }
+    if (keepaliveTimer) { clearInterval(keepaliveTimer); keepaliveTimer = null; }
     try { if (ws) ws.close(); } catch (e) {}
   } };
 
@@ -116,14 +118,17 @@ _SCOREBOT_JS = r"""
       try { if (ws) ws.close(); } catch (e) {}
     }, pingInterval + pingTimeout);
   }
-  function scheduleReconnect(detail) {
+  function scheduleReconnect(detail, delaySec) {
     if (stopped || reconnectTimer) return;
     const wait = 3;
-    emit("status", {state: "reconnect", detail: detail, wait: wait});
+    const actualWait = typeof delaySec === "number" ? delaySec : wait;
+    if (actualWait > 0) {
+      emit("status", {state: "reconnect", detail: detail, wait: actualWait});
+    }
     reconnectTimer = setTimeout(function() {
       reconnectTimer = null;
       if (!stopped) handshake();
-    }, wait * 1000);
+    }, actualWait * 1000);
   }
   function handlePkt(d, via) {
     d = String(d || "");
@@ -145,7 +150,11 @@ _SCOREBOT_JS = r"""
     }
     if (t === "1" || t === "41") {
       emit("trace", {text: "eio disconnect pkt=" + t + " via=" + via});
-      try { if (ws) ws.close(); } catch (e) {}
+      if (ws) {
+        try { ws.onclose = null; ws.onerror = null; ws.close(); } catch (e) {}
+        ws = null;
+      }
+      if (!stopped) scheduleReconnect("server rotation", 0);
       return;
     }
     if (t.charAt(0) === "0") {
@@ -190,6 +199,7 @@ _SCOREBOT_JS = r"""
       try { ws.onclose = null; ws.onerror = null; ws.onmessage = null; ws.close(); } catch (e) {}
       ws = null;
     }
+    if (keepaliveTimer) { clearInterval(keepaliveTimer); keepaliveTimer = null; }
     const wsBase = httpBase.replace(/^http/i, "ws");
     const u = wsBase.replace(/\/$/, "") + "/socket.io/?EIO=3&transport=websocket";
     const sock = new WebSocket(u);
@@ -199,6 +209,11 @@ _SCOREBOT_JS = r"""
     evCount = 0;
     lastBoard = "";
     readySent = false;
+    keepaliveTimer = setInterval(function() {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        try { ws.send("3"); } catch (e) {}
+      }
+    }, 20000);
     sock.onopen = function() { emit("trace", {text: "ws tcp open"}); };
     sock.onmessage = function(ev) {
       let raw = ev.data;
@@ -220,6 +235,7 @@ _SCOREBOT_JS = r"""
     };
     sock.onclose = function(ev) {
       if (pingTimer) { clearTimeout(pingTimer); pingTimer = null; }
+      if (keepaliveTimer) { clearInterval(keepaliveTimer); keepaliveTimer = null; }
       const up = openedAt ? Math.round((Date.now() - openedAt) / 1000) : 0;
       const detail = "ws close code=" + (ev && ev.code) + " clean=" + !!(ev && ev.wasClean)
         + " reason=" + clip(ev && ev.reason, 40);
