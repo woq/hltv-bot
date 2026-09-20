@@ -623,26 +623,6 @@ def _score_parts(snap: dict) -> tuple[object, object]:
     return ct, t
 
 
-def format_rich_stats_html(snap: dict) -> str:
-    """Roster + round history. Own Telegram message; expanded (not details)."""
-    teams = list(snap.get("teams") or [])
-    ct_team = teams[0] if teams else {"name": (snap.get("team2") or {}).get("name") or "CT", "players": []}
-    t_team = teams[1] if len(teams) > 1 else {"name": (snap.get("team1") or {}).get("name") or "T", "players": []}
-    ct, t = _score_parts(snap)
-    history = list(snap.get("history") or [])
-    stats_inner: list[str] = []
-    hist_html = _history_line(history)
-    if hist_html:
-        stats_inner.append(hist_html)
-    if _sorted_players(ct_team) or _sorted_players(t_team):
-        stats_inner.append(_side_table("CT", ct_team, ct=True))
-        stats_inner.append(_side_table("T", t_team, ct=False))
-    summary = f"Stats {h(ct)}–{h(t)}"
-    if not stats_inner:
-        return f"<p>{summary}</p>"
-    return f"<p>{summary}</p>" + "".join(stats_inner)
-
-
 def format_rich_watch_card(snap: dict, *, log_limit: int = 10) -> str:
     """Unified scoreboard card: score strip + round history + roster + kill log + link line."""
     teams = list(snap.get("teams") or [])
@@ -686,11 +666,6 @@ def format_rich_watch_card(snap: dict, *, log_limit: int = 10) -> str:
         )
     )
     return "".join(parts)
-
-
-def format_rich_log_html(snap: dict, *, log_limit: int = 10) -> str:
-    """Compatibility alias for format_rich_watch_card."""
-    return format_rich_watch_card(snap, log_limit=log_limit)
 
 
 def format_rich_html(snap: dict, *, log_limit: int = 12) -> str:

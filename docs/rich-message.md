@@ -29,7 +29,7 @@ Rich **没有 CSS**。单元格只能行内标签。不要用 h3/ul/footer 文�
 每群 **单条** Rich（`/watch` / `/bump` 发送单条，`/stop` 删除）：
 
 - **整合卡片**：比分条 `table bordered compact` → 回合历史 → 名单表 CT / T → Log 表（两列：选手 / 事件；无 Who 表头；文案英语）→ 最下一行链接状态（手机约 68 字）：`connected · freeze · bomb · 3v5 · R19 · Inferno · 18:32:05`；异常时带 notice / next。
-- **频控与防抖**：最小 edit 间隔 1.5s，滑动窗口限制每分钟最多 20 次 edit，超出时合并（coalesce）并在窗口释放后刷新。
+- **频控与防抖**：最小 edit 间隔 3s，滑动窗口每分钟最多 19 次（群配额约 20，留 1）。超出则 coalesce。429 按 `retry_after` 冻结 edit（封顶 60s），scorebot 继续收包。`/bump` 走 `sendRichMessage`，不占这条的 edit 窗口。alive `NvN` 画在状态行，但不单独触发 edit。
 
 未出分用 `–`，不要 0-0。
 

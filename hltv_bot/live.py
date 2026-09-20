@@ -604,10 +604,12 @@ def merge_log(existing: list[dict[str, Any]], incoming: Any) -> list[dict[str, A
         if pair and pair in pairs:
             continue
         if formatted.get("type") == "assist" and apply_assist(out, formatted):
+            added += 1
             continue
         if formatted.get("type") == "kill":
             attach_pending_assist(formatted, out)
         if replace_synth_round_over(out, formatted):
+            added += 1
             continue
         if eid:
             seen_ids_round.add(str(eid))
@@ -629,8 +631,9 @@ def merge_log(existing: list[dict[str, Any]], incoming: Any) -> list[dict[str, A
             seen_ids_round = set()
         elif pair:
             pairs.add(pair)
-    if added:
-        live_log.debug("log merged +%s total=%s", added, len(out))
+    if not added:
+        return existing
+    live_log.debug("log merged +%s total=%s", added, len(out))
     return out[:80]
 
 

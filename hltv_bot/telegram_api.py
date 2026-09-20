@@ -13,6 +13,16 @@ from hltv_bot.format import plain_to_rich
 log = logging.getLogger("hltv_bot.tg")
 
 TG_RETRY_AFTER_CAP = 15.0
+EDIT_429_RETRY_CAP = 60.0
+
+
+class TelegramRateLimit(RuntimeError):
+    """HTTP 429. Watch edits must freeze rather than block the scorebot thread."""
+
+    def __init__(self, retry_after: float, *, method: str = "") -> None:
+        self.retry_after = float(retry_after)
+        self.method = method
+        super().__init__(f"telegram {method} rate limited retry_after={self.retry_after:.0f}s")
 
 
 def is_not_modified(exc: BaseException) -> bool:
@@ -34,7 +44,7 @@ class Telegram:
         self.timeout = timeout
         self.base = f"https://api.telegram.org/bot{token}"
 
-    def _call(self, method: str, payload: dict) -> dict:
+    def _call(self, method: str, payload: dict, *, retry_429: bool = True) -> dict:
         rich = payload.get("rich_message") or {}
         html = rich.get("html") if isinstance(rich, dict) else None
         text = payload.get("text")
@@ -65,7 +75,10 @@ class Telegram:
                 raw = e.read().decode("utf-8", "replace")
                 log.warning("tg %s HTTP %s attempt=%s body=%s", method, e.code, attempt, clip(raw, 400))
                 if e.code == 429:
-                    time.sleep(retry_after_seconds(raw))
+                    wait = retry_after_seconds(raw, cap=EDIT_429_RETRY_CAP if not retry_429 else TG_RETRY_AFTER_CAP)
+                    if not retry_429:
+                        raise TelegramRateLimit(wait, method=method) from e
+                    time.sleep(wait)
                     last_err = e
                     continue
                 raise RuntimeError(f"telegram {method} HTTP {e.code}: {raw[:200]}") from e
@@ -151,6 +164,7 @@ class Telegram:
                     "skip_entity_detection": skip_entity_detection,
                 },
             },
+            retry_429=False,
         )
 
     def send_message(self, chat_id: int | str, text: str) -> dict:

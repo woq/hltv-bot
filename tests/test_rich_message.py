@@ -22,7 +22,7 @@ def test_plain_send_message_uses_sendmessage_api():
     captured: list[tuple[str, dict]] = []
     tg = Telegram("token")
 
-    def fake_call(method, payload):
+    def fake_call(method, payload, **kwargs):
         captured.append((method, payload))
         return {"message_id": 9}
 
@@ -37,7 +37,7 @@ def test_watch_path_uses_rich_api():
     captured: list[tuple[str, dict]] = []
     tg = Telegram("token")
 
-    def fake_call(method, payload):
+    def fake_call(method, payload, **kwargs):
         captured.append((method, payload))
         return {"message_id": 9}
 

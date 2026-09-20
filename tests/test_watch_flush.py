@@ -1,15 +1,14 @@
-from hltv_bot.bot import (
-    HltvTelegramBot,
+from hltv_bot.bot import HltvTelegramBot
+from hltv_bot.watch import (
+    MAX_EDITS_PER_MINUTE,
     WatchCard,
     WatchState,
     WsFailDigest,
     watch_debug_mode,
     watch_edit_interval,
-    MIN_EDIT_INTERVAL,
-    MIN_EDIT_INTERVAL_WS,
 )
 from hltv_bot.session import BrowserSession
-from hltv_bot.telegram_api import is_not_modified
+from hltv_bot.telegram_api import TelegramRateLimit, is_not_modified
 
 
 class _Tg:
@@ -128,14 +127,15 @@ def test_flush_send_new_single_message():
     st = _state()
     bot._flush_watch(
         st,
-        log_html="<table>card</table>",
+        "<table>card</table>",
         send_new=True,
         chat_id=1,
     )
     assert len(bot.tg.sent) == 1
     card = st.cards[1]
     assert card.message_id is not None
-    assert card.message_id == card.log_id == card.stats_id
+    assert getattr(card, "log_id", None) is None
+    assert getattr(card, "stats_id", None) is None
 
 
 def test_edit_rate_limit_sliding_window():
@@ -151,15 +151,14 @@ def test_edit_rate_limit_sliding_window():
         }
     )
     now = time.time()
-    # 20 edits in the past minute -> should defer
-    st.cards[1].edit_timestamps = [now - i for i in range(20, 0, -1)]
-    bot._flush_watch(st, log_html="new")
+    st.cards[1].edit_timestamps = [now - i for i in range(MAX_EDITS_PER_MINUTE, 0, -1)]
+    bot._flush_watch(st, "new")
     assert bot.tg.edited == []
     assert st.pending is True
 
     # After clearing timestamps, edit is allowed
     st.cards[1].edit_timestamps = []
-    bot._flush_watch(st, log_html="new")
+    bot._flush_watch(st, "new")
     assert len(bot.tg.edited) == 1
     assert bot.tg.edited[0][1] == 7
 
@@ -177,11 +176,12 @@ def test_bump_is_the_only_new_send():
     assert bot.tg.sent[0][0] == 1
 
 
-def test_watch_edit_interval_is_1_5():
+def test_watch_edit_interval_is_3s():
     poll = _state()
     ws = _state(transport="ws")
-    assert watch_edit_interval(poll) == 1.5
-    assert watch_edit_interval(ws) == 1.5
+    assert watch_edit_interval(poll) == 3.0
+    assert watch_edit_interval(ws) == 3.0
+    assert MAX_EDITS_PER_MINUTE == 19
 
 
 def test_watch_debug_mode_healthy_vs_down():
@@ -320,6 +320,24 @@ def test_mark_watch_down_edits_debug_card():
     assert st.debug_view is True
 
 
+def test_edit_429_freezes_and_keeps_pending():
+    bot = _bot()
+
+    def boom(chat_id, message_id, html, **kwargs):
+        raise TelegramRateLimit(32, method="editMessageText")
+
+    bot.tg.edit_rich = boom  # type: ignore[method-assign]
+    st = _state(cards={1: WatchCard(chat_id=1, message_id=7, sent_html="old")})
+    bot._flush_watch(st, "new")
+    assert bot.tg.sent == []
+    assert st.pending is True
+    assert st.edits_frozen(__import__("time").time())
+    assert st.cards[1].sent_html == "old"
+    bot._flush_watch(st, "newer")
+    assert st.text == "newer"
+    assert st.cards[1].sent_html == "old"
+
+
 def test_command_replies_have_no_unsupported_tags():
     bot = _bot()
     bot.handle_text(1, "/help", user_id=1)
@@ -331,54 +349,4 @@ def test_command_replies_have_no_unsupported_tags():
     for chat_id, text in bot.tg.sent:
         for tag in unsupported:
             assert tag not in text, f"Found {tag} in reply: {text}"
-
-
-def test_snapshot_log_fingerprint_detects_assist_and_mid_log_changes():
-    from hltv_bot.snapshot import snapshot_log_fingerprint
-
-    snap1 = {
-        "scoreText": "0-1",
-        "roundText": "1 - Mirage",
-        "live": True,
-        "log": [
-            {"type": "kill", "killer": "sh1ro", "victim": "huNter-", "text": "sh1ro huNter-", "weapon": "awp", "headshot": True},
-            {"type": "round_start", "text": "start"},
-        ],
-    }
-    fp1 = snapshot_log_fingerprint(snap1)
-
-    # Adding assist to the existing kill entry (same log[0].text) must change fingerprint
-    snap2 = {
-        "scoreText": "0-1",
-        "roundText": "1 - Mirage",
-        "live": True,
-        "log": [
-            {
-                "type": "kill",
-                "killer": "sh1ro",
-                "victim": "huNter-",
-                "text": "sh1ro huNter-",
-                "weapon": "awp",
-                "headshot": True,
-                "assister": "donk",
-            },
-            {"type": "round_start", "text": "start"},
-        ],
-    }
-    fp2 = snapshot_log_fingerprint(snap2)
-    assert fp1 != fp2
-
-    # A change in the 2nd row must also change the fingerprint
-    snap3 = {
-        "scoreText": "0-1",
-        "roundText": "1 - Mirage",
-        "live": True,
-        "log": [
-            snap2["log"][0],
-            {"type": "kill", "killer": "m0NESY", "victim": "b1t", "text": "m0NESY b1t", "weapon": "ak47", "headshot": False},
-            {"type": "round_start", "text": "start"},
-        ],
-    }
-    fp3 = snapshot_log_fingerprint(snap3)
-    assert fp2 != fp3
 

@@ -7,7 +7,7 @@ EXTRACT_JS = _JS_PATH.read_text(encoding="utf-8").strip()
 
 
 def snapshot_stats_fingerprint(snap: dict) -> str:
-    """Roster / history / map score — not alive or log (those live on the log message)."""
+    """Roster / history / map score."""
     teams = snap.get("teams") or []
     kad = []
     for t in teams:
@@ -39,7 +39,6 @@ def snapshot_log_fingerprint(snap: dict) -> str:
             f"{item.get('type')}:{item.get('killer')}:{item.get('victim')}:{item.get('assister')}:{item.get('text')}:{item.get('weapon')}:{1 if item.get('headshot') else 0}"
         )
     log_s = ";".join(visible_log)
-    teams = snap.get("teams") or []
     return "|".join(
         [
             str(snap.get("scoreText") or ""),
@@ -49,12 +48,6 @@ def snapshot_log_fingerprint(snap: dict) -> str:
             "b1" if snap.get("bombPlanted") else "b0",
             "f1" if snap.get("frozen") else "f0",
             str(snap.get("live")),
-            ",".join(
-                "1" if p.get("alive") else "0"
-                for t in teams
-                for p in (t.get("players") or [])
-                if p.get("alive") is not None
-            ),
         ]
     )
 

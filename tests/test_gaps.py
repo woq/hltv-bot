@@ -13,6 +13,11 @@ from hltv_bot.bot import (
     MSG_TTL,
     TG_COMMANDS_GAP,
 )
+from hltv_bot.watch import (
+    MAX_EDITS_PER_MINUTE,
+    MIN_EDIT_INTERVAL as WATCH_MIN_EDIT,
+    MIN_EDIT_INTERVAL_WS as WATCH_MIN_EDIT_WS,
+)
 from hltv_bot.http import HTML_MIN_GAP
 from hltv_bot.matches import MATCH_CACHE_TTL
 from hltv_bot.keeper import ADMIN_CHALLENGE_EVERY, CDP_EXPORT_EVERY
@@ -41,8 +46,12 @@ def test_delay_floors():
     assert RECONNECT_MAX >= 180.0
     assert WS_RETRY_EVERY >= 15.0
     assert WS_ATTEMPT_GAP >= 1.0
-    assert MIN_EDIT_INTERVAL >= 1.5
-    assert MIN_EDIT_INTERVAL_WS >= 1.5
+    assert MIN_EDIT_INTERVAL >= 3.0
+    assert MIN_EDIT_INTERVAL_WS >= 3.0
+    assert WATCH_MIN_EDIT == MIN_EDIT_INTERVAL
+    assert WATCH_MIN_EDIT_WS == MIN_EDIT_INTERVAL_WS
+    assert MAX_EDITS_PER_MINUTE == 19
+    assert MAX_EDITS_PER_MINUTE < 20
     assert MSG_TTL >= 30.0
     assert GET_UPDATES_FAIL_SLEEP >= 3.0
     assert TG_COMMANDS_GAP >= 0.3
@@ -101,6 +110,8 @@ def test_telegram_429_uses_retry_after_on_call_and_getupdates():
     assert src.count("retry_after_seconds(") >= 2
     assert "def get_updates" in src
     assert 'e.code == 429' in src
+    assert "retry_429=False" in src
+    assert "class TelegramRateLimit" in src
     body = '{"parameters":{"retry_after":9}}'
     assert retry_after_seconds(body) == 9.0
     assert retry_after_seconds("not-json") == 3.0

@@ -4,42 +4,40 @@ import logging
 import os
 import threading
 import time
-from dataclasses import dataclass, field
 from pathlib import Path
 
 log = logging.getLogger("hltv_bot")
 
 from hltv_bot.chats import add_group, group_ids, list_groups, remove_group
 from hltv_bot.debuglog import append_trace, clip, event_brief, snap_brief
-from hltv_bot.format import (
-    format_connecting_html,
-    format_kv_table,
-    format_match_list,
-    format_rich_log_html,
-    format_rich_stats_html,
-    format_rich_watch_card,
-    format_watch_debug_html,
-    h,
-    plain_to_rich,
-    round_kill_counts,
-)
+from hltv_bot.format import format_kv_table, format_match_list, format_rich_watch_card, h, plain_to_rich
 from hltv_bot.render import classify_event_tier, render_events_image, render_matches_image, tier_rank
 from hltv_bot.http import CloudflareError
-from hltv_bot.live import (
-    mark_new_round,
-    mark_round_over,
-    merge_log,
-    merge_scoreboard,
-    patch_board_from_log,
-    snapshot_from_scoreboard,
-)
 from hltv_bot.events import fetch_events, filter_and_sort_events, format_events_html
 from hltv_bot.matches import fetch_match_meta, fetch_matches
 from hltv_bot.scorebot import WS_RETRY_EVERY, iter_scorebot, scorebot_base
 from hltv_bot.ratelimit import Cooldown
 from hltv_bot.session import BrowserSession, load_session
-from hltv_bot.snapshot import snapshot_log_fingerprint, snapshot_stats_fingerprint
-from hltv_bot.telegram_api import Telegram, is_not_modified
+from hltv_bot.telegram_api import Telegram, TelegramRateLimit, is_not_modified
+from hltv_bot.watch import (
+    ADMIN_WS_FAIL_EVERY,
+    ADMIN_WS_FAIL_MIN,
+    MIN_EDIT_INTERVAL,
+    MIN_EDIT_INTERVAL_WS,
+    WATCH_STALE,
+    LOG_EVENT_NAMES,
+    WATCH_EVENT_NAMES,
+    ScorebotFeed,
+    WatchCard,
+    WatchState,
+    WsFailDigest,
+    apply_link_status,
+    fmt_span,
+    render_watch,
+    watch_debug_mode,
+    watch_edit_interval,
+    watch_fingerprint,
+)
 
 DEFAULT_ADMIN_ID = 1442477170
 
@@ -84,16 +82,9 @@ CMD_COOLDOWN = {
     "/cookie": 3.0,
 }
 DEFAULT_CMD_COOLDOWN = 1.2
-MIN_EDIT_INTERVAL = 1.5
-MIN_EDIT_INTERVAL_WS = 1.5
-MAX_EDITS_PER_MINUTE = 20
-WATCH_STALE = 60.0
 MSG_TTL = 60.0
 GET_UPDATES_FAIL_SLEEP = 3.0
 TG_COMMANDS_GAP = 0.4
-# WS upgrade failures: ping admin after 2 fails, then batch every 5m.
-ADMIN_WS_FAIL_MIN = 2
-ADMIN_WS_FAIL_EVERY = 300.0
 _KEEP_USER_CMDS = frozenset({"/watch"})
 
 USER_BOT_COMMANDS = [
@@ -112,150 +103,6 @@ ADMIN_BOT_COMMANDS = USER_BOT_COMMANDS + [
     {"command": "status", "description": "状态"},
     {"command": "debug", "description": "调试"},
 ]
-
-
-@dataclass
-class WatchCard:
-    chat_id: int
-    stats_id: int | None = None
-    log_id: int | None = None
-    message_id: int | None = None
-    sent_html: str = ""
-    sent_stats: str = ""
-    sent_log: str = ""
-    edit_timestamps: list[float] = field(default_factory=list)
-
-    def __post_init__(self) -> None:
-        if self.log_id is None and self.message_id is not None:
-            self.log_id = self.message_id
-        if self.message_id is None:
-            self.message_id = self.log_id
-        if not self.sent_log and self.sent_html:
-            self.sent_log = self.sent_html
-
-    def can_edit(self, now: float) -> bool:
-        cutoff = now - 60.0
-        self.edit_timestamps = [t for t in self.edit_timestamps if t > cutoff]
-        if len(self.edit_timestamps) >= MAX_EDITS_PER_MINUTE:
-            return False
-        if self.edit_timestamps and (now - self.edit_timestamps[-1]) < MIN_EDIT_INTERVAL:
-            return False
-        return True
-
-    def record_edit(self, now: float) -> None:
-        cutoff = now - 60.0
-        self.edit_timestamps = [t for t in self.edit_timestamps if t > cutoff]
-        self.edit_timestamps.append(now)
-
-
-@dataclass
-class WatchState:
-    list_id: str
-    meta: dict
-    cards: dict[int, WatchCard] = field(default_factory=dict)
-    text: str = ""
-    stats_html: str = ""
-    log_html: str = ""
-    fingerprint: str = ""
-    stats_fp: str = ""
-    log_fp: str = ""
-    stop: threading.Event = field(default_factory=threading.Event)
-    last_bump: float = 0.0
-    last_edit: float = 0.0
-    last_snap: dict = field(default_factory=dict)
-    link: str = "connecting"
-    pending: bool = False
-    notice: str = ""
-    next_at: float = 0.0
-    trace: list[str] = field(default_factory=list)
-    last_data_at: float = 0.0
-    debug_view: bool = True
-    transport: str = ""
-
-    def card(self, chat_id: int) -> WatchCard:
-        c = self.cards.get(int(chat_id))
-        if c is None:
-            c = WatchCard(chat_id=int(chat_id))
-            self.cards[int(chat_id)] = c
-        return c
-
-
-def watch_edit_interval(state: WatchState) -> float:
-    """Watch edit interval, min 1.5s for rich scoreboard updates."""
-    if (state.transport or "") == "ws":
-        return MIN_EDIT_INTERVAL_WS
-    return MIN_EDIT_INTERVAL
-
-
-@dataclass
-class WsFailDigest:
-    """Batch consecutive WS upgrade failures so Telegram is not spammed."""
-
-    min_fails: int = ADMIN_WS_FAIL_MIN
-    every: float = ADMIN_WS_FAIL_EVERY
-    n: int = 0
-    pending: int = 0
-    last_err: str = ""
-    started: float = 0.0
-    last_sent: float = 0.0
-
-    def reset(self) -> None:
-        self.n = 0
-        self.pending = 0
-        self.last_err = ""
-        self.started = 0.0
-        self.last_sent = 0.0
-
-    def note(self, err: str, now: float) -> bool:
-        self.n += 1
-        self.pending += 1
-        self.last_err = str(err or "")[:160]
-        if self.started <= 0:
-            self.started = now
-        if self.n < self.min_fails:
-            return False
-        if self.last_sent <= 0:
-            return True
-        return (now - self.last_sent) >= self.every
-
-    def consume(self, now: float) -> dict:
-        out = {
-            "n": self.pending,
-            "total": self.n,
-            "error": self.last_err,
-            "elapsed": max(0.0, now - self.started) if self.started else 0.0,
-        }
-        self.pending = 0
-        self.last_sent = now
-        return out
-
-
-def _fmt_span(seconds: float) -> str:
-    s = max(0.0, float(seconds or 0))
-    if s < 90:
-        return f"{s:.0f}s"
-    return f"{s / 60:.1f}m"
-
-
-def watch_debug_mode(
-    link: str,
-    *,
-    has_board: bool,
-    last_data_at: float,
-    now: float,
-    stale: float = WATCH_STALE,
-) -> bool:
-    """DEBUG only when the session is dead or the board is missing/stale.
-
-    Transient handshake / reconnect retry must not replace a live scoreboard.
-    """
-    if str(link or "") == "disconnected":
-        return True
-    if not has_board or last_data_at <= 0:
-        return True
-    if (now - last_data_at) >= stale:
-        return True
-    return False
 
 
 class HltvTelegramBot:
@@ -654,27 +501,25 @@ class HltvTelegramBot:
         )
 
     def _join_watch(self, state: WatchState, chat_id: int) -> None:
-        stats, live = self._watch_pair(state, board=None, feed=[])
+        html, _, _ = render_watch(state, None, [])
         card = state.cards.get(int(chat_id))
-        if card and (card.log_id or card.message_id):
+        if card and card.message_id:
             self._reply(
                 chat_id,
                 "本群已在观赛。/bump 顶到最新 · /stop 退出本群",
             )
             return
         log.info("watch join chat=%s listId=%s", chat_id, state.list_id)
-        self._flush_watch(state, stats_html=stats, log_html=live, send_new=True, chat_id=chat_id)
+        self._flush_watch(state, html, send_new=True, chat_id=chat_id)
         self._reply(chat_id, self._watch_hint(state.list_id))
 
-    def _put_watch_card(self, state: WatchState, chat_id: int, stats_html: str, log_html: str) -> None:
+    def _put_watch_card(self, state: WatchState, chat_id: int, html: str) -> None:
         card = state.card(chat_id)
         try:
-            if card.log_id or card.message_id:
-                self._flush_watch(state, stats_html=stats_html, log_html=log_html, chat_id=chat_id)
+            if card.message_id:
+                self._flush_watch(state, html, chat_id=chat_id)
             else:
-                self._flush_watch(
-                    state, stats_html=stats_html, log_html=log_html, send_new=True, chat_id=chat_id
-                )
+                self._flush_watch(state, html, send_new=True, chat_id=chat_id)
         except Exception:
             log.exception("watch card failed chat=%s", chat_id)
 
@@ -719,11 +564,11 @@ class HltvTelegramBot:
             debug_view=True,
         )
         append_trace(state.trace, f"watch start listId={list_id} {t1} vs {t2}")
-        stats, live = self._watch_pair(state, board=None, feed=[])
+        html, _, _ = render_watch(state, None, [])
         targets = {int(chat_id)}
         targets.update(old_cards)
         for cid in sorted(targets):
-            self._put_watch_card(state, cid, stats, live)
+            self._put_watch_card(state, cid, html)
         self.watch = state
         self._thread = threading.Thread(target=self._watch_loop, args=(state,), daemon=True)
         self._thread.start()
@@ -731,23 +576,12 @@ class HltvTelegramBot:
 
     def _cmd_bump(self, chat_id: int) -> None:
         w = self.watch
-        if not w or w.stop.is_set() or not (w.log_html or w.text):
+        if not w or w.stop.is_set() or not w.text:
             self._reply(chat_id, "没有正在 watch 的消息")
             return
         card = w.cards.get(int(chat_id))
-        log.info(
-            "bump chat=%s old_log=%s old_stats=%s",
-            chat_id,
-            card.log_id if card else None,
-            card.stats_id if card else None,
-        )
-        self._flush_watch(
-            w,
-            stats_html=w.stats_html,
-            log_html=w.log_html or w.text,
-            send_new=True,
-            chat_id=chat_id,
-        )
+        log.info("bump chat=%s old_msg=%s", chat_id, card.message_id if card else None)
+        self._flush_watch(w, w.text, send_new=True, chat_id=chat_id)
 
     def _cmd_stop(self, chat_id: int, arg: str = "") -> None:
         w = self.watch
@@ -986,20 +820,18 @@ class HltvTelegramBot:
             else list(state.cards.values())
         )
         for card in cards:
-            for mid in {card.stats_id, card.log_id, card.message_id}:
-                if not mid:
-                    continue
-                try:
-                    self.tg.delete_message(card.chat_id, mid)
-                    log.info("watch delete chat=%s msg=%s", card.chat_id, mid)
-                except Exception:
-                    log.debug(
-                        "watch delete failed chat=%s msg=%s",
-                        card.chat_id,
-                        mid,
-                    )
-            card.stats_id = None
-            card.log_id = None
+            mid = card.message_id
+            if not mid:
+                continue
+            try:
+                self.tg.delete_message(card.chat_id, mid)
+                log.info("watch delete chat=%s msg=%s", card.chat_id, mid)
+            except Exception:
+                log.debug(
+                    "watch delete failed chat=%s msg=%s",
+                    card.chat_id,
+                    mid,
+                )
             card.message_id = None
 
     def _stop_watch(self, *, delete_cards: bool = False) -> None:
@@ -1017,12 +849,7 @@ class HltvTelegramBot:
             log.debug("close extra tabs after stop skipped", exc_info=True)
 
     def _watch_loop(self, state: WatchState) -> None:
-        board: dict = {}
-        feed: list = []
-        round_seen: int | None = None
-        prev_ct: int | None = None
-        prev_t: int | None = None
-        last_board_brief = ""
+        feed = ScorebotFeed()
         try:
             stream = iter_scorebot(
                 self.session,
@@ -1036,71 +863,60 @@ class HltvTelegramBot:
                     return
                 log.debug("watch event %s %s", name, event_brief(name, payload))
                 status_changed = False
+                if name not in WATCH_EVENT_NAMES:
+                    log.debug("watch ignore event %s", name)
+                    continue
                 if name == "trace" and isinstance(payload, dict):
                     text = str(payload.get("text") or "")
                     append_trace(state.trace, text)
                     if text:
                         log.info("watch %s", clip(text, 200))
+                    live_ok = bool(feed.board) and not watch_debug_mode(
+                        state.link,
+                        has_board=True,
+                        last_data_at=state.last_data_at,
+                        now=time.time(),
+                    )
+                    if live_ok:
+                        continue
                 elif name == "ws_fail" and isinstance(payload, dict):
                     self._on_ws_fail(state, payload)
                     continue
                 elif name == "status" and isinstance(payload, dict):
-                    new_link = str(payload.get("state") or state.link)
-                    detail = str(payload.get("detail") or "").strip()
-                    wait = payload.get("wait")
-                    state.link = new_link
-                    if payload.get("transport"):
-                        state.transport = str(payload.get("transport") or "")
-                        if state.transport == "ws":
-                            self._ws_fail.reset()
-                    if new_link in ("connected", "idle") and not detail:
-                        state.notice = ""
-                        state.next_at = 0.0
-                    else:
-                        state.notice = detail or {
-                            "connecting": "connecting",
-                            "reconnect": "reconnect",
-                            "disconnected": "disconnected",
-                        }.get(new_link, new_link)
-                        if wait not in (None, ""):
-                            try:
-                                state.next_at = time.time() + float(wait)
-                            except (TypeError, ValueError):
-                                pass
+                    apply_link_status(state, payload)
+                    if state.transport == "ws":
+                        self._ws_fail.reset()
                     status_changed = True
-                    append_trace(state.trace, f"link {new_link} {state.notice}".strip())
+                    append_trace(state.trace, f"link {state.link} {state.notice}".strip())
                     log.info(
                         "watch link %s notice=%s next_at=%.0f",
-                        new_link,
+                        state.link,
                         state.notice,
                         state.next_at,
                     )
                 elif name == "scoreboard" and isinstance(payload, dict):
-                    board = merge_scoreboard(board, payload)
-                    feed, round_seen = mark_new_round(feed, board, round_seen)
-                    feed, prev_ct, prev_t = mark_round_over(feed, board, prev_ct, prev_t)
+                    changed = feed.apply_scoreboard(payload)
                     state.last_data_at = time.time()
-                    brief = event_brief(name, payload)
-                    if brief != last_board_brief:
-                        last_board_brief = brief
-                        log.info("watch scoreboard %s", brief)
-                elif name == "log":
-                    before = len(feed)
-                    new_feed = merge_log(feed, payload)
-                    if new_feed is not feed:
-                        board = patch_board_from_log(board, payload)
-                    feed = new_feed
+                    if changed:
+                        log.info("watch scoreboard %s", feed.last_board_brief)
+                elif name in LOG_EVENT_NAMES:
+                    before = len(feed.log)
+                    feed.apply_log(payload)
                     state.last_data_at = time.time()
-                    log.info("watch log %s feed %s -> %s", event_brief(name, payload), before, len(feed))
+                    log.info(
+                        "watch log %s feed %s -> %s",
+                        event_brief(name, payload),
+                        before,
+                        len(feed.log),
+                    )
                 elif name == "tick":
                     now = time.time()
                     if (
-                        board
+                        feed.board
                         and state.last_data_at
                         and (now - state.last_data_at) >= WATCH_STALE
                         and not state.debug_view
                     ):
-                        # Verify if the whole match has finished on HLTV before marking stale/debug
                         match_ended = False
                         match_url = str(state.meta.get("url") or "")
                         if match_url:
@@ -1112,7 +928,7 @@ class HltvTelegramBot:
                                 pass
                         if match_ended:
                             log.info("match finished confirmed listId=%s url=%s", state.list_id, match_url)
-                            self._settle_watch(state, board, feed)
+                            self._settle_watch(state, feed.board, feed.log)
                             return
                         append_trace(
                             state.trace,
@@ -1121,84 +937,21 @@ class HltvTelegramBot:
                         status_changed = True
                     elif (
                         state.pending
-                        and (state.log_html or state.text)
+                        and state.text
+                        and not state.edits_frozen(now)
                         and (now - state.last_edit) >= watch_edit_interval(state)
                     ):
-                        self._flush_watch(
-                            state,
-                            stats_html=state.stats_html,
-                            log_html=state.log_html or state.text,
-                        )
+                        self._flush_watch(state, state.text)
                         continue
                     else:
                         continue
-                else:
-                    log.debug("watch ignore event %s", name)
-                    continue
-                stats_html, log_html, snap, debug = self._watch_render(state, board, feed)
-                extra = "|" + state.link + "|" + state.notice + "|" + str(int(state.next_at or 0))
-                if debug:
-                    stats_fp = state.stats_fp
-                    log_fp = "debug|" + (state.trace[-1] if state.trace else "") + extra
-                else:
-                    stats_fp = snapshot_stats_fingerprint(snap)
-                    log_fp = snapshot_log_fingerprint(snap) + extra
-                mode_switch = debug != state.debug_view
-                if (
-                    stats_fp == state.stats_fp
-                    and log_fp == state.log_fp
-                    and not status_changed
-                    and not mode_switch
-                ):
-                    log.debug("watch skip unchanged log_fp=%s", clip(log_fp, 120))
-                    continue
-                state.debug_view = debug
-                state.stats_html = stats_html
-                state.log_html = log_html
-                state.text = log_html
-                state.last_snap = snap
-                state.stats_fp = stats_fp
-                state.log_fp = log_fp
-                state.fingerprint = stats_fp + "|" + log_fp
-                state.pending = True
-                now = time.time()
-                head_type = ""
-                if isinstance(snap, dict):
-                    head = (snap.get("log") or [{}])[0]
-                    if isinstance(head, dict):
-                        head_type = str(head.get("type") or "")
-                head_kill_n = 0
-                if isinstance(snap, dict):
-                    head = (snap.get("log") or [{}])[0]
-                    if isinstance(head, dict) and head.get("type") == "kill":
-                        kill_counts = round_kill_counts(snap.get("log") or [])
-                        head_kill_n = kill_counts.get(id(head), 0)
-                force = status_changed or mode_switch or head_type in {
-                    "bomb",
-                    "round_start",
-                    "round_over",
-                    "round_over_ct",
-                    "round_over_t",
-                } or head_kill_n >= 3
-                wait = now - state.last_edit
-                if wait < watch_edit_interval(state) and not force:
-                    log.debug(
-                        "watch defer interval wait=%.2fs force=%s %s",
-                        wait,
-                        force,
-                        snap_brief(snap),
-                    )
-                    continue
-                log.debug(
-                    "watch render %s stats=%s log=%s debug=%s %s",
-                    name,
-                    len(stats_html),
-                    len(log_html),
-                    debug,
-                    snap_brief(snap),
+                self._commit_watch(
+                    state,
+                    feed.board,
+                    feed.log,
+                    status_changed=status_changed,
+                    event_name=name,
                 )
-                self._flush_watch(state, stats_html=stats_html, log_html=log_html)
-                continue
         except CloudflareError as e:
             state.notice = f"Cloudflare {e.status} · /cookie"
             state.next_at = 0.0
@@ -1208,12 +961,60 @@ class HltvTelegramBot:
         except Exception as e:
             state.notice = str(e)[:80] or "ended"
             append_trace(state.trace, state.notice)
-            if board:
-                self._settle_watch(state, board, feed)
+            if feed.board:
+                self._settle_watch(state, feed.board, feed.log)
             else:
                 self._mark_watch_down(state, "disconnected")
             if not state.stop.is_set():
                 log.info("watch ended: %s", e)
+
+    def _commit_watch(
+        self,
+        state: WatchState,
+        board: dict,
+        log_rows: list,
+        *,
+        status_changed: bool,
+        event_name: str,
+    ) -> None:
+        html, snap, debug = render_watch(state, board, log_rows)
+        fp = watch_fingerprint(
+            snap,
+            debug=debug,
+            link=state.link,
+            notice=state.notice,
+            next_at=state.next_at,
+            trace_tail=state.trace[-1] if state.trace else "",
+        )
+        mode_switch = debug != state.debug_view
+        if fp == state.fingerprint and not status_changed and not mode_switch:
+            log.debug("watch skip unchanged fp=%s", clip(fp, 120))
+            return
+        state.debug_view = debug
+        state.text = html
+        state.last_snap = snap
+        state.fingerprint = fp
+        state.pending = True
+        now = time.time()
+        if state.edits_frozen(now):
+            log.debug("watch defer frozen for %.1fs %s", state.edit_frozen_until - now, snap_brief(snap))
+            return
+        wait = now - state.last_edit
+        if wait < watch_edit_interval(state):
+            log.debug(
+                "watch defer interval wait=%.2fs %s",
+                wait,
+                snap_brief(snap),
+            )
+            return
+        log.debug(
+            "watch render %s html=%s debug=%s %s",
+            event_name,
+            len(html),
+            debug,
+            snap_brief(snap),
+        )
+        self._flush_watch(state, html)
 
     def _notify_admins(self, text: str) -> None:
         """Plain HTML to admin DMs. No auto-delete; not a watch card."""
@@ -1246,7 +1047,7 @@ class HltvTelegramBot:
         t1 = str(state.meta.get("team1") or "?")
         t2 = str(state.meta.get("team2") or "?")
         text = (
-            f"<b>scorebot WS 持续失败</b> ×{info['total']} / {_fmt_span(info['elapsed'])}\n"
+            f"<b>scorebot WS 持续失败</b> ×{info['total']} / {fmt_span(info['elapsed'])}\n"
             f"listId=<code>{h(state.list_id)}</code> {h(t1)} vs {h(t2)}\n"
             f"本批 {info['n']} 次 · 退避重试中 · 每 {int(WS_RETRY_EVERY)}s 再试\n"
             f"last: <code>{h(info['error'])}</code>"
@@ -1308,20 +1109,19 @@ class HltvTelegramBot:
         state: WatchState,
         html: str | None = None,
         *,
-        stats_html: str | None = None,
-        log_html: str | None = None,
         send_new: bool = False,
         chat_id: int | None = None,
     ) -> None:
-        body = log_html if log_html is not None else (html or stats_html or "")
+        body = html or ""
         if not body:
             return
         now = time.time()
         snap = state.last_snap or {}
-        state.log_html = body
         state.text = body
-        if stats_html:
-            state.stats_html = stats_html
+        if not send_new and state.edits_frozen(now):
+            state.pending = True
+            log.debug("watch edit frozen for %.1fs", state.edit_frozen_until - now)
+            return
         if send_new:
             cid = int(chat_id) if chat_id is not None else next(iter(state.cards), 0)
             if not cid:
@@ -1331,11 +1131,7 @@ class HltvTelegramBot:
             msg = self._send_rich(cid, body)
             if isinstance(msg, dict) and msg.get("message_id"):
                 card.message_id = msg["message_id"]
-                card.log_id = card.message_id
-                card.stats_id = card.message_id
             card.sent_html = body
-            card.sent_log = body
-            card.sent_stats = body
             card.record_edit(now)
             state.last_bump = now
             state.last_edit = now
@@ -1353,7 +1149,7 @@ class HltvTelegramBot:
             return
         edited = False
         for card in targets:
-            mid = card.message_id or card.log_id or card.stats_id
+            mid = card.message_id
             if not body or body == card.sent_html:
                 continue
             if not mid:
@@ -1375,6 +1171,15 @@ class HltvTelegramBot:
                     mid,
                     snap_brief(snap),
                 )
+            except TelegramRateLimit as e:
+                wait = state.freeze_edits(now, e.retry_after)
+                log.warning(
+                    "watch edit 429 freeze %.0fs chat=%s retry_after=%.0f",
+                    wait,
+                    card.chat_id,
+                    e.retry_after,
+                )
+                return
             except Exception as e:
                 if is_not_modified(e):
                     log.debug("watch not modified chat=%s msg=%s", card.chat_id, mid)
@@ -1387,118 +1192,20 @@ class HltvTelegramBot:
                     )
                     continue
             card.sent_html = body
-            card.sent_log = body
-            card.sent_stats = body
             card.message_id = mid
-            card.log_id = mid
-            card.stats_id = mid
             edited = True
         if edited:
             state.pending = False
             state.last_edit = now
 
-    def _watch_pair(
-        self,
-        state: WatchState,
-        *,
-        board: dict | None,
-        feed: list,
-        debug: bool | None = None,
-        live: bool | None = None,
-    ) -> tuple[str, str]:
-        now = time.time()
-        if debug is None:
-            debug = watch_debug_mode(
-                state.link,
-                has_board=bool(board),
-                last_data_at=state.last_data_at,
-                now=now,
-            )
-        if debug:
-            log_html = format_watch_debug_html(
-                team1=str(state.meta.get("team1") or "?"),
-                team2=str(state.meta.get("team2") or "?"),
-                list_id=state.list_id,
-                url=state.meta.get("url"),
-                link=state.link,
-                notice=state.notice,
-                next_at=state.next_at,
-                lines=list(state.trace),
-            )
-            return log_html, log_html
-        if board:
-            snap = snapshot_from_scoreboard(board, meta=state.meta, log=feed)
-            snap["link"] = state.link
-            snap["notice"] = state.notice
-            snap["next_at"] = state.next_at
-            snap["transport"] = state.transport
-            if live is not None:
-                snap["live"] = live
-            card_html = format_rich_watch_card(snap)
-            return card_html, card_html
-        connecting = format_connecting_html(
-            team1=str(state.meta.get("team1") or "?"),
-            team2=str(state.meta.get("team2") or "?"),
-            list_id=state.list_id,
-            url=state.meta.get("url"),
-            link=state.link,
-            notice=state.notice,
-            next_at=state.next_at,
-        )
-        return connecting, connecting
-
-    def _watch_card_html(
-        self,
-        state: WatchState,
-        *,
-        board: dict | None,
-        feed: list,
-        debug: bool | None = None,
-    ) -> str:
-        _stats, live = self._watch_pair(state, board=board, feed=feed, debug=debug)
-        return live
-
-    def _watch_render(
-        self, state: WatchState, board: dict, feed: list
-    ) -> tuple[str, str, dict, bool]:
-        now = time.time()
-        debug = watch_debug_mode(
-            state.link,
-            has_board=bool(board),
-            last_data_at=state.last_data_at,
-            now=now,
-        )
-        if board:
-            snap = snapshot_from_scoreboard(board, meta=state.meta, log=feed)
-        else:
-            snap = {
-                "live": True,
-                "url": state.meta.get("url"),
-                "team1": {"name": state.meta.get("team1")},
-                "team2": {"name": state.meta.get("team2")},
-                "log": feed,
-                "teams": [],
-            }
-        snap["link"] = state.link
-        snap["notice"] = state.notice
-        snap["next_at"] = state.next_at
-        snap["transport"] = state.transport
-        stats_html, log_html = self._watch_pair(state, board=board, feed=feed, debug=debug)
-        return stats_html, log_html, snap, debug
-
     def _settle_watch(self, state: WatchState, board: dict, feed: list) -> None:
         state.link = "ended"
         state.notice = state.notice or "ended"
-        stats_html, log_html, snap, _ = self._watch_render(state, board, feed)
-        snap["live"] = False
-        stats_html = format_rich_stats_html(snap)
-        log_html = format_rich_log_html(snap)
-        state.stats_html = stats_html
-        state.log_html = log_html
-        state.text = log_html
+        html, snap, _ = render_watch(state, board, feed, debug=False, live=False)
+        state.text = html
         state.last_snap = snap
         try:
-            self._flush_watch(state, stats_html=stats_html, log_html=log_html)
+            self._flush_watch(state, html)
         except Exception:
             log.debug("settle flush failed", exc_info=True)
 
@@ -1511,11 +1218,7 @@ class HltvTelegramBot:
             snap["next_at"] = state.next_at
             state.last_snap = snap
             try:
-                self._flush_watch(
-                    state,
-                    stats_html=state.stats_html,
-                    log_html=format_rich_log_html(snap),
-                )
+                self._flush_watch(state, format_rich_watch_card(snap))
             except Exception:
                 log.debug("watch down keep board failed", exc_info=True)
             return
@@ -1526,9 +1229,9 @@ class HltvTelegramBot:
         snap["next_at"] = state.next_at
         state.last_snap = snap
         try:
-            stats_html, log_html = self._watch_pair(state, board=None, feed=[], debug=True)
-            state.text = log_html
-            self._flush_watch(state, stats_html=stats_html, log_html=log_html)
+            html, _, _ = render_watch(state, None, [], debug=True)
+            state.text = html
+            self._flush_watch(state, html)
         except Exception:
             pass
 

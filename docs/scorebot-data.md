@@ -1,20 +1,20 @@
 # Scorebot 数据结构
 
-HLTV 没有公开 schema。下面以 [gigobyte/HLTV `connectToScorebot.ts`](https://github.com/gigobyte/HLTV/blob/master/src/endpoints/connectToScorebot.ts) 和本仓库实测为准。实现：`hltv_bot/scorebot.py`（收包）、`hltv_bot/live.py`（归一化）、`hltv_bot/format.py`（Telegram）、`hltv_bot/bot.py`（watch）。
+HLTV 没有公开 schema。下面以 [gigobyte/HLTV `connectToScorebot.ts`](https://github.com/gigobyte/HLTV/blob/master/src/endpoints/connectToScorebot.ts) 和本仓库实测为准。实现：`hltv_bot/scorebot_chrome.py`（页内 WS）、`hltv_bot/live.py`（归一化）、`hltv_bot/watch.py`（feed / 卡片状态）、`hltv_bot/format.py`（Telegram HTML）、`hltv_bot/bot.py`（命令与 edit）。
 
 管线：
 
 ```
-Engine.IO polling 握手 → WebSocket 升级
-        42["scoreboard", obj] / 42["log", json字符串]
-        ↓
+Chrome 比赛页 WebSocket（EIO=3，无 sid）
+        42["scoreboard", obj] / 42["log"|"fullLog", …]
+        ↓ CDP hltvBotEvent
 iter_scorebot  yield ("scoreboard"|"log"|"status"|"tick", payload)
-        ↓
+        ↓ ScorebotFeed（fullLog 当 log）
 merge_log / mark_new_round / mark_round_over / patch_board_from_log
         ↓
 snapshot_from_scoreboard  →  snapshot dict
         ↓
-format_rich_html  →  多群各自 edit 同一份 HTML
+format_rich_watch_card  →  每群一条 Rich，原地 edit
 ```
 
 ---
@@ -25,7 +25,7 @@ format_rich_html  →  多群各自 edit 同一份 HTML
 |---|---|---|
 | `scoreboard` | 服务端 | 当前地图记分板 object（见 §2） |
 | `log` | 服务端 | `{ "log": [ LogEvent, ... ] }`，或单条 object；常再套一层 JSON 字符串 |
-| `fullLog` | 服务端 | 少见，本项目当普通 `log` 一样解析 |
+| `fullLog` | 服务端 | 与 `log` 同一套解析（重连 / 半场 dump 别名） |
 | `status` | 客户端 | `{ "state", "detail?", "wait?" }` |
 | `tick` | 客户端 | 一帧 WS 处理完，用来冲刷 deferred Telegram edit |
 
@@ -375,42 +375,43 @@ semantic key（忽略坐标 / flasher / eventId）：
 
 `link` 不是 HLTV 字段，是本客户端连接状态。
 
-指纹 `snapshot_fingerprint`：比分 + 回合字 + `log[0]` + 最近 history + K/D，用来跳过无变化的 edit。
+指纹 `snapshot_fingerprint`：比分 + 回合字 + 可见 log 行（含 assister）+ history + K/D + bomb/freeze。alive / NvN 画在状态行，但不进指纹（不单独触发 edit）。状态行时钟不进指纹。
 
 ---
 
 ## 6. Telegram 卡片怎么用这些字段
 
-顺序（Rich HTML，无 h3/ul/footer）：
+每群 **单条** Rich（无 h3/ul/footer），顺序：
 
-1. 战绩消息（默认展开）`Stats {ct}–{t}`
-   - `history` → 一行 `R1 CT elim · R2 T bomb · …`
-   - `teams` → 两张名单表（Player / K / A / D / ADR）
-2. 比分表：CT 名、本图分、T 名；caption `LIVE · Map · R{n}`
-3. log 表（最多 12 行，无表头）
+1. 比分表：CT 名、本图分、T 名；caption `LIVE · Map · R{n}`
+2. `history` → 一行 `R1 CT elim · R2 T bomb · …`
+3. `teams` → 两张名单表（Player / K / A / D / ADR）
+4. log 表（最多 10 行，无表头）
    - 左列：选手 nick，或 `Round` / `Log`
    - 右列：`killed X · AWP HS 3K + assistNick` / `planted A` / `Round over · CT · elimination · 8-11` / `start`
-4. 最后一行纯文字：`connected` / `reconnect · HTTP 502 · next 12:01:03`
+5. 最后一行纯文字：`connected · freeze · bomb · 3v5 · R19 · Inferno · 18:32:05`；异常时带 notice / next
 
-未出分用 `–`，不要 `0-0`。
+未出分用 `–`，不要 `0-0`。freeze/warmup 全员 `alive=false` 时不显示 `0v0`。
 
 ---
 
 ## 7. Watch 进程内状态
 
-全局 **一场** 比赛、一条 Scorebot 线程。
+全局 **一场** 比赛、一条 Scorebot 线程。类型在 `hltv_bot/watch.py`。
 
 ```text
 WatchState
   list_id, meta, text, fingerprint, last_snap
   link, notice, next_at, pending, stop
   cards: { chat_id: WatchCard(chat_id, message_id, sent_html) }
+ScorebotFeed
+  board, log, round_seen, prev_ct, prev_t
 ```
 
 - `/watch id`：已在看同一场 → 该群还没有卡片就发一条；已经有则提示 `/bump`
-- 换比赛：停旧线程，**复用**各群已有 `message_id` 原地 edit；没有卡片的授权群新发
+- 换比赛：停旧线程，**复用**各群已有 `message_id` 原地 edit
 - 之后每次 flush：同一份 HTML `edit` 所有 `cards`
 - `/bump`：只给**当前群**发新消息，改这个群的 `message_id`
-- `/stop`：停全局
+- `/stop`：退本群并删该群卡片；`/stop all` 停全部
 
 授权群来自 `data/chats.json`。

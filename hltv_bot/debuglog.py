@@ -51,7 +51,7 @@ def log_brief(payload: Any) -> str:
 def event_brief(name: str, payload: Any) -> str:
     if name == "scoreboard" and isinstance(payload, dict):
         return board_brief(payload)
-    if name == "log":
+    if name in ("log", "fullLog"):
         return log_brief(payload)
     if name == "status" and isinstance(payload, dict):
         return f"state={payload.get('state')} {clip(payload.get('detail') or '', 80)}"
