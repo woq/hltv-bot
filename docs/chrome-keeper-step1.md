@@ -1,5 +1,7 @@
 # Chrome keeper（第一步）：自动续 Cloudflare cookie，保住 xhr-poll
 
+> **设计记录，不是现行传输。** keeper 导出 cookie 已经在跑。Scorebot 后来改成比赛页内 WebSocket，不再用 xhr-poll 收事件，掉线也不回 poll。协议以 [scorebot-transport.md](scorebot-transport.md) 为准。本文其余段落保留当时的三 PR 设计。
+
 | 字段 | 值 |
 |---|---|
 | 状态 | Draft |

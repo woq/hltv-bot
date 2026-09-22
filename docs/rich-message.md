@@ -8,15 +8,15 @@
 
 Rich Message 把一条消息当成**小文档**：标题、表格、列表、引用、脚注、数学、媒体块、地图、collage / slideshow。另有 `sendRichMessageDraft` + thinking 块，给 AI 流式打字。
 
-本项目只用它做 **`/watch` 记分板**（要表、要原地 `edit`）。列表、命令、状态要能划选复制，走普通消息。
+本项目只用它做 **`/watch` 记分板**（要表、要原地 `edit`）。命令、状态、错误要能划选复制，走普通消息。`/matches` 和 `/events` 默认是图片。
 
 ## 本仓库分流
 
 | 场景 | 通道 | 原因 |
 |---|---|---|
 | `/watch` 记分板、`/bump` 新卡片 | Rich：`sendRichMessage` / `editMessageText` + `rich_message` | 原生表，一条消息反复改 |
-| `/matches`、帮助、状态、错误、授权 | 普通：`sendMessage` + `parse_mode=HTML` | 好划选、好复制 `/watch id`；30s 后自动删 |
-| 其它短通知 | 普通 `send_message` | 不强制 rich |
+| `/matches`、`/events` | 默认 `sendPhoto`；参数带 `text`/`txt`，或渲染失败，才 `sendMessage` + HTML | 图片好扫；文本回退好复制 `/watch id`。都 30s 后删 |
+| 帮助、状态、错误、授权、其它短通知 | 普通：`sendMessage` + `parse_mode=HTML` | 好划选；30s 后自动删 |
 
 **不要检查普通消息是不是 Rich。** 提交前测试只约束 watch 路径：编辑失败不得改成连发新卡片。
 

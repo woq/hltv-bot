@@ -294,13 +294,12 @@ T 胜则 `type` 为 `round_over_t`。
 
 1. 重连 / 半场 dump 被 `merge_log` 当成 replay 整包丢掉（包里夹带的 RoundEnd 一起没了）
 2. 只来了 scoreboard 分变了，log 没发 RoundEnd
-3. 旧 UI 用中文「回合结束」做 force-edit 匹配，英文化之后对不上就不会立刻推
 
 对应处理：
 
 - `mark_round_over`：本图分相对上一帧变了，且 feed 头还不是 `round_over_*`，就合成一条
 - 之后若 log 来了真 RoundEnd（同分），**替换**合成行，保留胜因
-- Telegram force-edit：看 `log[0].type` 是不是 `round_start` / `round_over_*`，不再扫中文
+- 合成行和真 RoundEnd 都走同一条 Rich 的 edit 窗口（最少 3s，每分钟 19 次）。回合开始、回合结束、3K **不**绕过这个间隔
 
 `patch_board_from_log` 用 RoundEnd 的两个 score 字段去改 board，避免记分板晚一拍。
 
@@ -375,7 +374,7 @@ semantic key（忽略坐标 / flasher / eventId）：
 
 `link` 不是 HLTV 字段，是本客户端连接状态。
 
-指纹 `snapshot_fingerprint`：比分 + 回合字 + 可见 log 行（含 assister）+ history + K/D + bomb/freeze。alive / NvN 画在状态行，但不进指纹（不单独触发 edit）。状态行时钟不进指纹。
+指纹 `snapshot_fingerprint` 应当只含：比分、回合字、卡片上能看见的 log 行（含 assister，默认 10 行）、history 最近 8 条、K/A/D、bomb、freeze、live。ADR 只画在名单上，**不进指纹**（`damagePrRound` 是浮点，几秒一变会打满 19 次/分钟）。alive / NvN 只画在状态行。状态行时钟不进指纹。连接态 `link` / `notice` 另接在 `watch_fingerprint` 上。
 
 ---
 

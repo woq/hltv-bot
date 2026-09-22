@@ -1,16 +1,16 @@
-# Scorebot 传输：试过什么、为什么停在 poll
+# Scorebot 传输
 
-HLTV 没有公开 Game log API。浏览器里是 Engine.IO v3：polling 握手拿 `sid`，再升 WebSocket，`readyForMatch` 之后收 `scoreboard` / `log`。
+HLTV 没有公开 Game log API。协议是 Engine.IO v3：`readyForMatch` 之后收 `scoreboard` / `log` / `fullLog`。
 
-**线上现状：默认 `HLTV_SCOREBOT=chrome`。** 常驻 headed Chrome 打开比赛页，页内 `WebSocket` 连 `scorebot-lb`（Engine.IO v3，无 polling sid）。Python 只通过 CDP `hltvBotEvent` 收 JSON，自己不 Upgrade。卡片底栏 `ws`。
+**线上默认 `HLTV_SCOREBOT=chrome`，且 `127.0.0.1:9222` 开着。** `hltv-chrome` 的比赛页里 `new WebSocket("…/socket.io/?EIO=3&transport=websocket")`，没有 polling sid，打开后不发 `2probe`。服务端 `0{…}` 之后发 `40` 和一次 `readyForMatch`。文本 `2` 回 `3`。Python 只通过 CDP `hltvBotEvent` 收 JSON，自己不 Upgrade。卡片底栏 `ws`。`:9222` 没开，或环境变量是 `curl` / `cffi` / `off` / `0`，才离开这条路径。
 
-`HLTV_SCOREBOT=curl` 才走 `curl_cffi`：polling 握手拿 sid 再 Upgrade。VPS 上这条经常 403，只作 CDP 挂掉时的退路，**不回落 xhr-polling 收事件**。
+`HLTV_SCOREBOT=curl` 走 `curl_cffi`：polling GET 只拿 `sid`，然后 Upgrade。失败就指数退避再握手。VPS 上这条经常 403。**不回落 xhr-polling 收事件。**
 
 下面按时间记结论，避免再走回头路。
 
 ---
 
-## 1. 现在为什么 poll 能看、WS 经常不能
+## 1. 当时为什么 poll 能看、Python Upgrade 经常不能
 
 MCP 对着本机 Chrome 134 抓过一场 live：
 
@@ -31,7 +31,7 @@ WS 是另一条：**新 TCP + HTTP/1.1 `Connection: Upgrade`**。Cloudflare 对�
 | `poll HTTP 520/502` | 边缘到源站抖，不是鉴权；等 30s |
 | 卡片 DEBUG 里全是 `ct=1 t=2` / `feed 80->80` | 曾经误把 5xx 当断线；`80` 是 log 上限 |
 
-部署 **不会** 自动刷新 cookie：rsync 排除 `data/session.json`。VPS 也没有会过 challenge 的 Chrome。
+部署 **不会** 用 rsync 覆盖 `data/session.json`。cookie 由同机 Chrome keeper 导出；人手 `/cookie` 只是退路。
 
 ---
 
@@ -58,7 +58,7 @@ HTTP 和页面里的 WebSocket **都是 libcurl**。UA 禁止含 `Mozilla`，`Se
 
 ### 真 Chrome 常驻（`deploy/chrome-session/`）
 
-在已验证的 page 里连 scorebot，这是唯一稳的真 WS。大约 **1GB+** RAM。当前 bot `MemoryMax=400M`、机器无 Swap，没上。
+在已验证的 page 里连 scorebot，这是唯一稳的真 WS。Chrome `MemoryMax=900M`，bot 仍是 `400M`。unit 已在用：`Restart=no`，bot 只 attach，Actions 不重启 Chrome。
 
 ### WebKitGTK / WPE + Content Blocker（已放弃）
 
@@ -94,15 +94,13 @@ title=Just a moment... cf=True
 
 ## 4. 现在怎么跑（已彻底去除 poll 回落）
 
-- `/watch`：纯 WebSocket 链路，观赛卡片一条 Rich（比分 + 回合史 + 名单 + log）。
-  - Chrome 模式下：在已受 CF 保护的比赛页内直接建立真 WebSocket（`iter_scorebot_chrome`）。
-  - Python 模式下：仅通过 HTTP GET 握手获取 `sid`，随后直接升级 WebSocket（`try_open_ws`）并以 `40` + `readyForMatch` 接收实时推送；若升级失败（如 403）或断开，直接进入指数退避重试，**坚决不回落到 xhr-polling**。
+- `/watch`：一条 Rich（比分 + 回合史 + 名单 + log）。
+  - Chrome：`iter_scorebot_chrome`，页内 WebSocket，无 sid。
+  - curl：HTTP GET 拿 `sid`，`try_open_ws`，然后 `40` + `readyForMatch`。403 或断开后指数退避，**不回落 xhr-polling**。
 - `log` / `fullLog` 同一套 `merge_log`。
-- WS 连续失败：管理员私聊汇总（满 2 次、每 5 分钟一批）。
-- Cookie：同出口 Chrome 烤整行，`/cookie`。过期再贴。
-- 提交前：`pytest tests/test_rich_message.py tests/test_format.py tests/test_watch_flush.py tests/test_watch_feed.py tests/test_live.py tests/test_snapshot.py tests/test_gaps.py tests/test_cdp_cookies.py tests/test_cdp_client.py tests/test_keeper.py tests/test_scorebot_cookie_refresh.py tests/test_cookie_cmd.py tests/test_http_chrome.py tests/test_scorebot_chrome.py -q`。
+- curl 路径 WS 连续失败：管理员私聊汇总（满 2 次、每 5 分钟一批）。
+- Cookie：keeper 导出。`/cookie` 是人手覆盖，不是 30 分钟例行操作。
+- 提交前跑 `AGENTS.md` 里的 pytest。
 
-以后若要真 WS：给机器加内存，跑 `deploy/chrome-session/`，在**已打开的比赛页**里连，不要再抄 cookie 去 Upgrade，也不要再试 Lightpanda / WebKitGTK。
-
-2G 机上的分步评估（keeper 保连 → 页内 WS；不上 MV3 后台 WS）见 [chrome-gateway.md](chrome-gateway.md)。
+不要再抄 cookie 去做 Upgrade，也不要再试 Lightpanda / WebKitGTK / RFC 8441。落地前的评估见 [chrome-gateway.md](chrome-gateway.md)。
 

@@ -27,7 +27,7 @@ python3 -m pytest tests/test_rich_message.py tests/test_format.py tests/test_wat
 - `docs/hltv-api.md` — HLTV 非官方接口
 - `docs/scorebot-data.md` — Scorebot / snapshot / 归一化 log 字段
 - `docs/cloudflare.md` — Cookie / TLS
-- `docs/scorebot-transport.md` — 传输层试过什么、为什么停在 poll
-- `docs/chrome-gateway.md` — 常驻 Chrome 过 CF 网关：方案评估与落地顺序
-- `docs/chrome-keeper-step1.md` — Step 1 实现设计（keeper 保 poll；三 PR）
+- `docs/scorebot-transport.md` — 现行传输：页内 WebSocket；curl 只作退路，不回落 xhr
+- `docs/chrome-gateway.md` — 常驻 Chrome 方案评估（历史；落地结果以 transport 文档为准）
+- `docs/chrome-keeper-step1.md` — Step 1 设计记录（keeper 续 cookie；页内 WS 已另落地）
 

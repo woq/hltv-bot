@@ -1,8 +1,8 @@
 # hltv-bot
 
-HLTV 比赛列表 / 详情 / Scorebot 长连接（Game log）+ Telegram：`/matches` 普通消息（好复制）；`/watch` 用 Rich Message 原地 `edit`；刷下去时 `/bump` 再发一条。
+HLTV 比赛列表 / 详情 / Scorebot 长连接（Game log）+ Telegram：`/matches` 默认深色图片（`text` 才是纯文本）；`/watch` 用 Rich Message 原地 `edit`；刷下去时 `/bump` 再发一条。
 
-TLS 按 MCP 里 Chrome 134 的头伪装（`curl_cffi` impersonate + 抄来的 `sec-ch-ua` / UA / cookie）。
+线上 Scorebot 走常驻 Chrome 比赛页里的 WebSocket。`curl_cffi` 只在 Chrome 不可用、或 `HLTV_SCOREBOT=curl` 时做握手再 Upgrade。
 
 ## 文档
 
@@ -11,11 +11,11 @@ TLS 按 MCP 里 Chrome 134 的头伪装（`curl_cffi` impersonate + 抄来的 `s
 | [docs/rich-message.md](docs/rich-message.md) | Rich 只用在 `/watch`；`/matches` 等普通消息；官方它解决什么 |
 | [docs/hltv-api.md](docs/hltv-api.md) | 非官方 HLTV 接口：列表 HTML、详情 meta、Scorebot Engine.IO、事件字段 |
 | [docs/scorebot-data.md](docs/scorebot-data.md) | Scorebot / snapshot / log 归一化数据结构（全面） |
-| [docs/cloudflare.md](docs/cloudflare.md) | Cookie / TLS 伪装、403 处理、试过的方案 |
-| [docs/scorebot-transport.md](docs/scorebot-transport.md) | 为什么停在 poll；WS 403、Lightpanda、WebKit 实验结论 |
-| [docs/chrome-gateway.md](docs/chrome-gateway.md) | 常驻 Chrome 当过 CF 网关：方案评估（A 两步，不上 extension 后台 WS） |
-| [docs/chrome-keeper-step1.md](docs/chrome-keeper-step1.md) | Step 1 实现设计：keeper 自动续 cookie 保 poll（三 PR） |
-| [deploy/chrome-session/README.md](deploy/chrome-session/README.md) | VPS 常驻真 Chrome（备用，内存要求高） |
+| [docs/cloudflare.md](docs/cloudflare.md) | Cookie / Chrome keeper / curl 退路 |
+| [docs/scorebot-transport.md](docs/scorebot-transport.md) | 现行页内 WebSocket，以及否掉的 poll / Lightpanda / WebKit |
+| [docs/chrome-gateway.md](docs/chrome-gateway.md) | 方案评估（历史；现行传输见上一篇） |
+| [docs/chrome-keeper-step1.md](docs/chrome-keeper-step1.md) | keeper 续 cookie 的设计记录 |
+| [deploy/chrome-session/README.md](deploy/chrome-session/README.md) | VPS 常驻 Chrome + Xvfb（bot 只 attach `:9222`） |
 
 ## 安装
 
@@ -26,11 +26,11 @@ source .venv/bin/activate
 pip install -e .
 ```
 
-只要：`curl_cffi`、`python-dotenv`（标准库 urllib 调 Telegram）。
+依赖：`curl_cffi`、`python-dotenv`、`pillow`、`weasyprint`、`pypdfium2`、`websocket-client`（CDP）。Telegram 仍用标准库 urllib。
 
 ## Cookie（从本机 Chrome / MCP）
 
-细节见 [docs/cloudflare.md](docs/cloudflare.md)。HttpOnly 的 `cf_clearance`、`__cf_bm` **不能** `document.cookie`。DevTools → Network 点 `www.hltv.org` 或 `scorebot-lb.hltv.org`，复制 Cookie 整行：
+细节见 [docs/cloudflare.md](docs/cloudflare.md)。VPS 上 keeper 会把 Chrome cookie 导出到 `data/session.json`。人手粘贴只在 keeper 挂了、或本机没有 Chrome 时用。HttpOnly 的 `cf_clearance`、`__cf_bm` **不能** `document.cookie`。DevTools → Network 点 `www.hltv.org`，复制 Cookie 整行：
 
 ```bash
 cp data/session.example.json data/session.json
@@ -38,7 +38,7 @@ python3 -m hltv_bot import-cookie -o data/session.json
 # 粘贴 Cookie: ... 然后 Ctrl-D
 ```
 
-`data/session.json` 已 gitignore。失效后（约 `__cf_bm` 30 分钟级）再贴一次。
+`data/session.json` 已 gitignore。`__cf_bm` 大约 30 分钟级，由 keeper 页自己续，不必按这个周期人手贴。
 
 ## GitHub Actions 部署
 
@@ -113,8 +113,8 @@ Watch **全局一场** Scorebot。默认**只给发了 `/watch` 的群**发卡�
 
 限流：`/matches` 8s、`/watch` 6s、`/bump` 4s；live **edit 最少间隔 3s、每分钟最多 19 次**（合并延迟，429 冻结）；HLTV 列表缓存 45s。
 
-采集和 bot **跑在和 Chrome 同一出口 IP 的 PC** 上。手机只开 Telegram。MCP 只用来烤 cookie / 调试，不要当 24h 进程。
+线上 bot 和 Chrome 在同一台 VPS。手机只开 Telegram。MCP 只用来调试，不要当 24h 进程。
 
 Bot 默认 `HLTV_LOG=DEBUG`，Scorebot / Telegram / HTTP 都会打到 stdout。改成 INFO：`HLTV_LOG=INFO python3 -m hltv_bot bot`。
 
-提交或 push 前：`python3 -m pytest tests/test_rich_message.py tests/test_format.py tests/test_watch_flush.py tests/test_gaps.py -q`（见 [docs/rich-message.md](docs/rich-message.md)）。
+提交或 push 前跑 `AGENTS.md` 里那条 pytest（Rich、watch、snapshot、CDP、keeper、Chrome scorebot）。

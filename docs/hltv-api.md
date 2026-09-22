@@ -106,42 +106,42 @@ DOM 全量抽取（Chrome MCP / evaluate）见 `hltv_bot/extract.js`：`python3 
 
 ## 3. Scorebot（Engine.IO v3 → WebSocket）
 
-基址默认 `https://scorebot-lb.hltv.org`。和浏览器一样：polling **只用来握手拿 sid**，随后立刻升级到 **WebSocket**。事件、心跳、`readyForMatch` 都走 WS，不再长轮询 GET。
+基址默认 `https://scorebot-lb.hltv.org`。事件、心跳、`readyForMatch` 都走 WebSocket。**不用 xhr-polling 收事件。**
 
-必须 **复用同一条 TLS 会话**（`curl_cffi` Session：握手 GET 的 `io` cookie 带到 WS upgrade）。
+默认 `HLTV_SCOREBOT=chrome`，且本机 `:9222` 开着：在已经过 Cloudflare 的比赛页里 `new WebSocket`，query 只有 `EIO=3&transport=websocket`（**没有 sid**）。Python 不 Upgrade，只收 CDP `hltvBotEvent`。底栏 `ws`。
 
-### 3.1 握手
+`HLTV_SCOREBOT=curl`（或 CDP 不可用）才用 `curl_cffi`：polling GET 只拿 `sid`，立刻 Upgrade。Upgrade 失败就指数退避再握手，**不**改去长轮询。这条在 VPS 上经常 403。
+
+### 3.1 页内 WebSocket（默认）
 
 ```
-GET {base}/socket.io/?EIO=3&transport=polling&t={ms}
+wss://scorebot-lb.hltv.org/socket.io/?EIO=3&transport=websocket
+```
+
+打开后等服务端 `0{json}`（里面有 `pingInterval` / `pingTimeout`，常见 25000 / 60000），客户端发 `40`，再发一次 `42["readyForMatch", …]`。不要在这条链路上先发 `2probe`。服务端 Engine.IO ping 是文本 `2`，回 `3`。包 `1` 和 `41` 都当断开。多包用 `\x1e` 切开。
+
+CDP 掉线时 Python 睡 3s 再注入。同一 tab 上一次注入被替换时，close code 常是 1005。
+
+### 3.2 curl 握手再 Upgrade（退路）
+
+必须复用同一条 TLS 会话，让握手 GET 的 `io` cookie 进 Upgrade。
+
+```
+GET {base}/socket.io/?EIO=3&transport=polling&t={yeast}
 Origin: https://www.hltv.org
 ```
 
-响应是 Engine.IO payload。首包 `0{json}`：
-
-```json
-{
-  "sid": "...",
-  "upgrades": ["websocket"],
-  "pingInterval": 25000,
-  "pingTimeout": 60000
-}
-```
-
-握手后先 **polling `readyForMatch`**（和浏览器一样），立刻尝试 WS 升级。403 则继续 poll，**每 30s 以及 poll 5xx 时再试升级**；成功就切到 WS，底部状态会显示 `ws` / `poll`。
+`t=` 是 Engine.IO yeast，不是 unix 毫秒。首包 `0{json}` 给出 `sid`。然后：
 
 ```
 wss://scorebot-lb.hltv.org/socket.io/?EIO=3&transport=websocket&sid={sid}
-2probe  →  3probe  →  5
-然后 WS 文本帧发 42["readyForMatch", "..."]
-服务端 Engine.IO ping 是帧 `2`，回 `3`（不要跟 WS 协议层 ping 搞混）
 ```
 
-WS 上每个帧一条 Engine.IO 包，**不要**再套 xhr 的 `\x00…\xff` 长度帧。
+Upgrade 成功后发 `40` 和 `readyForMatch`。不要在 WS 上声明 `permessage-deflate`，也不要带 `Accept-Encoding`。
 
-握手 GET 仍可能 502（CF 到源站）。那是一次性握手，不是每几秒一轮 poll。断线指数退避：≥15s，5xx 首次 ≥25s，到 180s。`www.hltv.org` HTML 两次至少 3s。Telegram edit 最少 1.8s。
+握手 GET 仍可能 502。断线指数退避：≥15s，5xx 首次 ≥25s，到 180s。`www.hltv.org` HTML 两次至少 3s。Telegram edit 最少 3s，滑动窗口每分钟最多 19 次。
 
-403/429 仍停等 `/cookie`，不重连死磕。
+curl 路径上 403/429 抛 `CloudflareError`，watch 停，等 `/cookie`。不在 polling 上重试升级。
 
 ### 3.2 订阅一场
 
@@ -279,12 +279,13 @@ for name, payload in iter_scorebot(sess, list_id, base=scorebot_base(meta["score
 | `parse_event` | `42[name, data]`，`data` 若是字符串再 `json.loads` 一次 |
 | `encode_event(name, data)` | 生成 `42[...]` |
 
-探测/联调用例如下（逻辑与 `iter_scorebot` 相同）：
+`iter_scorebot` 的现行路径不是下面这三步。页内 WS 不 POST、不循环 GET。下面只描述 **curl 退路** 的握手形状；事件在 Upgrade 之后的 WS 上收，`readyForMatch` 也在 WS 上发：
 
 ```
 handshake GET → sid
-POST 42["readyForMatch","{\"token\":\"\",\"listId\":\"…\"}"]
-循环 GET → 42["scoreboard", …] / 42["log", …]
+WS Upgrade（带 sid）
+WS 文本帧 40 + 42["readyForMatch", …]
+WS 收 42["scoreboard", …] / 42["log"|"fullLog", …]
 ```
 
 ---

@@ -2,14 +2,14 @@
 
 HLTV 列表页、详情页、Scorebot 都在 Cloudflare 后面。当前做法：
 
-1. MCP / DevTools 从本机 Chrome 拿 Cookie 整行和请求头。
-2. 采集进程用 `curl_cffi` 按 Chrome 做 TLS 伪装（`impersonate`）。
-3. 机器和浏览器同一出口 IP。
-4. Cookie 过期再烤一次，Telegram `/cookie` 或 CLI `import-cookie`。
+1. VPS 常驻 headed Chrome + Xvfb（`hltv-chrome`），keeper tab 挂在 `www.hltv.org`。idle 页自己续 `__cf_bm`，CDP 导出到 `data/session.json`。
+2. `/matches`、详情 HTML 默认在这个 tab 里 `fetch`（`HLTV_HTTP=chrome`）。`HLTV_HTTP=curl` 才改用 `curl_cffi`。
+3. Scorebot 默认在比赛页里开 WebSocket，不把 cookie 抄出去做 Upgrade。见 [scorebot-transport.md](scorebot-transport.md)。
+4. 人手 `/cookie` 或 `import-cookie` 是 keeper 挂了、或本机没有 `:9222` 时的退路。
 
-Cloudflare 主要拦无头 / 一次性环境，不是这个 IP。
+Cloudflare 拦的是无头 / 一次性环境，以及「不是刚过完 JS 的那个进程」发出的 WebSocket Upgrade。
 
-`__cf_bm` 大约 30 分钟级，`cf_clearance` 更长。403 再贴，不必每天换。
+`__cf_bm` 大约 30 分钟级，`cf_clearance` 更长。keeper 正常时不必按这个周期贴 cookie。
 
 ## Cookie
 
@@ -54,9 +54,10 @@ python3 -m hltv_bot import-cookie -o data/session.json
 3. 普通 curl / urllib → 被拦或握不上
 4. 每次 headless 开浏览器 → 过不了
 5. 无头但保存 profile → 仍难点 JS challenge
-6. VPS 真 Chrome + Xvfb + noVNC 常驻 → 最稳；2G + swap 可试 keeper（评估见 [chrome-gateway.md](chrome-gateway.md)；unit 在 `deploy/chrome-session/`）
-7. 换更小浏览器 → JS challenge 还是要完整浏览器
-8. 同 IP + Cookie + TLS 伪装 → **现在这套（poll）**
-9. WebKitGTK / WPE 内容拦截 + 页内 WS → Turnstile 过不了（WebKit 指纹、无 GPU），已放弃
+6. 换更小浏览器 → JS challenge 还是要完整浏览器
+7. 只抄 cookie + TLS 伪装去做 Scorebot Upgrade → poll 握手有时能过，Upgrade 经常 403。只作 `HLTV_SCOREBOT=curl` 退路
+8. WebKitGTK / WPE 内容拦截 + 页内 WS → Turnstile 过不了（WebKit 指纹、无 GPU），已放弃
+
+**在用的是** VPS 真 Chrome（`deploy/chrome-session/`）：keeper 续 cookie，比赛页内 WebSocket。评估原文见 [chrome-gateway.md](chrome-gateway.md)，以落地后的传输文档为准。
 
 过程与日志级结论见 [scorebot-transport.md](scorebot-transport.md)。

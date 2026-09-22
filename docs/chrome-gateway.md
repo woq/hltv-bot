@@ -1,5 +1,8 @@
 # Chrome 过 CF 网关：方案评估（2026-09）
 
+> **这是落地前的评估，不是现行说明。** 下面写的「还没改代码」「先做 xhr-poll」「掉线回 poll」「页内先 polling 再带 sid 升级」都没有按原文上线。  
+> 现行：`hltv-chrome` keeper 续 cookie；比赛页直接 `transport=websocket`（无 sid、不发 `2probe`）；Python 收 CDP 事件。curl 只在 CDP 不可用时握手再 Upgrade，不收 xhr 事件。见 [scorebot-transport.md](scorebot-transport.md)。
+
 第三方建议把 Chrome 从「人手烤 cookie」改成「常驻过 CF 的网关」，Python 只收 JSON，不再自己 `Upgrade`。
 
 根因与 [scorebot-transport.md](scorebot-transport.md) 一致：`curl_cffi` 抄 cookie 能 poll，WS Upgrade 被 CF 验「是不是刚才过完 JS 的那个真进程」。解法只有让 Engine.IO WS 跑在已经过 CF 的 page 里。
