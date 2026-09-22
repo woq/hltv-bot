@@ -623,7 +623,10 @@ def _score_parts(snap: dict) -> tuple[object, object]:
     return ct, t
 
 
-def format_rich_watch_card(snap: dict, *, log_limit: int = 10) -> str:
+WATCH_CARD_LOG_LIMIT = 10
+
+
+def format_rich_watch_card(snap: dict, *, log_limit: int = WATCH_CARD_LOG_LIMIT) -> str:
     """Unified scoreboard card: score strip + round history + roster + kill log + link line."""
     teams = list(snap.get("teams") or [])
     ct_team = teams[0] if teams else {"name": (snap.get("team2") or {}).get("name") or "CT", "players": []}

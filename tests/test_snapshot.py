@@ -225,3 +225,30 @@ def test_alive_only_does_not_change_fingerprint():
     frozen = dict(base)
     frozen["frozen"] = True
     assert snapshot_fingerprint(base) != snapshot_fingerprint(frozen)
+
+
+def test_adr_only_does_not_change_fingerprint():
+    base = {
+        "scoreText": "3-2",
+        "teams": [
+            {"name": "Spirit", "players": [{"nick": "donk", "kills": 8, "assists": 1, "deaths": 2, "adr": 70.1}]},
+        ],
+    }
+    hotter = {
+        "scoreText": "3-2",
+        "teams": [
+            {"name": "Spirit", "players": [{"nick": "donk", "kills": 8, "assists": 1, "deaths": 2, "adr": 90.4}]},
+        ],
+    }
+    assert snapshot_fingerprint(base) == snapshot_fingerprint(hotter)
+
+
+def test_log_fingerprint_matches_visible_card_rows():
+    def row(i: int) -> dict:
+        return {"type": "kill", "killer": f"p{i}", "victim": "x", "text": f"k{i}"}
+
+    shown = {"log": [row(i) for i in range(10)]}
+    extra = {"log": [row(i) for i in range(11)]}
+    changed_tail = {"log": [row(i) for i in range(9)] + [row(99)]}
+    assert snapshot_log_fingerprint(shown) == snapshot_log_fingerprint(extra)
+    assert snapshot_log_fingerprint(shown) != snapshot_log_fingerprint(changed_tail)

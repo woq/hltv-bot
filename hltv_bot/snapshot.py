@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from hltv_bot.format import WATCH_CARD_LOG_LIMIT
+
 _JS_PATH = Path(__file__).with_name("extract.js")
 EXTRACT_JS = _JS_PATH.read_text(encoding="utf-8").strip()
 
@@ -13,7 +15,7 @@ def snapshot_stats_fingerprint(snap: dict) -> str:
     for t in teams:
         for p in t.get("players") or []:
             kad.append(
-                f"{p.get('nick')}:{p.get('kills')}/{p.get('assists')}/{p.get('deaths')}/{p.get('adr')}"
+                f"{p.get('nick')}:{p.get('kills')}/{p.get('assists')}/{p.get('deaths')}"
             )
     hist = snap.get("history") or []
     hist_s = ",".join(f"{x.get('n')}{x.get('winner')}" for x in hist[-8:])
@@ -32,7 +34,7 @@ def snapshot_stats_fingerprint(snap: dict) -> str:
 def snapshot_log_fingerprint(snap: dict) -> str:
     log_rows = snap.get("log") or []
     visible_log = []
-    for item in log_rows[:15]:
+    for item in log_rows[:WATCH_CARD_LOG_LIMIT]:
         if not isinstance(item, dict):
             continue
         visible_log.append(
