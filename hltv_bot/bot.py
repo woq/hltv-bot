@@ -83,6 +83,8 @@ CMD_COOLDOWN = {
 }
 DEFAULT_CMD_COOLDOWN = 1.2
 MSG_TTL = 60.0
+EVENTS_IMG_CACHE_TTL = 7 * 24 * 3600
+MATCHES_IMG_CACHE_TTL = 6 * 3600
 GET_UPDATES_FAIL_SLEEP = 3.0
 TG_COMMANDS_GAP = 0.4
 _KEEP_USER_CMDS = frozenset({"/watch"})
@@ -299,11 +301,10 @@ class HltvTelegramBot:
             return (not _u1 or _u1 in ("?", "TBD")) and (not _u2 or _u2 in ("?", "TBD"))
 
         rows = [r for r in rows if not _both_tbd(r)]
-        if not rows:
-            self._reply(chat_id, "暂无可显示的比赛（或双方均为 TBD）")
-            return
-
         if text_only:
+            if not rows:
+                self._reply(chat_id, "暂无可显示的比赛（或双方均为 TBD）")
+                return
             text = format_match_list(rows, starred_only=(tier_filter != "Other"))
             log.debug("matches text_len=%s", len(text))
             self._reply(chat_id, text)
@@ -342,10 +343,24 @@ class HltvTelegramBot:
             )
             now_ts = time.time()
             cached = getattr(self, "_matches_img_cache", {}).get(tier_filter)
-            if cached and cached[0] == cache_sig and (now_ts - cached[1] < 120.0):
+            if cached and cached[0] == cache_sig and (now_ts - cached[1] < MATCHES_IMG_CACHE_TTL):
                 img_bytes = cached[2]
                 log.debug("matches image cache hit for %s", tier_filter)
             else:
+                try:
+                    from hltv_bot.events import ensure_event_logos
+                    from hltv_bot.team_logos import ensure_team_logos
+
+                    logo_urls = []
+                    event_pairs: list[tuple[str, str]] = []
+                    for r in matches_in_tier:
+                        logo_urls.append(r.get("team1_logo") or "")
+                        logo_urls.append(r.get("team2_logo") or "")
+                        event_pairs.append((str(r.get("event_id") or ""), str(r.get("event_logo") or "")))
+                    ensure_team_logos(logo_urls)
+                    ensure_event_logos(event_pairs)
+                except Exception:
+                    log.debug("team logo cache skipped", exc_info=True)
                 img_bytes = render_matches_image(
                     rows,
                     tier_filter=tier_filter,
@@ -357,6 +372,10 @@ class HltvTelegramBot:
 
             # Build caption with quick /watch shortcuts for live & top matches
             caption_lines = [f"<b>HLTV Matches</b> · <code>{push_time} UTC+8</code>"]
+            if not matches_in_tier:
+                nxt = {"T1": "t2", "T2": "t3"}.get(tier_filter, "")
+                extra = f"，可试 <code>/matches {nxt}</code>" if nxt else ""
+                caption_lines.append(f"暂无符合筛选的比赛{extra}")
             live_matches = [r for r in matches_in_tier if r.get("live") == "1"]
             def _is_determined_match(m: dict) -> bool:
                 _t1 = (m.get("team1") or "").strip().upper()
@@ -428,33 +447,15 @@ class HltvTelegramBot:
             return
 
         filtered = filter_and_sort_events(raw_events, allowed_tiers=allowed_tiers)
-        if not filtered:
-            self._reply(chat_id, "未找到符合条件的赛事。发 <code>/events all</code> 查看全部。")
-            return
-
         if text_only:
+            if not filtered:
+                self._reply(chat_id, "未找到符合条件的赛事。发 <code>/events all</code> 查看全部。")
+                return
             text = format_events_html(filtered, limit=15)
             self._reply(chat_id, text)
             return
 
-        from hltv_bot.events import cache_event_logo, get_flag_img_html
-
-        # Pre-cache logos and country flags for upcoming events
-        for ev in filtered[:15]:
-            eid = ev.get("id") or ""
-            logo_url = ev.get("logo_url") or ""
-            if eid and logo_url:
-                try:
-                    cache_event_logo(eid, logo_url, sess=self.session)
-                except Exception:
-                    pass
-            cc = ev.get("country_code") or ""
-            if cc:
-                try:
-                    get_flag_img_html(cc, sess=self.session)
-                except Exception:
-                    pass
-
+        shown = filtered[:15]
         self.tg.send_chat_action(chat_id, "upload_photo")
         try:
             from datetime import datetime, timedelta, timezone
@@ -463,14 +464,21 @@ class HltvTelegramBot:
             push_time = datetime.now(cst).strftime("%H:%M")
 
             cache_sig = tier_label + ":" + ",".join(
-                f"{ev.get('id')}:{ev.get('live')}:{ev.get('days_left')}" for ev in filtered[:15]
+                f"{ev.get('id')}:{ev.get('live')}:{ev.get('days_left')}" for ev in shown
             )
             now_ts = time.time()
             cached = getattr(self, "_events_img_cache", {}).get(tier_label)
-            if cached and cached[0] == cache_sig and (now_ts - cached[1] < 120.0):
+            if cached and cached[0] == cache_sig and (now_ts - cached[1] < EVENTS_IMG_CACHE_TTL):
                 img_bytes = cached[2]
                 log.debug("events image cache hit for %s", tier_label)
             else:
+                try:
+                    from hltv_bot.events import ensure_event_logos, ensure_flags
+
+                    ensure_event_logos([(str(ev.get("id") or ""), str(ev.get("logo_url") or "")) for ev in shown])
+                    ensure_flags([str(ev.get("country_code") or "") for ev in shown])
+                except Exception:
+                    log.debug("event logo cache skipped", exc_info=True)
                 img_bytes = render_events_image(
                     filtered,
                     tier_filter=tier_label,
@@ -483,8 +491,15 @@ class HltvTelegramBot:
 
             caption_lines = [
                 f"<b>HLTV Events</b> · <code>{push_time} UTC+8</code>",
-                f"<i>Filter: {tier_label} · /events [t2|major|all|text]</i>",
             ]
+            if not filtered:
+                if tier_label == "Major":
+                    caption_lines.append("未找到 Major。可试 <code>/events t2</code>")
+                elif tier_label == "All Events":
+                    caption_lines.append("未来三个月没有赛事")
+                else:
+                    caption_lines.append("未找到符合条件的赛事。可试 <code>/events t2</code> 或 <code>/events all</code>")
+            caption_lines.append(f"<i>Filter: {tier_label} · /events [t2|major|all|text]</i>")
             self._reply_photo(chat_id, img_bytes, caption="\n".join(caption_lines), filename="events.png")
             log.info("events photo sent chat=%s tier=%s events=%s", chat_id, tier_label, len(filtered))
             return

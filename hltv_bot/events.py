@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import base64
-import json
 import logging
 import re
 from datetime import datetime, timedelta, timezone
@@ -17,7 +15,7 @@ log = logging.getLogger("hltv_bot.events")
 
 EVENTS_URL = "https://www.hltv.org/events"
 _EVENTS_CACHE: dict = {"at": 0.0, "rows": []}
-EVENTS_CACHE_TTL = 300.0  # 5 minutes cache
+EVENTS_CACHE_TTL = 24 * 3600.0
 CST = timezone(timedelta(hours=8))
 
 
@@ -43,6 +41,38 @@ def country_code_to_emoji(cc: str) -> str:
     return ""
 
 
+def format_event_date_range(
+    start_ts: int | float | None,
+    end_ts: int | float | None = 0,
+    *,
+    pending: str = "TBD",
+    now: datetime | None = None,
+) -> str:
+    """Date span. Year is omitted only when the whole span is in the current year."""
+    try:
+        start_n = int(start_ts or 0)
+    except (TypeError, ValueError):
+        start_n = 0
+    if start_n <= 0:
+        return pending
+    try:
+        end_n = int(end_ts or 0)
+    except (TypeError, ValueError):
+        end_n = 0
+    start_dt = datetime.fromtimestamp(start_n, CST)
+    end_dt = None
+    if end_n > 0 and end_n != start_n:
+        end_dt = datetime.fromtimestamp(end_n, CST)
+        if end_dt.date() == start_dt.date():
+            end_dt = None
+    current = (now or datetime.now(CST)).year
+    show_year = start_dt.year != current or bool(end_dt and end_dt.year != current)
+    fmt = "%Y-%m-%d" if show_year else "%m-%d"
+    if end_dt:
+        return start_dt.strftime(fmt) + " ~ " + end_dt.strftime(fmt)
+    return start_dt.strftime(fmt)
+
+
 def clean_event_display_name(name: str) -> str:
     """Shorten event name cleanly: Season -> S, remove redundant year."""
     s = (name or "").strip()
@@ -52,40 +82,57 @@ def clean_event_display_name(name: str) -> str:
 
 
 _FLAGS_CACHE_DIR = Path("data/flags")
+_FLAG_URL = "https://www.hltv.org/img/static/flags/30x20/{cc}.gif"
+
+
+def _stem(raw: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_-]", "", raw or "")[:40]
 
 
 def get_flag_img_html(cc: str, sess: BrowserSession | None = None) -> str:
-    """Return an HTML <img> tag with inlined base64 flag image (cached on disk)."""
-    if not cc:
+    """Return an HTML <img> for a cached flag. Downloads happen in ensure_flags."""
+    del sess
+    stem = _stem((cc or "").strip().upper())
+    if not stem:
         return ""
-    cc_u = cc.strip().upper()
-    _FLAGS_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    flag_file = _FLAGS_CACHE_DIR / f"{cc_u}.gif"
-    if not flag_file.exists():
-        # Try downloading via request if sess available or cdp
-        flag_url = f"https://www.hltv.org/img/static/flags/30x20/{cc_u}.gif"
-        data = _fetch_image_via_cdp(flag_url, timeout=4.0)
-        if not data and sess is not None:
-            try:
-                st, body, _ = request(sess, "GET", flag_url, timeout=5.0)
-                if st == 200 and body:
-                    data = body
-            except Exception:
-                pass
-        if data:
-            try:
-                flag_file.write_bytes(data)
-            except Exception:
-                pass
+    from hltv_bot.team_logos import data_uri_for, find_cached_stem
 
-    if flag_file.exists():
-        try:
-            b64 = base64.b64encode(flag_file.read_bytes()).decode("ascii")
-            return f'<img class="flag-img" src="data:image/gif;base64,{b64}" alt="" />'
-        except Exception:
-            pass
+    path = find_cached_stem(_FLAGS_CACHE_DIR, stem)
+    if path is None:
+        return ""
+    uri = data_uri_for(path)
+    if not uri:
+        return ""
+    return f'<img class="flag-img" src="{uri}" alt="" />'
 
-    return ""
+
+def ensure_flags(codes: list[str]) -> None:
+    """Download missing flag images. Flags stay on disk; the set is small."""
+    from hltv_bot.team_logos import download_images, find_cached_stem, save_image
+
+    pending: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for raw in codes:
+        stem = _stem((raw or "").strip().upper())
+        if not stem or stem in seen:
+            continue
+        seen.add(stem)
+        path = find_cached_stem(_FLAGS_CACHE_DIR, stem)
+        if path is not None:
+            try:
+                path.touch()
+            except OSError:
+                pass
+            continue
+        pending.append((stem, _FLAG_URL.format(cc=stem)))
+    if not pending:
+        return
+    fetched = download_images([url for _, url in pending])
+    for stem, url in pending:
+        data = fetched.get(url)
+        if not data:
+            continue
+        save_image(_FLAGS_CACHE_DIR, stem, data)
 
 
 def format_location(loc: str, cc: str = "", sess: BrowserSession | None = None) -> str:
@@ -109,95 +156,58 @@ _LOGO_CACHE_DIR = Path("data/event_logos")
 
 
 def get_cached_logo_data_uri(event_id: str, logo_url: str = "") -> str:
-    """Return data URI for cached event logo, or empty string."""
-    if not event_id:
+    """Return data URI for a cached event logo. Touches the file so prune keeps it."""
+    del logo_url
+    stem = _stem(str(event_id or ""))
+    if not stem:
         return ""
-    _LOGO_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    cache_file = _LOGO_CACHE_DIR / f"{event_id}.png"
-    if cache_file.exists():
-        try:
-            b64 = base64.b64encode(cache_file.read_bytes()).decode("ascii")
-            return f"data:image/png;base64,{b64}"
-        except Exception:
-            pass
-    return ""
+    from hltv_bot.team_logos import data_uri_for, find_cached_stem
+
+    path = find_cached_stem(_LOGO_CACHE_DIR, stem)
+    if path is None:
+        return ""
+    return data_uri_for(path)
 
 
-def _fetch_image_via_cdp(image_url: str, timeout: float = 8.0) -> bytes | None:
-    """Fetch an image using Chrome tab canvas to bypass Cloudflare hotlink protection."""
-    try:
-        from hltv_bot.cdp import _connect_ws, _list_pages, _pick_keeper_page, DEFAULT_CDP
+def ensure_event_logos(pairs: list[tuple[str, str]]) -> None:
+    """Download event logos shown on the next card. Drops files unused for 7 days."""
+    from hltv_bot.team_logos import EVENT_LOGO_MAX_AGE_SEC, download_images, find_cached_stem, prune_image_dir, save_image
 
-        pages = _list_pages(DEFAULT_CDP, min(timeout, 3.0))
-        page = _pick_keeper_page(pages)
-        if not page or not page.get("webSocketDebuggerUrl"):
-            return None
-        client = _connect_ws(str(page["webSocketDebuggerUrl"]), timeout)
-        try:
-            client.call("Runtime.enable", timeout=min(timeout, 3.0))
-            js = """(async () => {
-                return new Promise((resolve) => {
-                    const img = new Image();
-                    img.crossOrigin = 'anonymous';
-                    img.onload = () => {
-                        const canvas = document.createElement('canvas');
-                        canvas.width = img.naturalWidth;
-                        canvas.height = img.naturalHeight;
-                        const ctx = canvas.getContext('2d');
-                        ctx.drawImage(img, 0, 0);
-                        resolve(canvas.toDataURL('image/png'));
-                    };
-                    img.onerror = () => resolve('');
-                    img.src = %s;
-                });
-            })()""" % json.dumps(image_url)
-            res = client.call("Runtime.evaluate", {"expression": js, "awaitPromise": True, "returnByValue": True}, timeout=timeout)
-            val = str(res.get("result", {}).get("value") or "")
-            if val.startswith("data:image/png;base64,"):
-                return base64.b64decode(val.split(",", 1)[1])
-        finally:
+    prune_image_dir(_LOGO_CACHE_DIR, EVENT_LOGO_MAX_AGE_SEC)
+    pending: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for event_id, logo_url in pairs:
+        stem = _stem(str(event_id or ""))
+        url = unescape((logo_url or "").strip())
+        if not stem or not url or stem in seen:
+            continue
+        seen.add(stem)
+        path = find_cached_stem(_LOGO_CACHE_DIR, stem)
+        if path is not None:
             try:
-                client.ws.close()
-            except Exception:
+                path.touch()
+            except OSError:
                 pass
-    except Exception as e:
-        log.debug("cdp canvas image fetch failed: %s", e)
-    return None
+            continue
+        if url.startswith("//"):
+            url = "https:" + url
+        elif url.startswith("/"):
+            url = "https://www.hltv.org" + url
+        pending.append((stem, url))
+    if not pending:
+        return
+    fetched = download_images([url for _, url in pending])
+    for stem, url in pending:
+        data = fetched.get(url)
+        if data:
+            save_image(_LOGO_CACHE_DIR, stem, data)
 
 
 def cache_event_logo(event_id: str, logo_url: str, sess: BrowserSession | None = None) -> str:
-    """Fetch event logo and cache to disk. Returns data URI or empty string."""
-    if not event_id or not logo_url:
-        return ""
-    _LOGO_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    cache_file = _LOGO_CACHE_DIR / f"{event_id}.png"
-    if cache_file.exists():
-        try:
-            b64 = base64.b64encode(cache_file.read_bytes()).decode("ascii")
-            return f"data:image/png;base64,{b64}"
-        except Exception:
-            pass
-
-    clean_url = unescape(logo_url)
-    img_data = _fetch_image_via_cdp(clean_url)
-
-    if not img_data and sess is not None:
-        try:
-            st, body, _ = request(sess, "GET", clean_url, timeout=10.0)
-            if st == 200 and body and len(body) > 100:
-                img_data = body
-        except Exception as e:
-            log.debug("fetch event logo failed id=%s url=%s: %s", event_id, clean_url, e)
-
-    if img_data:
-        try:
-            cache_file.write_bytes(img_data)
-            b64 = base64.b64encode(img_data).decode("ascii")
-            return f"data:image/png;base64,{b64}"
-        except Exception as e:
-            log.warning("failed to save event logo cache id=%s: %s", event_id, e)
-
-    return ""
+    """Fetch one event logo into the cache. Returns a data URI or empty string."""
+    del sess
+    ensure_event_logos([(event_id, logo_url)])
+    return get_cached_logo_data_uri(event_id)
 
 
 def parse_events_list(html: str) -> list[dict]:
@@ -399,19 +409,7 @@ def format_events_html(events: Sequence[dict], *, limit: int = 15) -> str:
         badge = "👑 [Major]" if tier == "Major" else ("🥇 [T1]" if tier == "T1" else "🥈 [T2]")
         name = ev.get("name") or "Unknown Event"
 
-        start_ts = ev.get("start_ts") or 0
-        end_ts = ev.get("end_ts") or 0
-        if start_ts:
-            start_dt = datetime.fromtimestamp(start_ts, CST)
-            start_str = start_dt.strftime("%Y-%m-%d")
-            if end_ts and end_ts != start_ts:
-                end_dt = datetime.fromtimestamp(end_ts, CST)
-                end_fmt = "%m-%d" if end_dt.year == start_dt.year else "%Y-%m-%d"
-                date_range = start_str + " ~ " + end_dt.strftime(end_fmt)
-            else:
-                date_range = start_str
-        else:
-            date_range = "待定"
+        date_range = format_event_date_range(ev.get("start_ts") or 0, ev.get("end_ts") or 0, pending="待定")
 
         days_left = ev.get("days_left", 9999)
         if ev.get("live"):

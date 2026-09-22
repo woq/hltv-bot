@@ -1,11 +1,8 @@
 from __future__ import annotations
 
-import base64
 import html
 import io
-import json
 import logging
-import os
 import re
 from typing import Sequence
 
@@ -38,16 +35,6 @@ _TIER_KEYWORDS = {
         "cash cup", "academy", "regional cup", "series qualifier", "esea",
     ],
 }
-
-_TEAM_ALIASES = {
-    "natusvincere": "navi",
-    "furiagaming": "furia",
-    "ninjasinpyjamas": "nip",
-    "cloud9": "c9",
-    "themongolz": "mongolz",
-    "virtuspro": "vp",
-}
-
 
 def classify_event_tier(event_name: str, stars: int = 0) -> str:
     """Classify match into T1, T2, T3 or Other."""
@@ -116,33 +103,14 @@ def _get_initials(name: str) -> str:
     return clean[:2].upper()
 
 
-def _render_team_icon(name: str) -> str:
-    norm = re.sub(r"[^a-z0-9]", "", (name or "").lower())
-    norm_alias = _TEAM_ALIASES.get(norm, norm)
-    logo_dir = os.path.join(os.path.dirname(__file__), "assets", "logos")
+def _render_team_icon(name: str, logo_url: str = "") -> str:
+    """Logo from the matches page cache. Unknown teams get initials, not a bundled file."""
+    if logo_url:
+        from hltv_bot.team_logos import cached_data_uri
 
-    for candidate in (norm, norm_alias):
-        if not candidate:
-            continue
-        svg_path = os.path.join(logo_dir, f"{candidate}.svg")
-        png_path = os.path.join(logo_dir, f"{candidate}.png")
-
-        if os.path.exists(svg_path):
-            try:
-                with open(svg_path, "rb") as f:
-                    b64 = base64.b64encode(f.read()).decode("ascii")
-                    return f'<img class="team-logo" src="data:image/svg+xml;base64,{b64}" alt="{html.escape(name)}" />'
-            except Exception:
-                pass
-
-        if os.path.exists(png_path):
-            try:
-                with open(png_path, "rb") as f:
-                    b64 = base64.b64encode(f.read()).decode("ascii")
-                    return f'<img class="team-logo" src="data:image/png;base64,{b64}" alt="{html.escape(name)}" />'
-            except Exception:
-                pass
-
+        uri = cached_data_uri(logo_url)
+        if uri:
+            return f'<img class="team-logo" src="{uri}" alt="{html.escape(name)}" />'
     bg, fg = _get_badge_style(name)
     initials = _get_initials(name)
     return f'<span class="team-badge" style="background:{bg};color:{fg};">{html.escape(initials)}</span>'
@@ -162,22 +130,40 @@ _TROPHY_SVG = (
 )
 
 
-def _render_event_icon(event_name: str) -> str:
-    norm = re.sub(r"[^a-z0-9]", "", (event_name or "").lower())
-    if not norm:
-        return _TROPHY_SVG
-    events_dir = os.path.join(os.path.dirname(__file__), "assets", "events")
-    for ext in ("png", "svg"):
-        p = os.path.join(events_dir, f"{norm}.{ext}")
-        if os.path.exists(p):
-            try:
-                with open(p, "rb") as f:
-                    mime = "image/svg+xml" if ext == "svg" else "image/png"
-                    b64 = base64.b64encode(f.read()).decode("ascii")
-                    return f'<img class="event-logo" src="data:{mime};base64,{b64}" alt="event" />'
-            except Exception:
-                pass
+def _event_banner_logo(rows: Sequence[dict]) -> str:
+    from hltv_bot.events import get_cached_logo_data_uri
+
+    for row in rows:
+        eid = str(row.get("event_id") or "")
+        if not eid:
+            continue
+        uri = get_cached_logo_data_uri(eid)
+        if uri:
+            return f'<img class="event-logo" src="{uri}" alt="" />'
     return _TROPHY_SVG
+
+
+def _matches_empty_copy(tier_filter: str) -> tuple[str, str]:
+    hints = {
+        "T1": "Nothing scheduled for T1 · try /matches t2",
+        "T2": "Nothing scheduled for T2 · try /matches t3",
+        "T3": "Nothing scheduled for T3",
+        "Other": "Nothing listed",
+    }
+    return "No matches", hints.get(tier_filter, f"Nothing scheduled for {tier_filter}")
+
+
+def _events_empty_copy(tier_filter: str) -> tuple[str, str]:
+    label = tier_filter or "Major / T1"
+    if label == "Major":
+        sub = "No majors in the next 3 months · try /events t2"
+    elif "All" in label:
+        sub = "No tournaments in the next 3 months"
+    elif "T2" in label:
+        sub = "Nothing in this filter · try /events all"
+    else:
+        sub = "Nothing scheduled · try /events t2"
+    return "No tournaments", sub
 
 
 def _star_svg(count: int) -> str:
@@ -228,7 +214,10 @@ def build_matches_html(
     # Count unique events per tier to accurately calculate total height
     total_event_headers = sum(len({m.get("event") or "Other Matches" for m in grouped[t]}) for t in sorted_tiers)
     row_count = len(filtered)
-    calc_height = max(130, 56 + total_event_headers * 38 + row_count * 45 + 24)
+    if not filtered:
+        calc_height = 280
+    else:
+        calc_height = max(130, 56 + total_event_headers * 38 + row_count * 45 + 24)
 
     html_parts = [
         f"""<!DOCTYPE html>
@@ -268,6 +257,25 @@ def build_matches_html(
     font-size: 13px;
     color: #94a3b8;
     font-weight: 500;
+  }}
+  .empty-card {{
+    margin-top: 18px;
+    background: #181d26;
+    border: 1px dashed #334155;
+    border-radius: 8px;
+    text-align: center;
+    padding: 36px 20px 32px 20px;
+  }}
+  .empty-title {{
+    font-size: 16px;
+    font-weight: 800;
+    color: #e2e8f0;
+    letter-spacing: 0.4px;
+  }}
+  .empty-sub {{
+    margin-top: 8px;
+    font-size: 13px;
+    color: #94a3b8;
   }}
   .event-block {{
     margin-bottom: 10px;
@@ -484,8 +492,14 @@ def build_matches_html(
     """
 
     if not filtered:
+        empty_title, empty_sub = _matches_empty_copy(tier_filter)
         html_parts.append(
-            f'<div style="text-align:center;padding:30px;color:#64748b;font-size:14px;">No matches found for {html.escape(tier_filter)}</div>'
+            f"""
+            <div class="empty-card">
+              <div class="empty-title">{html.escape(empty_title)}</div>
+              <div class="empty-sub">{html.escape(empty_sub)}</div>
+            </div>
+            """
         )
     else:
         for t in sorted_tiers:
@@ -524,10 +538,13 @@ def build_matches_html(
                     tier_cls = "Other"
 
                 tier_badge_html = f'<span class="event-tier-badge {tier_cls}">{tier_label}</span>' if tier_label else ''
+                from hltv_bot.events import clean_event_display_name
+
+                banner_name = clean_event_display_name(ev)
                 html_parts.append(f"""
                 <div class="event-block">
                   <div class="event-banner {t}">
-                    <span class="event-name">{_render_event_icon(ev)}{html.escape(ev)}</span>
+                    <span class="event-name">{_event_banner_logo(ms)}{html.escape(banner_name)}</span>
                     <span class="event-meta">{tier_badge_html}<span>{m_count_str}</span></span>
                   </div>
                   <table class="match-table">{colgroup_html}
@@ -543,8 +560,8 @@ def build_matches_html(
 
                     t1 = m.get("team1") or "?"
                     t2 = m.get("team2") or "?"
-                    t1_icon = _render_team_icon(t1)
-                    t2_icon = _render_team_icon(t2)
+                    t1_icon = _render_team_icon(t1, str(m.get("team1_logo") or ""))
+                    t2_icon = _render_team_icon(t2, str(m.get("team2_logo") or ""))
                     stars_val = int(m.get("stars") or 0)
                     stars_html = _star_svg(stars_val)
                     mid = html.escape(m.get("id") or "")
@@ -610,13 +627,14 @@ def build_events_html(
     limit: int = 15,
 ) -> str:
     """Build HTML for HLTV Events list image (English-only, high-res 880px layout)."""
-    from datetime import datetime, timezone, timedelta
-    from hltv_bot.events import format_location, get_cached_logo_data_uri, clean_event_display_name
+    from hltv_bot.events import format_location, get_cached_logo_data_uri, clean_event_display_name, format_event_date_range
 
-    cst = timezone(timedelta(hours=8))
     events_slice = list(events[:limit])
     row_count = len(events_slice)
-    calc_height = max(140, 68 + row_count * 48 + 32)
+    if not events_slice:
+        calc_height = 280
+    else:
+        calc_height = max(140, 68 + row_count * 48 + 32)
 
     html_parts = [
         f"""<!DOCTYPE html>
@@ -656,6 +674,25 @@ def build_events_html(
     font-size: 13px;
     color: #94a3b8;
     font-weight: 500;
+  }}
+  .empty-card {{
+    margin-top: 18px;
+    background: #181d26;
+    border: 1px dashed #334155;
+    border-radius: 8px;
+    text-align: center;
+    padding: 36px 20px 32px 20px;
+  }}
+  .empty-title {{
+    font-size: 16px;
+    font-weight: 800;
+    color: #e2e8f0;
+    letter-spacing: 0.4px;
+  }}
+  .empty-sub {{
+    margin-top: 8px;
+    font-size: 13px;
+    color: #94a3b8;
   }}
   .event-tier-badge {{
     font-size: 11px;
@@ -791,8 +828,14 @@ def build_events_html(
     ]
 
     if not events_slice:
+        empty_title, empty_sub = _events_empty_copy(tier_filter)
         html_parts.append(
-            f'<div style="text-align:center;padding:36px;color:#64748b;font-size:14px;">No tournaments scheduled in next 3 months ({html.escape(tier_filter)})</div>'
+            f"""
+            <div class="empty-card">
+              <div class="empty-title">{html.escape(empty_title)}</div>
+              <div class="empty-sub">{html.escape(empty_sub)}</div>
+            </div>
+            """
         )
     else:
         html_parts.append("""
@@ -825,19 +868,7 @@ def build_events_html(
                 cnt_cls = "countdown-td"
                 row_cls = "row"
 
-            start_ts = ev.get("start_ts") or 0
-            end_ts = ev.get("end_ts") or 0
-            if start_ts:
-                start_dt = datetime.fromtimestamp(start_ts, cst)
-                start_str = start_dt.strftime("%Y-%m-%d")
-                if end_ts and end_ts != start_ts:
-                    end_dt = datetime.fromtimestamp(end_ts, cst)
-                    end_fmt = "%m-%d" if end_dt.year == start_dt.year else "%Y-%m-%d"
-                    date_range = start_str + " ~ " + end_dt.strftime(end_fmt)
-                else:
-                    date_range = start_str
-            else:
-                date_range = "TBD"
+            date_range = format_event_date_range(ev.get("start_ts") or 0, ev.get("end_ts") or 0)
 
             raw_loc = ev.get("location") or ""
             cc = ev.get("country_code") or ""
@@ -861,7 +892,7 @@ def build_events_html(
             if cached_uri:
                 logo_html = f'<span class="event-logo-wrap"><img class="event-logo-img" src="{cached_uri}" alt="" /></span>'
             else:
-                logo_html = _render_event_icon(raw_name)
+                logo_html = _TROPHY_SVG
 
             html_parts.append(f"""
             <tr class="{row_cls}">

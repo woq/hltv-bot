@@ -46,7 +46,9 @@ sec-fetch-site: none
 | `id` | 比赛数字 id，后面也当 `listId` |
 | `url` | 绝对地址 |
 | `team1` / `team2` | 队名（优先 HTML，退回 slug） |
+| `team1_logo` / `team2_logo` | 赛程页该行队标地址（优先 night logo）。渲染前写入 `data/team_logos/`，90 天未再出现则删 |
 | `event` | 赛事名 |
+| `event_id` / `event_logo` | 赛程行上的赛事 id 和赛事 logo。与 `/events` 共用 `data/event_logos/`，7 天未再出现则删 |
 | `title` | `{team1} vs {team2}` |
 | `live` | `"1"` / `"0"`（看前面是 `liveMatch` 还是 `upcomingMatch`） |
 | `stars` | 0–5 |

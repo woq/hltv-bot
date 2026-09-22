@@ -124,7 +124,7 @@ def test_urlopen_only_telegram_or_cli_probe():
         text = path.read_text(encoding="utf-8")
         if "urlopen" in text:
             hits.append(path.name)
-    assert set(hits) <= {"telegram_api.py", "scorebot.py", "cdp.py"}
+    assert set(hits) <= {"telegram_api.py", "scorebot.py", "cdp.py", "team_logos.py"}
     assert "def probe_scorebot" in _src("scorebot.py")
 
 

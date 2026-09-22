@@ -97,6 +97,52 @@ def test_parse_match_list_container_isolation():
     assert by_id["2398105"]["event"] == "CCT Season 3"
 
 
+def test_parse_match_list_team_logos_prefer_night():
+    html = """
+    <div class="upcomingMatch" data-stars="2">
+      <div class="matchTime" data-unix="1787923200000">18:00</div>
+      <a href="/matches/2398200/mouz-vs-natus-vincere-starladder" class="match">
+        <div class="matchTeams">
+          <div class="matchTeam">
+            <img alt="MOUZ" src="https://img-cdn.hltv.org/teamlogo/mouz-night.svg" class="matchTeamLogo night-only">
+            <img alt="MOUZ" src="https://img-cdn.hltv.org/teamlogo/mouz-day.svg" class="matchTeamLogo day-only">
+            <div class="matchTeamName">MOUZ</div>
+          </div>
+          <div class="matchTeam">
+            <img alt="Natus Vincere" src="/img/static/team/placeholder.svg" class="matchTeamLogo night-only">
+            <img alt="Natus Vincere" src="https://img-cdn.hltv.org/teamlogo/navi.svg?w=50" class="matchTeamLogo">
+            <div class="matchTeamName">Natus Vincere</div>
+          </div>
+        </div>
+      </a>
+    </div>
+    """
+    rows = parse_match_list(html)
+    assert rows[0]["team1_logo"] == "https://img-cdn.hltv.org/teamlogo/mouz-night.svg"
+    assert rows[0]["team2_logo"] == "https://img-cdn.hltv.org/teamlogo/navi.svg?w=50"
+
+
+def test_parse_match_list_event_logo():
+    html = """
+    <div class="upcomingMatch" data-stars="2">
+      <a href="/matches/2398300/mouz-vs-spirit-starladder" class="match">
+        <div class="matchTeams">
+          <div class="matchTeamName">MOUZ</div>
+          <div class="matchTeamName">Spirit</div>
+        </div>
+        <a href="/events/8057/starladder-fall" class="matchEvent">
+          <img class="matchEventLogo night-only" src="https://img-cdn.hltv.org/eventlogo/sl-night.png" alt="">
+          <img class="matchEventLogo day-only" src="https://img-cdn.hltv.org/eventlogo/sl-day.png" alt="">
+          StarLadder StarSeries Fall 2026
+        </a>
+      </a>
+    </div>
+    """
+    rows = parse_match_list(html)
+    assert rows[0]["event_id"] == "8057"
+    assert rows[0]["event_logo"] == "https://img-cdn.hltv.org/eventlogo/sl-night.png"
+
+
 def test_parse_match_list_fallback_time_text():
     html = """
     <div class="upcomingMatch" data-stars="3">

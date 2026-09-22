@@ -28,6 +28,8 @@ EVENT_NAME = re.compile(
 DATA_STARS = re.compile(r'data-(?:stars|star-rating|rating)="(\d)"', re.I)
 DATA_UNIX = re.compile(r'data-unix="(\d{10,13})"')
 MATCH_TIME_TEXT = re.compile(r'class="[^"]*(?:matchTime|time)[^"]*"[^>]*>\s*(\d{1,2}:\d{2})\s*<', re.I)
+_IMG_TAG = re.compile(r"<img\b([^>]*)>", re.I)
+_ATTR = re.compile(r"""([\w:-]+)\s*=\s*["']([^"']*)["']""")
 CST = timezone(timedelta(hours=8))
 
 
@@ -114,6 +116,111 @@ def pretty_name(text: str) -> str:
         else:
             out.append(w[:1].upper() + w[1:].lower() if w else w)
     return " ".join(out)
+
+
+def _img_attr(attrs: str, name: str) -> str:
+    want = name.lower()
+    for key, val in _ATTR.findall(attrs):
+        if key.lower() == want:
+            return unescape(val).strip()
+    return ""
+
+
+def _abs_logo(src: str) -> str:
+    src = unescape(src).strip()
+    if src.startswith("//"):
+        return "https:" + src
+    if src.startswith("/"):
+        return "https://www.hltv.org" + src
+    return src
+
+
+def _is_placeholder_logo(src: str) -> bool:
+    low = src.lower()
+    return any(tok in low for tok in ("placeholder", "nologo", "blank", "defaultlogo"))
+
+
+_EVENT_ID = re.compile(r'(?:data-event-id="|/events/)(\d+)', re.I)
+
+
+def _event_id_from(chunk: str) -> str:
+    m = _EVENT_ID.search(chunk)
+    return m.group(1) if m else ""
+
+
+def _event_logo_url(chunk: str) -> str:
+    """Event logo on the matches row. Night art wins on the dark card."""
+    night = ""
+    day = ""
+    any_logo = ""
+    for m in _IMG_TAG.finditer(chunk):
+        attrs = m.group(1)
+        src = _abs_logo(_img_attr(attrs, "src"))
+        cls = _img_attr(attrs, "class").lower()
+        if not src or _is_placeholder_logo(src):
+            continue
+        if "matchteamlogo" in cls or "teamlogo" in src.lower():
+            continue
+        if "eventlogo" not in src.lower() and "matcheventlogo" not in cls and "event-logo" not in cls:
+            continue
+        if "night-only" in cls:
+            night = night or src
+        elif "day-only" in cls:
+            day = day or src
+        else:
+            any_logo = any_logo or src
+    return night or any_logo or day
+
+
+def _team_logo_urls(chunk: str) -> tuple[str, str]:
+    """Night logo from each team on the matches row. Day logo is the fallback."""
+    block = MATCH_TEAMS_BLOCK.search(chunk)
+    scope = block.group(1) if block else chunk
+    slots: list[dict[str, str]] = []
+    for m in _IMG_TAG.finditer(scope):
+        attrs = m.group(1)
+        src = _abs_logo(_img_attr(attrs, "src"))
+        cls = _img_attr(attrs, "class").lower()
+        if not src:
+            continue
+        if "matchteamlogo" not in cls and "teamlogo" not in src.lower() and "/team/" not in src.lower():
+            continue
+        alt = _img_attr(attrs, "alt") or _img_attr(attrs, "title")
+        if "night-only" in cls:
+            variant = "night"
+        elif "day-only" in cls:
+            variant = "day"
+        else:
+            variant = "any"
+        if _is_placeholder_logo(src):
+            src = ""
+        if slots:
+            prev = slots[-1]
+            prev_alt = prev.get("alt") or ""
+            prev_variant = prev.get("variant") or ""
+            same_alt = bool(prev_alt and alt and prev_alt == alt)
+            day_night_pair = (
+                (not prev_alt or not alt)
+                and variant in ("day", "night")
+                and prev_variant in ("day", "night")
+                and variant != prev_variant
+            )
+            same_team = same_alt or day_night_pair
+            if same_team and (not src or not prev.get("src") or variant in ("day", "night")):
+                if not prev.get("src") or variant == "night":
+                    prev["src"] = src or prev.get("src") or ""
+                if variant == "night":
+                    prev["variant"] = "night"
+                if alt and not prev_alt:
+                    prev["alt"] = alt
+                continue
+        slots.append({"src": src, "alt": alt, "variant": variant})
+        if len(slots) >= 2 and all(s.get("src") for s in slots[:2]):
+            break
+    logos = [(s.get("src") or "") for s in slots[:2]]
+    while len(logos) < 2:
+        logos.append("")
+    return logos[0], logos[1]
 
 
 def _stars_in(chunk: str) -> int:
@@ -221,6 +328,9 @@ def parse_match_list(html: str, *, limit: int = 100, exclude_tbd: bool = False) 
             if ev:
                 event = _clean(ev.group(1)) or event
         t1, t2, event = pretty_name(t1), pretty_name(t2), pretty_name(event)
+        logo1, logo2 = _team_logo_urls(chunk)
+        event_id = _event_id_from(chunk)
+        event_logo = _event_logo_url(chunk)
         stars = _stars_in(chunk)
         unix = None
         for um in DATA_UNIX.finditer(prefix):
@@ -250,7 +360,11 @@ def parse_match_list(html: str, *, limit: int = 100, exclude_tbd: bool = False) 
                 "url": _abs(href),
                 "team1": t1,
                 "team2": t2,
+                "team1_logo": logo1,
+                "team2_logo": logo2,
                 "event": event,
+                "event_id": event_id,
+                "event_logo": event_logo,
                 "title": f"{t1} vs {t2}".strip() or pretty_name(slug.replace("-", " ")),
                 "live": "1" if live else "0",
                 "stars": str(stars),

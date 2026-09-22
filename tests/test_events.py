@@ -106,6 +106,66 @@ def test_filter_and_sort_events():
     assert filtered[1]["days_left"] > filtered[0]["days_left"]
 
 
+def test_format_event_date_range_omits_year_unless_cross_year():
+    from hltv_bot.events import format_event_date_range
+
+    now = datetime(2026, 9, 18, 12, tzinfo=CST)
+    same_start = int(datetime(2026, 10, 3, 12, tzinfo=CST).timestamp())
+    same_end = int(datetime(2026, 10, 11, 12, tzinfo=CST).timestamp())
+    assert format_event_date_range(same_start, same_end, now=now) == "10-03 ~ 10-11"
+    assert format_event_date_range(same_start, 0, now=now) == "10-03"
+
+    next_start = int(datetime(2027, 1, 10, 12, tzinfo=CST).timestamp())
+    next_end = int(datetime(2027, 1, 20, 12, tzinfo=CST).timestamp())
+    assert format_event_date_range(next_start, next_end, now=now) == "2027-01-10 ~ 2027-01-20"
+    assert format_event_date_range(next_start, 0, now=now) == "2027-01-10"
+
+    cross_start = int(datetime(2026, 12, 28, 12, tzinfo=CST).timestamp())
+    cross_end = int(datetime(2027, 1, 4, 12, tzinfo=CST).timestamp())
+    assert format_event_date_range(cross_start, cross_end, now=now) == "2026-12-28 ~ 2027-01-04"
+    assert format_event_date_range(0, 0, pending="待定", now=now) == "待定"
+
+    html = format_events_html(
+        [
+            {
+                "name": "Same Year Cup",
+                "tier": "T1",
+                "live": False,
+                "start_ts": same_start,
+                "end_ts": same_end,
+                "days_left": 3,
+            }
+        ]
+    )
+    assert "10-03 ~ 10-11" in html
+    assert "2026-10-03" not in html
+
+
+def test_ensure_event_logos_and_flags(monkeypatch, tmp_path):
+    from hltv_bot import events as events_mod
+
+    logos = tmp_path / "logos"
+    flags = tmp_path / "flags"
+    monkeypatch.setattr(events_mod, "_LOGO_CACHE_DIR", logos)
+    monkeypatch.setattr(events_mod, "_FLAGS_CACHE_DIR", flags)
+    png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
+    gif = b"GIF89a" + b"\x00" * 48
+
+    def fake_download(urls):
+        out = {}
+        for url in urls:
+            out[url] = gif if url.endswith(".gif") else png
+        return out
+
+    monkeypatch.setattr("hltv_bot.team_logos.download_images", fake_download)
+    events_mod.ensure_event_logos([("8057", "https://img-cdn.hltv.org/eventlogo/sl.png"), ("8057", "https://img-cdn.hltv.org/eventlogo/sl.png")])
+    events_mod.ensure_flags(["pl", "PL"])
+    assert (logos / "8057.png").is_file()
+    assert (flags / "PL.gif").is_file()
+    assert events_mod.get_cached_logo_data_uri("8057").startswith("data:image/png;base64,")
+    assert "flag-img" in events_mod.get_flag_img_html("PL")
+
+
 def test_format_events_html():
     events = [
         {
