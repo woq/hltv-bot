@@ -1,352 +1,40 @@
-from hltv_bot.bot import HltvTelegramBot
-from hltv_bot.watch import (
-    MAX_EDITS_PER_MINUTE,
-    WatchCard,
-    WatchState,
-    WsFailDigest,
-    watch_debug_mode,
-    watch_edit_interval,
-)
+"""Command replies still auto-delete. Live watch cards live on archive/chrome-full."""
+
+from hltv_bot.bot import HltvTelegramBot, MSG_TTL
 from hltv_bot.session import BrowserSession
-from hltv_bot.telegram_api import TelegramRateLimit, is_not_modified
 
 
-class _Tg:
+class Tg:
     def __init__(self):
         self.sent = []
-        self.edited = []
         self.deleted = []
-        self.fail_edit = False
 
-    def send_rich(self, chat_id, html, **kwargs):
-        self.sent.append((chat_id, html))
-        return {"message_id": 10 + len(self.sent)}
-
-    def send_message(self, chat_id, text):
-        return self.send_rich(chat_id, text)
+    def send_message(self, chat_id, text, silent=False):
+        self.sent.append((chat_id, text, silent))
+        return {"message_id": 7}
 
     def delete_message(self, chat_id, message_id):
-        self.deleted.append((chat_id, message_id))
-
-    def edit_rich(self, chat_id, message_id, html, **kwargs):
-        if self.fail_edit:
-            raise RuntimeError("Bad Request: message is not modified")
-        self.edited.append((chat_id, message_id, html))
-        return {"message_id": message_id}
+        self.deleted.append(message_id)
 
 
-def _bot():
-    return HltvTelegramBot(
-        _Tg(),
-        BrowserSession("chrome131", {}, "", path=None),
-        admin_ids={1},
-    )
+def test_command_reply_is_scheduled_for_delete(monkeypatch):
+    tg = Tg()
+    bot = HltvTelegramBot(tg, BrowserSession("chrome131", {}, "cf_clearance=x"), admin_ids={1})
+    bot.msg_ttl = MSG_TTL
+    scheduled = {}
 
+    def fake_timer(delay, fn):
+        scheduled["delay"] = delay
+        scheduled["fn"] = fn
 
-def _state(**kwargs):
-    cards = kwargs.pop("cards", None)
-    st = WatchState(list_id="1", meta={}, **kwargs)
-    if cards is not None:
-        st.cards = cards
-    return st
+        class T:
+            def start(self):
+                return None
 
+        return T()
 
-def test_non_watch_messages_auto_delete():
-    import time
-
-    bot = _bot()
-    bot.msg_ttl = 0.05
-    bot.handle_text(1, "/help", user_id=1, message_id=50)
-    time.sleep(0.2)
-    assert (1, 50) in bot.tg.deleted
-    assert bot.tg.deleted  # bot reply too
-
-
-def test_watch_user_command_is_kept(monkeypatch):
-    scheduled: list[tuple[int, int]] = []
-    bot = _bot()
-    bot.msg_ttl = 30
-    bot._schedule_delete = lambda c, m: scheduled.append((c, m))  # type: ignore[method-assign]
-    bot.handle_text(1, "/help", user_id=1, message_id=50)
-    assert (1, 50) in scheduled
-    scheduled.clear()
-    monkeypatch.setattr(
-        "hltv_bot.bot.fetch_match_meta",
-        lambda sess, raw: {"scorebotId": "9", "team1": "A", "team2": "B", "url": "https://x"},
-    )
-    monkeypatch.setattr("hltv_bot.bot.iter_scorebot", lambda *a, **k: iter(()))
-    monkeypatch.setattr("hltv_bot.bot.scorebot_base", lambda url: "https://scorebot")
-    bot.handle_text(1, "/watch 9", user_id=1, message_id=77)
-    assert (1, 77) not in scheduled
-
-
-def test_flush_edits_in_place_never_sends():
-    bot = _bot()
-    st = _state(cards={1: WatchCard(chat_id=1, message_id=7, sent_html="old")})
-    bot._flush_watch(st, "<table bordered compact><caption>LIVE</caption></table>")
-    assert bot.tg.edited
-    assert bot.tg.sent == []
-    assert st.cards[1].message_id == 7
-    assert st.pending is False
-
-
-def test_flush_edits_every_card():
-    bot = _bot()
-    st = _state(
-        cards={
-            1: WatchCard(chat_id=1, message_id=7, sent_html="old"),
-            2: WatchCard(chat_id=2, message_id=8, sent_html="old"),
-        }
-    )
-    bot._flush_watch(st, "<p>x</p>")
-    assert [(c, m) for c, m, _ in bot.tg.edited] == [(1, 7), (2, 8)]
-    assert bot.tg.sent == []
-    assert st.cards[1].sent_html == "<p>x</p>"
-    assert st.cards[2].sent_html == "<p>x</p>"
-
-
-def test_flush_not_modified_does_not_resend():
-    bot = _bot()
-    bot.tg.fail_edit = True
-    st = _state(cards={1: WatchCard(chat_id=1, message_id=7, sent_html="old")})
-    bot._flush_watch(st, "<p>x</p>")
-    assert bot.tg.sent == []
-    assert st.cards[1].message_id == 7
-    assert is_not_modified(RuntimeError("message is not modified"))
-
-
-def test_flush_without_message_id_does_not_send():
-    bot = _bot()
-    st = _state(cards={1: WatchCard(chat_id=1, message_id=None)})
-    bot._flush_watch(st, "<p>x</p>")
-    assert bot.tg.sent == []
-
-
-def test_flush_send_new_single_message():
-    bot = _bot()
-    st = _state()
-    bot._flush_watch(
-        st,
-        "<table>card</table>",
-        send_new=True,
-        chat_id=1,
-    )
-    assert len(bot.tg.sent) == 1
-    card = st.cards[1]
-    assert card.message_id is not None
-    assert getattr(card, "log_id", None) is None
-    assert getattr(card, "stats_id", None) is None
-
-
-def test_edit_rate_limit_sliding_window():
-    import time
-    bot = _bot()
-    st = _state(
-        cards={
-            1: WatchCard(
-                chat_id=1,
-                message_id=7,
-                sent_html="old",
-            )
-        }
-    )
-    now = time.time()
-    st.cards[1].edit_timestamps = [now - i for i in range(MAX_EDITS_PER_MINUTE, 0, -1)]
-    bot._flush_watch(st, "new")
-    assert bot.tg.edited == []
-    assert st.pending is True
-
-    # After clearing timestamps, edit is allowed
-    st.cards[1].edit_timestamps = []
-    bot._flush_watch(st, "new")
-    assert len(bot.tg.edited) == 1
-    assert bot.tg.edited[0][1] == 7
-
-
-def test_bump_is_the_only_new_send():
-    bot = _bot()
-    st = _state(
-        text="<p>x</p>",
-        cards={1: WatchCard(chat_id=1, message_id=7)},
-    )
-    bot.watch = st
-    bot._flush_watch(st, st.text, send_new=True, chat_id=1)
-    assert len(bot.tg.sent) == 1
-    assert st.cards[1].message_id != 7
-    assert bot.tg.sent[0][0] == 1
-
-
-def test_watch_edit_interval_is_3s():
-    poll = _state()
-    ws = _state(transport="ws")
-    assert watch_edit_interval(poll) == 3.0
-    assert watch_edit_interval(ws) == 3.0
-    assert MAX_EDITS_PER_MINUTE == 19
-
-
-def test_watch_debug_mode_healthy_vs_down():
-    now = 1000.0
-    assert watch_debug_mode("connecting", has_board=False, last_data_at=0, now=now)
-    assert watch_debug_mode("disconnected", has_board=True, last_data_at=now, now=now)
-    assert watch_debug_mode("connected", has_board=False, last_data_at=0, now=now)
-    assert watch_debug_mode("connected", has_board=True, last_data_at=0, now=now)
-    assert watch_debug_mode("connected", has_board=True, last_data_at=now - 90, now=now)
-    assert watch_debug_mode("reconnect", has_board=True, last_data_at=now - 90, now=now)
-    assert not watch_debug_mode("connected", has_board=True, last_data_at=now - 5, now=now)
-    assert not watch_debug_mode("idle", has_board=True, last_data_at=now - 5, now=now)
-    assert not watch_debug_mode("reconnect", has_board=True, last_data_at=now, now=now)
-    assert not watch_debug_mode("connecting", has_board=True, last_data_at=now - 5, now=now)
-
-
-def test_watch_sends_only_command_chat(tmp_path, monkeypatch):
-    import os
-
-    from hltv_bot.chats import add_group
-
-    old = os.getcwd()
-    os.chdir(tmp_path)
-    try:
-        (tmp_path / "data").mkdir()
-        add_group(-100, "A")
-        add_group(-200, "B")
-        monkeypatch.setattr(
-            "hltv_bot.bot.fetch_match_meta",
-            lambda sess, raw: {
-                "scorebotId": "9",
-                "team1": "G2",
-                "team2": "NaVi",
-                "url": "https://x",
-            },
-        )
-        monkeypatch.setattr("hltv_bot.bot.iter_scorebot", lambda *a, **k: iter(()))
-        monkeypatch.setattr("hltv_bot.bot.scorebot_base", lambda url: "https://scorebot")
-        bot = HltvTelegramBot(
-            _Tg(),
-            BrowserSession("chrome131", {}, "", path=None),
-            admin_ids={1, 2},
-        )
-        bot.handle_text(-100, "/watch 9", user_id=1, chat_type="supergroup")
-        chats = [c for c, _ in bot.tg.sent]
-        assert -100 in chats
-        assert -200 not in chats
-        assert bot.watch is not None
-        assert list(bot.watch.cards) == [-100]
-        bot.handle_text(-200, "/watch", user_id=2, chat_type="supergroup")
-        assert -200 in bot.watch.cards
-        mid200 = bot.watch.cards[-200].message_id
-        bot.handle_text(-200, "/stop", user_id=2, chat_type="supergroup")
-        assert -200 not in bot.watch.cards
-        assert -100 in bot.watch.cards
-        assert (-200, mid200) in bot.tg.deleted
-        mid100 = bot.watch.cards[-100].message_id
-        bot.handle_text(-100, "/stop all", user_id=1, chat_type="supergroup")
-        assert bot.watch is None
-        assert (-100, mid100) in bot.tg.deleted
-    finally:
-        os.chdir(old)
-
-
-def test_ws_fail_digest_batches():
-    d = WsFailDigest(min_fails=2, every=300)
-    assert not d.note("403", 0.0)
-    assert d.note("403", 30.0)
-    info = d.consume(30.0)
-    assert info["n"] == 2
-    assert info["total"] == 2
-    assert info["error"] == "403"
-    assert not d.note("403", 40.0)
-    assert not d.note("403", 329.0)
-    assert d.note("502", 331.0)
-    info = d.consume(331.0)
-    assert info["n"] == 3
-    assert info["total"] == 5
-    assert info["error"] == "502"
-    d.reset()
-    assert d.n == 0
-    assert not d.note("x", 400.0)
-
-
-def test_ws_fail_notifies_admin_not_watch_chat(monkeypatch):
-    bot = _bot()
-    times = iter([100.0, 130.0, 140.0, 432.0])
-    monkeypatch.setattr("hltv_bot.bot.time.monotonic", lambda: next(times))
-    st = _state()
-    st.meta = {"team1": "G2", "team2": "NaVi"}
-    bot._on_ws_fail(st, {"error": "upgrade: 403"})
-    assert bot.tg.sent == []
-    bot._on_ws_fail(st, {"error": "upgrade: 403"})
-    assert len(bot.tg.sent) == 1
-    chat, text = bot.tg.sent[0]
-    assert chat == 1
-    assert "403" in text
-    assert "G2" in text
-    assert "退避重试" in text
-    bot._on_ws_fail(st, {"error": "upgrade: 403"})
-    assert len(bot.tg.sent) == 1
-    bot._on_ws_fail(st, {"error": "upgrade: 502"})
-    assert len(bot.tg.sent) == 2
-    assert "502" in bot.tg.sent[1][1]
-    assert "本批 2 次" in bot.tg.sent[1][1]
-
-
-def test_ws_ok_resets_digest_so_next_burst_can_notify(monkeypatch):
-    bot = _bot()
-    times = iter([10.0, 40.0, 50.0, 80.0])
-    monkeypatch.setattr("hltv_bot.bot.time.monotonic", lambda: next(times))
-    st = _state()
-    bot._on_ws_fail(st, {"error": "403"})
-    bot._on_ws_fail(st, {"error": "403"})
-    assert len(bot.tg.sent) == 1
-    bot._ws_fail.reset()
-    bot._on_ws_fail(st, {"error": "403"})
-    assert len(bot.tg.sent) == 1
-    bot._on_ws_fail(st, {"error": "403"})
-    assert len(bot.tg.sent) == 2
-
-
-def test_mark_watch_down_edits_debug_card():
-    bot = _bot()
-    st = _state(
-        cards={1: WatchCard(chat_id=1, message_id=7, sent_html="old")},
-        trace=["12:00:01 handshake HTTP 502"],
-    )
-    st.notice = "HTTP 502"
-    st.meta = {"team1": "G2", "team2": "Spirit"}
-    bot._mark_watch_down(st, "reconnect")
-    assert bot.tg.edited
-    html = bot.tg.edited[-1][2]
-    assert "DEBUG" in html
-    assert "handshake HTTP 502" in html
-    assert st.debug_view is True
-
-
-def test_edit_429_freezes_and_keeps_pending():
-    bot = _bot()
-
-    def boom(chat_id, message_id, html, **kwargs):
-        raise TelegramRateLimit(32, method="editMessageText")
-
-    bot.tg.edit_rich = boom  # type: ignore[method-assign]
-    st = _state(cards={1: WatchCard(chat_id=1, message_id=7, sent_html="old")})
-    bot._flush_watch(st, "new")
-    assert bot.tg.sent == []
-    assert st.pending is True
-    assert st.edits_frozen(__import__("time").time())
-    assert st.cards[1].sent_html == "old"
-    bot._flush_watch(st, "newer")
-    assert st.text == "newer"
-    assert st.cards[1].sent_html == "old"
-
-
-def test_command_replies_have_no_unsupported_tags():
-    bot = _bot()
-    bot.handle_text(1, "/help", user_id=1)
-    bot.handle_text(1, "/status", user_id=1)
-    bot.handle_text(1, "/debug", user_id=1)
-    bot.handle_text(1, "/groups", user_id=1)
-
-    unsupported = ("<h", "<table", "<tr>", "<td>", "<th>", "<p>", "<ul", "<ol", "<li")
-    for chat_id, text in bot.tg.sent:
-        for tag in unsupported:
-            assert tag not in text, f"Found {tag} in reply: {text}"
-
+    monkeypatch.setattr("hltv_bot.bot.threading.Timer", fake_timer)
+    bot.handle_text(1, "/help", user_id=1, message_id=3)
+    assert scheduled["delay"] == MSG_TTL
+    assert tg.sent
+    assert tg.sent[0][2] is False

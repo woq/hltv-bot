@@ -34,6 +34,50 @@ def set_real(value: bool, path: Path = DEFAULT_PATH) -> bool:
         return data["real"]
 
 
+def _clamp_int(value: object, default: int, lo: int, hi: int) -> int:
+    try:
+        n = int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
+    return max(lo, min(hi, n))
+
+
+def notify_config(path: Path = DEFAULT_PATH) -> dict:
+    data = load_settings(path)
+    days = _clamp_int(data.get("event_days"), 7, 1, 60)
+    hours = _clamp_int(data.get("event_hours"), 6, 1, 168)
+    if hours >= days * 24:
+        hours = max(1, days * 24 - 1)
+    return {
+        "event_days": days,
+        "event_hours": hours,
+        "min_stars": _clamp_int(data.get("min_stars"), 1, 0, 5),
+        "silent": bool(data.get("silent", True)),
+        "watch": bool(data.get("watch", True)),
+        "ignored": _ignored_ids(data.get("ignored")),
+    }
+
+
+def _ignored_ids(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    out: list[str] = []
+    for item in value:
+        text = str(item).strip()
+        if text.isdigit() and text not in out:
+            out.append(text)
+    return out
+
+
+def update_settings(values: dict, path: Path = DEFAULT_PATH) -> dict:
+    with _lock:
+        data = load_settings(path)
+        data.update(values)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        return data
+
+
 def parse_real_arg(arg: str) -> bool | None:
     """None = toggle off (bare /real). True = /real 1. False = /real 0."""
     s = (arg or "").strip().lower()

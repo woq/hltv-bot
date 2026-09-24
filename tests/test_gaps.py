@@ -3,21 +3,15 @@
 from pathlib import Path
 
 from hltv_bot.bot import (
-    ADMIN_WS_FAIL_EVERY,
-    ADMIN_WS_FAIL_MIN,
     CMD_COOLDOWN,
     DEFAULT_CMD_COOLDOWN,
     GET_UPDATES_FAIL_SLEEP,
-    MIN_EDIT_INTERVAL,
-    MIN_EDIT_INTERVAL_WS,
     MSG_TTL,
+    MATCH_PAGE_MAX,
+    MATCH_PAGE_MIN,
     TG_COMMANDS_GAP,
 )
-from hltv_bot.watch import (
-    MAX_EDITS_PER_MINUTE,
-    MIN_EDIT_INTERVAL as WATCH_MIN_EDIT,
-    MIN_EDIT_INTERVAL_WS as WATCH_MIN_EDIT_WS,
-)
+from hltv_bot.watch import MAX_EDITS_PER_MINUTE, MIN_EDIT_INTERVAL as WATCH_MIN_EDIT
 from hltv_bot.http import HTML_MIN_GAP
 from hltv_bot.matches import MATCH_CACHE_TTL
 from hltv_bot.keeper import ADMIN_CHALLENGE_EVERY, CDP_EXPORT_EVERY
@@ -46,22 +40,19 @@ def test_delay_floors():
     assert RECONNECT_MAX >= 180.0
     assert WS_RETRY_EVERY >= 15.0
     assert WS_ATTEMPT_GAP >= 1.0
-    assert MIN_EDIT_INTERVAL >= 3.0
-    assert MIN_EDIT_INTERVAL_WS >= 3.0
-    assert WATCH_MIN_EDIT == MIN_EDIT_INTERVAL
-    assert WATCH_MIN_EDIT_WS == MIN_EDIT_INTERVAL_WS
+    assert WATCH_MIN_EDIT >= 3.0
     assert MAX_EDITS_PER_MINUTE == 19
     assert MAX_EDITS_PER_MINUTE < 20
     assert MSG_TTL >= 30.0
     assert GET_UPDATES_FAIL_SLEEP >= 3.0
     assert TG_COMMANDS_GAP >= 0.3
+    assert MATCH_PAGE_MIN >= 3.0
+    assert MATCH_PAGE_MAX <= 5.0
+    assert MATCH_PAGE_MAX > MATCH_PAGE_MIN
+    assert "self._rr % 2 == 1" in _src("bot.py")
     assert TG_RETRY_AFTER_CAP >= 15.0
-    assert ADMIN_WS_FAIL_MIN >= 2
-    assert ADMIN_WS_FAIL_EVERY >= 300.0
     assert CMD_COOLDOWN["/matches"] >= 8.0
     assert CMD_COOLDOWN["/events"] >= 8.0
-    assert CMD_COOLDOWN["/watch"] >= 6.0
-    assert CMD_COOLDOWN["/bump"] >= 4.0
     assert DEFAULT_CMD_COOLDOWN >= 1.2
     assert CDP_EXPORT_EVERY >= 60.0
     assert ADMIN_CHALLENGE_EVERY >= 300.0
@@ -98,11 +89,13 @@ def test_scorebot_sleeps_on_reconnect_ws_and_handshake():
 
 def test_bot_edit_cmd_getupdates_and_setcommands_gaps():
     src = _src("bot.py")
-    assert "wait < watch_edit_interval(state)" in src
     assert "time.sleep(GET_UPDATES_FAIL_SLEEP)" in src
     assert "self._cool.allow(key, interval)" in src
     assert "time.sleep(TG_COMMANDS_GAP)" in src
-    assert "ADMIN_WS_FAIL_EVERY" in src
+    assert "disable_notification" not in src
+    assert "silent=silent" in src
+    assert "random.uniform(MATCH_PAGE_MIN, MATCH_PAGE_MAX)" in src
+    assert "_events_loaded" in src
 
 
 def test_telegram_429_uses_retry_after_on_call_and_getupdates():

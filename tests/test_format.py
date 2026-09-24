@@ -275,7 +275,7 @@ def test_match_list_rich_text():
     assert text.index("BLAST") < text.index("CCT")
     assert text.index("G2") < text.index("NaVi")
     assert "⭐⭐⭐⭐⭐" in text
-    assert "/watch 2396932" in text
+    assert "<code>2396932</code>" in text
     assert text.count("BLAST Open Porto 2026") == 1
     assert "🔴" in text
     assert "21:00" in text
@@ -306,7 +306,7 @@ def test_match_list_rich_text():
         ],
         starred_only=False,
     )
-    assert "/watch 9" in shown
+    assert "9" in shown
     rich_list = format_match_list_rich(
         [
             {
@@ -322,7 +322,8 @@ def test_match_list_rich_text():
     )
     assert "<table" in rich_list
     assert "<mark>LIVE</mark>" in rich_list
-    assert "/watch 2396932" in rich_list
+    assert "G2" in rich_list
+    assert "/watch" not in rich_list
     assert "<h4>" in rich_list
 
 

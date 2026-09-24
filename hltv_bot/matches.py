@@ -27,6 +27,7 @@ EVENT_NAME = re.compile(
 )
 DATA_STARS = re.compile(r'data-(?:stars|star-rating|rating)="(\d)"', re.I)
 DATA_UNIX = re.compile(r'data-unix="(\d{10,13})"')
+TEAM_SCORE = re.compile(r'class="[^"]*matchTeamScore[^"]*"[^>]*>\s*([^<]*?)\s*<', re.I)
 MATCH_TIME_TEXT = re.compile(r'class="[^"]*(?:matchTime|time)[^"]*"[^>]*>\s*(\d{1,2}:\d{2})\s*<', re.I)
 _IMG_TAG = re.compile(r"<img\b([^>]*)>", re.I)
 _ATTR = re.compile(r"""([\w:-]+)\s*=\s*["']([^"']*)["']""")
@@ -275,6 +276,20 @@ def _teams_event_from_slug(slug: str) -> tuple[str, str, str]:
     return t1, t2, event
 
 
+def _team_scores(chunk: str) -> tuple[str, str]:
+    found: list[str] = []
+    for m in TEAM_SCORE.finditer(chunk):
+        raw = _clean(m.group(1))
+        if raw in {"-", "–", "—"}:
+            raw = ""
+        found.append(raw)
+        if len(found) >= 2:
+            break
+    while len(found) < 2:
+        found.append("")
+    return found[0], found[1]
+
+
 def _chunk_around(html: str, pos: int, span: int = 1800) -> str:
     start = max(0, pos - span)
     end = min(len(html), pos + span)
@@ -332,6 +347,7 @@ def parse_match_list(html: str, *, limit: int = 100, exclude_tbd: bool = False) 
         event_id = _event_id_from(chunk)
         event_logo = _event_logo_url(chunk)
         stars = _stars_in(chunk)
+        score1, score2 = _team_scores(chunk)
         unix = None
         for um in DATA_UNIX.finditer(prefix):
             unix = um.group(1)
@@ -368,6 +384,8 @@ def parse_match_list(html: str, *, limit: int = 100, exclude_tbd: bool = False) 
                 "title": f"{t1} vs {t2}".strip() or pretty_name(slug.replace("-", " ")),
                 "live": "1" if live else "0",
                 "stars": str(stars),
+                "score1": score1,
+                "score2": score2,
                 "time": time_s,
                 "unix": str(unix or ""),
             }
@@ -385,6 +403,131 @@ def parse_match_list(html: str, *, limit: int = 100, exclude_tbd: bool = False) 
 
     rows.sort(key=_match_sort_key)
     return rows
+
+
+_HISTORY_TAG = re.compile(r"<img\b[^>]*>|<div\b[^>]*round-history-bar[^>]*>", re.I)
+_TEAM_NAME = re.compile(r'class="[^"]*results-teamname[^"]*"[^>]*>\s*([^<]+)', re.I)
+_MAP_NAME = re.compile(r'class="[^"]*mapname[^"]*"[^>]*>\s*([^<]+)', re.I)
+_MAP_SCORE = re.compile(r'class="[^"]*results-team-score[^"]*"[^>]*>\s*(\d+)\s*<', re.I)
+
+
+def _map_blocks(html: str) -> list[str]:
+    starts = [m.start() for m in re.finditer(r'class="[^"]*\bmapholder\b', html, re.I)]
+    blocks: list[str] = []
+    for i, start in enumerate(starts):
+        end = starts[i + 1] if i + 1 < len(starts) else len(html)
+        blocks.append(html[start:end])
+    return blocks
+
+
+def _history_sides(block: str) -> list[list[bool]]:
+    marks = [m.start() for m in re.finditer(r'class="[^"]*round-history-team\b', block, re.I)]
+    sides: list[list[bool]] = []
+    for i, start in enumerate(marks[:2]):
+        end = marks[i + 1] if i + 1 < len(marks) else len(block)
+        wins: list[bool] = []
+        for tok in _HISTORY_TAG.finditer(block[start:end]):
+            tag = tok.group(0).lower()
+            if tag.startswith("<img") and "round-history-outcome" in tag:
+                wins.append(True)
+            elif "round-history-bar" in tag and "empty" in tag:
+                wins.append(False)
+        sides.append(wins)
+    return sides
+
+
+def _streak(winners: list[str]) -> tuple[str, int]:
+    if not winners:
+        return "", 0
+    last = winners[-1]
+    n = 0
+    for name in reversed(winners):
+        if name != last:
+            break
+        n += 1
+    return last, n
+
+
+_LOG_START = re.compile(r">\s*((?:round\s+)?start)\s*<", re.I)
+_LOG_START_JSON = re.compile(r'"(?:text|type)"\s*:\s*"start"', re.I)
+
+
+def live_log_started(html: str) -> bool:
+    """True when the match page live log has a start line.
+
+    The matches list marks a row LIVE as soon as the broadcast slot opens.
+    The match itself starts when that page's log records ``start``.
+    """
+    for m in _LOG_START.finditer(html):
+        word = re.sub(r"\s+", " ", m.group(1).lower())
+        if word not in {"start", "round start"}:
+            continue
+        window = html[max(0, m.start() - 400) : m.end() + 40].lower()
+        if any(k in window for k in ("log", "livescore", "scorebot", "round")):
+            return True
+    return _LOG_START_JSON.search(html) is not None
+
+
+def parse_match_board(html: str) -> dict[str, str | int]:
+    """Current map score and trailing round-win streak from a match page.
+
+    Round cells are paired across the two ``round-history-team`` rows.
+    A streak is only the current map, and only the run at the end.
+    """
+    blocks = _map_blocks(html)
+    block = blocks[-1] if blocks else html
+    names = [_clean(m.group(1)) for m in _TEAM_NAME.finditer(block)]
+    team1 = names[0] if names else ""
+    team2 = names[1] if len(names) > 1 else ""
+    scores = [m.group(1) for m in _MAP_SCORE.finditer(block)]
+    map_name = ""
+    found = _MAP_NAME.search(block)
+    if found:
+        map_name = _clean(found.group(1))
+    map_score = f"{scores[0]}-{scores[1]}" if len(scores) >= 2 else ""
+    sides = _history_sides(block)
+    winners: list[str] = []
+    if len(sides) >= 2 and team1 and team2:
+        for left, right in zip(sides[0], sides[1]):
+            if left and not right:
+                winners.append(team1)
+            elif right and not left:
+                winners.append(team2)
+    who, n = _streak(winners)
+    return {
+        "map": map_name,
+        "map_score": map_score,
+        "streak": n,
+        "streak_team": who if n else "",
+        "started": 1 if live_log_started(html) else 0,
+    }
+
+
+def fetch_match_board(sess: BrowserSession, url: str, timeout: float = 20.0) -> dict[str, str | int]:
+    if url.isdigit():
+        url = f"https://www.hltv.org/matches/{url}/x"
+    _st, body, _ = request(
+        sess,
+        "GET",
+        url,
+        timeout=timeout,
+        headers={
+            "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "sec-fetch-dest": "document",
+            "sec-fetch-mode": "navigate",
+            "sec-fetch-site": "same-origin",
+        },
+    )
+    board = parse_match_board(body.decode("utf-8", "replace"))
+    log.info(
+        "match board url=%s map=%s score=%s streak=%s team=%s",
+        url,
+        board.get("map"),
+        board.get("map_score"),
+        board.get("streak"),
+        board.get("streak_team"),
+    )
+    return board
 
 
 def parse_match_meta(html: str, url: str = "") -> dict[str, str | None]:

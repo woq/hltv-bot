@@ -33,7 +33,7 @@ def _session_kwargs(sess: BrowserSession, timeout: float) -> dict[str, Any]:
 
 
 def _want_chrome(method: str, url: str) -> bool:
-    mode = (os.environ.get("HLTV_HTTP") or "chrome").strip().lower()
+    mode = (os.environ.get("HLTV_HTTP") or "curl").strip().lower()
     if mode in {"curl", "cffi", "off", "0"}:
         return False
     if method.upper() != "GET":

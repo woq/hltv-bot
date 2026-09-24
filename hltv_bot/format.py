@@ -795,13 +795,21 @@ def format_match_list(
             mark = "🔴" if live else "▫️"
             t1 = h(r.get("team1") or r.get("title") or "?")
             t2 = h(r.get("team2") or "")
-            vs = f"{t1} — {t2}" if t2 else t1
-            mid = h(r.get("id") or "")
+            sc1 = (r.get("score1") or "").strip()
+            sc2 = (r.get("score2") or "").strip()
+            if sc1 or sc2:
+                vs = f"{t1} <b>{h(sc1 or '0')}-{h(sc2 or '0')}</b> {t2}".rstrip()
+            else:
+                vs = f"{t1} — {t2}" if t2 else t1
+            url = (r.get("url") or "").strip()
             star_s = "⭐" * n if n else ""
             time_bit = f"<code>{clock}</code>  " if clock else ""
             lines.append(f"{mark} {time_bit}<b>{vs}</b>")
             tail = f"{star_s}  " if star_s else ""
-            lines.append(f"{tail}<code>/watch {mid}</code>")
+            if url:
+                lines.append(f'{tail}<a href="{h(url)}">详情</a>')
+            else:
+                lines.append(f"{tail}<code>{h(r.get('id') or '')}</code>")
         blocks.append("\n".join(lines))
     hint = (
         "<i>时间 UTC+8 · /matches all 显示无星比赛</i>"
@@ -871,15 +879,16 @@ def format_match_list_rich(
             t1 = h(r.get("team1") or r.get("title") or "?")
             t2 = h(r.get("team2") or "")
             vs = f"<b>{t1}</b> – {t2}" if t2 else f"<b>{t1}</b>"
-            mid = h(r.get("id") or "")
             n = star_n(r)
             stars = "⭐" * n if n else ""
             status = "<mark>LIVE</mark>" if live else stars
             time_cell = h(clock) if clock and not live else (stars if live and stars else "")
+            url = (r.get("url") or "").strip()
+            link = f'<br><a href="{h(url)}">详情</a>' if url else ""
             rows_html.append(
                 "<tr>"
                 f"<td>{status}</td>"
-                f"<td>{vs}<br>/watch {mid}</td>"
+                f"<td>{vs}{link}</td>"
                 f"<td align=\"right\"><code>{time_cell}</code></td>"
                 "</tr>"
             )

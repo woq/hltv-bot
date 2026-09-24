@@ -2,6 +2,7 @@
 data/session.json
 data/chats.json
 data/settings.json
+data/reminders.json
 data/wpe-profile/
 data/event_logos/
 data/team_logos/

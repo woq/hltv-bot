@@ -1,61 +1,77 @@
+"""Telegram bot: API match/score alerts and Tier1/Major event reminders.
+
+Chrome keeper and the live scoreboard card stay on the archive/chrome-full branch.
+This process polls HLTV HTML and does not start Chrome.
+"""
+
 from __future__ import annotations
 
+import json
 import logging
 import os
+import random
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
+
+from hltv_bot.chats import add_group, group_ids, list_groups, remove_group
+from hltv_bot.events import fetch_events, filter_and_sort_events, format_events_html
+from hltv_bot.format import format_match_list, h
+from hltv_bot.render import classify_event_tier, tier_rank
+from hltv_bot.http import CloudflareError
+from hltv_bot.matches import fetch_match_board, fetch_matches
+from hltv_bot.ratelimit import Cooldown
+from hltv_bot.reminders import CST, RemindConfig, empty_state, match_allowed, plan_reminders
+from hltv_bot.session import BrowserSession, load_session
+from hltv_bot.settings import notify_config, update_settings
+from hltv_bot.telegram_api import Telegram
 
 log = logging.getLogger("hltv_bot")
 
-from hltv_bot.chats import add_group, group_ids, list_groups, remove_group
-from hltv_bot.debuglog import append_trace, clip, event_brief, snap_brief
-from hltv_bot.format import format_kv_table, format_match_list, format_rich_watch_card, h, plain_to_rich
-from hltv_bot.render import classify_event_tier, render_events_image, render_matches_image, tier_rank
-from hltv_bot.http import CloudflareError
-from hltv_bot.events import fetch_events, filter_and_sort_events, format_events_html
-from hltv_bot.matches import fetch_match_meta, fetch_matches
-from hltv_bot.scorebot import WS_RETRY_EVERY, iter_scorebot, scorebot_base
-from hltv_bot.ratelimit import Cooldown
-from hltv_bot.session import BrowserSession, load_session
-from hltv_bot.telegram_api import Telegram, TelegramRateLimit, is_not_modified
-from hltv_bot.watch import (
-    ADMIN_WS_FAIL_EVERY,
-    ADMIN_WS_FAIL_MIN,
-    MIN_EDIT_INTERVAL,
-    MIN_EDIT_INTERVAL_WS,
-    WATCH_STALE,
-    LOG_EVENT_NAMES,
-    WATCH_EVENT_NAMES,
-    ScorebotFeed,
-    WatchCard,
-    WatchState,
-    WsFailDigest,
-    apply_link_status,
-    fmt_span,
-    render_watch,
-    watch_debug_mode,
-    watch_edit_interval,
-    watch_fingerprint,
-)
-
 DEFAULT_ADMIN_ID = 1442477170
+MSG_TTL = 30.0
+GET_UPDATES_FAIL_SLEEP = 3.0
+TG_COMMANDS_GAP = 0.4
+# One /matches fetch covers every live BO1/BO3/BO5. That is the score clock.
+# A match page is opened only while the row is LIVE and its log has not said
+# start, and only on every other turn so the list stays the fast path.
+MATCH_PAGE_MIN = 3.0
+MATCH_PAGE_MAX = 5.0
+CF_ALERT_EVERY = 1800.0
+STATE_PATH = Path("data/reminders.json")
+
+CMD_COOLDOWN = {
+    "/matches": 8.0,
+    "/matchs": 8.0,
+    "/match": 8.0,
+    "/events": 8.0,
+    "/cookie": 3.0,
+}
+DEFAULT_CMD_COOLDOWN = 1.2
 
 HELP = """\
 <b>hltv-bot</b>
-• <code>/matches</code> — 今日比赛
-• <code>/events</code> — 近期赛事 (Major/T1)
-• <code>/watch</code> — 本群观赛（已有场次发 /watch 加入）
-• <code>/bump</code> — 顶到最新
-• <code>/stop</code> — 本群退出（/stop all 停全部）
+时间 <code>UTC+8</code>。提醒默认无声，发到通知群。
+
+• <code>/matches</code> — 比赛列表（<code>t2</code> / <code>t3</code> / <code>all</code> / <code>text</code>）
+• <code>/events</code> — Major / T1 赛事
+• <code>/groups</code> — 通知群
+
+默认推送至少 1 星、并且赛事是 Major/T1 的比赛。赛程页的 LIVE 只是直播位。真正开打要等比赛页 live log 里的 start。一方连赢 5 回合及以上会标出来。
 
 <b>管理员</b>
-• <code>/allow</code> — 授权本群
-• <code>/deny</code> — 取消授权
-• <code>/groups</code> — 已授权群
+• <code>/allow</code> — 把本群加入通知
+• <code>/deny</code> — 移出通知
+• <code>/ignore 比赛id</code> — 这场不再推
+• <code>/unignore 比赛id</code> — 恢复这场
+• <code>/stop</code> — 暂停全部比分推送
+• <code>/watch</code> — 恢复比分推送
+• <code>/window 7 6</code> — 赛事提醒：开赛前 7 天，直到前 6 小时
+• <code>/stars 1</code> — 比赛提醒的最低星级
+• <code>/silent</code> — 无声开关，默认开
 • <code>/cookie</code> — 更新 Cookie
-• <code>/status</code> — 状态
-• <code>/debug</code> — 调试（user/chat/admin）
+• <code>/status</code>
 """
 
 ADMIN_CMDS = frozenset(
@@ -63,6 +79,13 @@ ADMIN_CMDS = frozenset(
         "/allow",
         "/deny",
         "/groups",
+        "/window",
+        "/stars",
+        "/silent",
+        "/ignore",
+        "/unignore",
+        "/stop",
+        "/watch",
         "/cookie",
         "/updatecookie",
         "/update_cookie",
@@ -71,40 +94,46 @@ ADMIN_CMDS = frozenset(
     }
 )
 
-CMD_COOLDOWN = {
-    "/matches": 8.0,
-    "/matchs": 8.0,
-    "/match": 8.0,
-    "/events": 8.0,
-    "/watch": 6.0,
-    "/bump": 4.0,
-    "/new": 4.0,
-    "/cookie": 3.0,
-}
-DEFAULT_CMD_COOLDOWN = 1.2
-MSG_TTL = 60.0
-EVENTS_IMG_CACHE_TTL = 7 * 24 * 3600
-MATCHES_IMG_CACHE_TTL = 6 * 3600
-GET_UPDATES_FAIL_SLEEP = 3.0
-TG_COMMANDS_GAP = 0.4
-_KEEP_USER_CMDS = frozenset({"/watch"})
-
 USER_BOT_COMMANDS = [
-    {"command": "matches", "description": "今日比赛"},
-    {"command": "events", "description": "近期赛事(Major/T1)"},
-    {"command": "watch", "description": "本群观赛(已有场次 /watch 加入)"},
-    {"command": "bump", "description": "顶到最新"},
-    {"command": "stop", "description": "本群退出(/stop all 停全部)"},
+    {"command": "matches", "description": "比赛列表"},
+    {"command": "events", "description": "Major/T1 赛事"},
+    {"command": "groups", "description": "通知群"},
     {"command": "help", "description": "帮助"},
 ]
 ADMIN_BOT_COMMANDS = USER_BOT_COMMANDS + [
-    {"command": "allow", "description": "授权本群"},
-    {"command": "deny", "description": "取消授权"},
-    {"command": "groups", "description": "已授权群"},
+    {"command": "allow", "description": "加入通知群"},
+    {"command": "deny", "description": "移出通知群"},
+    {"command": "ignore", "description": "忽略一场比赛"},
+    {"command": "unignore", "description": "恢复一场比赛"},
+    {"command": "stop", "description": "暂停全部比分推送"},
+    {"command": "watch", "description": "恢复比分推送"},
+    {"command": "window", "description": "赛事提醒窗口 天 小时"},
+    {"command": "stars", "description": "比赛提醒最低星级"},
+    {"command": "silent", "description": "无声通知 开/关"},
     {"command": "cookie", "description": "更新 Cookie"},
     {"command": "status", "description": "状态"},
-    {"command": "debug", "description": "调试"},
 ]
+
+
+def _load_state(path: Path) -> dict:
+    if not path.exists():
+        return empty_state()
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return empty_state()
+    if not isinstance(data, dict):
+        return empty_state()
+    data.setdefault("matches", {})
+    data.setdefault("events", {})
+    return data
+
+
+def _save_state(state: dict, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    tmp.replace(path)
 
 
 class HltvTelegramBot:
@@ -118,19 +147,32 @@ class HltvTelegramBot:
         cdp_url: str | None = None,
         keeper_url: str | None = None,
         export_every: float = 300.0,
+        state_path: Path | None = None,
+        settings_path: Path | None = None,
+        poll_seconds: float = MATCH_PAGE_MIN,
     ):
         self.tg = tg
         self.session = session
         self.admin_ids = admin_ids or {DEFAULT_ADMIN_ID}
         self.bump_seconds = bump_seconds
         self.cdp_url = cdp_url
-        self.keeper_url = keeper_url or "https://www.hltv.org/matches"
+        self.keeper_url = keeper_url
         self.export_every = float(export_every)
-        self.watch: WatchState | None = None
-        self._thread: threading.Thread | None = None
-        self._keeper_thread: threading.Thread | None = None
-        self._keeper_stop = threading.Event()
-        self.keeper_cdp = "down"
+        self.state_path = state_path or STATE_PATH
+        self.settings_path = settings_path
+        self.poll_seconds = float(poll_seconds)
+        self._await_cookie: set[int] = set()
+        self._cool = Cooldown()
+        self.msg_ttl = MSG_TTL
+        self._can_delete_cache: dict[int, tuple[float, bool]] = {}
+        self.started_at = time.time()
+        self._stop = threading.Event()
+        self._state_lock = threading.Lock()
+        self._state = _load_state(self.state_path)
+        self.last_poll_at = 0.0
+        self.last_error = ""
+        self._cf_alerted_at = 0.0
+        self.keeper_cdp = "off"
         self.keeper_title = ""
         self.keeper_url_seen = ""
         self.keeper_exported_at = 0.0
@@ -139,23 +181,24 @@ class HltvTelegramBot:
         self._was_challenge = False
         self._challenge_alerted_at = 0.0
         self._cdp_down_alerted_at = 0.0
-        self._await_cookie: set[int] = set()
-        self._cool = Cooldown()
-        self._ws_fail = WsFailDigest()
-        self.msg_ttl = MSG_TTL
-        self._can_delete_cache: dict[int, tuple[float, bool]] = {}
-        self.started_at = time.time()
+        self._keeper_stop = threading.Event()
+        self.watch = None
+        self._event_rows: list | None = None
+        self._events_loaded = False
+        self._events_retry_at = 0.0
+        self._list_rows: list[dict] = []
+        self._list_at = 0.0
+        self._page: dict[str, dict] = {}
+        self._rr = 0
 
     def can_delete_in_chat(self, chat_id: int) -> bool:
-        """Check if bot has permissions to delete messages in group, cached for 300s."""
         cid = int(chat_id)
         if cid > 0:
             return True
         now = time.monotonic()
-        if cid in self._can_delete_cache:
-            ts, val = self._can_delete_cache[cid]
-            if now - ts < 300.0:
-                return val
+        cached = self._can_delete_cache.get(cid)
+        if cached and now - cached[0] < 300.0:
+            return cached[1]
         can = self.tg.bot_can_delete_messages(cid)
         self._can_delete_cache[cid] = (now, can)
         return can
@@ -164,7 +207,6 @@ class HltvTelegramBot:
         return user_id is not None and int(user_id) in self.admin_ids
 
     def can_setup_chat(self, chat_id: int, user_id: int | None, chat_type: str) -> bool:
-        """/allow /deny in a group that is not yet on the list."""
         if self.is_admin(user_id):
             return True
         if chat_type not in ("group", "supergroup"):
@@ -173,8 +215,7 @@ class HltvTelegramBot:
             st = self.tg.chat_member_status(chat_id, int(user_id))
             if st in ("creator", "administrator"):
                 return True
-        admins = self.tg.chat_admin_user_ids(chat_id)
-        return bool(admins & self.admin_ids)
+        return bool(self.tg.chat_admin_user_ids(chat_id) & self.admin_ids)
 
     def chat_allowed(self, chat_id: int, *, user_id: int | None = None) -> bool:
         if self.is_admin(user_id):
@@ -206,43 +247,25 @@ class HltvTelegramBot:
             (text or "")[:120],
         )
         if chat_id in self._await_cookie and not cmd.startswith("/"):
-            if not self.is_admin(user_id):
-                return
-            self._apply_cookie(chat_id, text, message_id=message_id)
+            if self.is_admin(user_id):
+                self._apply_cookie(chat_id, text, message_id=message_id)
             return
         if cmd in {"/allow", "/deny"}:
             if not self.can_setup_chat(chat_id, user_id, chat_type):
-                log.info("deny setup cmd %s user=%s chat=%s", cmd, user_id, chat_id)
-                self._reply(
-                    chat_id,
-                    f"无权限授权本群\n你的 id: <code>{user_id}</code>\nchat: <code>{chat_id}</code>",
-                )
+                self._reply(chat_id, f"无权限授权本群\n你的 id: <code>{user_id}</code>\nchat: <code>{chat_id}</code>")
                 return
         elif cmd in ADMIN_CMDS and not self.is_admin(user_id):
-            log.info("deny admin cmd %s user=%s chat=%s", cmd, user_id, chat_id)
             if cmd in {"/debug", "/status", "/groups", "/cookie"}:
-                self._reply(
-                    chat_id,
-                    f"无权限\n你的 id: <code>{user_id}</code>",
-                )
+                self._reply(chat_id, f"无权限\n你的 id: <code>{user_id}</code>")
             return
         if cmd not in ADMIN_CMDS | {"/start", "/help"} and not listed and not self.is_admin(user_id):
-            log.info("skip cmd=%s chat=%s not in allow-list", cmd, chat_id)
             return
-        if (
-            cmd.startswith("/")
-            and cmd not in _KEEP_USER_CMDS
-            and message_id is not None
-            and self.can_delete_in_chat(chat_id)
-        ):
+        if cmd.startswith("/") and message_id is not None and self.can_delete_in_chat(chat_id):
             self._schedule_delete(chat_id, int(message_id))
         if cmd.startswith("/") and user_id is not None:
             interval = CMD_COOLDOWN.get(cmd, DEFAULT_CMD_COOLDOWN)
             key = f"{user_id}:{cmd}"
             if not self._cool.allow(key, interval):
-                wait = self._cool.remaining(key, interval)
-                if cmd in {"/matches", "/matchs", "/match", "/watch", "/bump"}:
-                    self._reply(chat_id, f"稍等 {wait:.0f}s")
                 return
         if cmd in ("/start", "/help"):
             self._await_cookie.discard(chat_id)
@@ -260,15 +283,20 @@ class HltvTelegramBot:
         elif cmd in ("/events", "/event"):
             self._await_cookie.discard(chat_id)
             self._cmd_events(chat_id, arg)
-        elif cmd == "/watch":
-            self._await_cookie.discard(chat_id)
-            self._cmd_watch(chat_id, arg)
-        elif cmd in ("/bump", "/new"):
-            self._await_cookie.discard(chat_id)
-            self._cmd_bump(chat_id)
+        elif cmd == "/window":
+            self._cmd_window(chat_id, arg)
+        elif cmd == "/stars":
+            self._cmd_stars(chat_id, arg)
+        elif cmd == "/silent":
+            self._cmd_silent(chat_id, arg)
+        elif cmd == "/ignore":
+            self._cmd_ignore(chat_id, arg)
+        elif cmd == "/unignore":
+            self._cmd_unignore(chat_id, arg)
         elif cmd == "/stop":
-            self._await_cookie.discard(chat_id)
-            self._cmd_stop(chat_id, arg)
+            self._cmd_stop_watch(chat_id)
+        elif cmd == "/watch":
+            self._cmd_watch(chat_id, arg)
         elif cmd == "/status":
             self._await_cookie.discard(chat_id)
             self._cmd_status(chat_id)
@@ -277,407 +305,160 @@ class HltvTelegramBot:
         elif cmd == "/debug":
             self._cmd_debug(chat_id, user_id=user_id, chat_title=chat_title, chat_type=chat_type)
 
-    def _cmd_matches(self, chat_id: int, arg: str = "") -> None:
-        raw_arg = arg.strip().lower()
-        text_only = "text" in raw_arg or "txt" in raw_arg
-        if "all" in raw_arg or "全部" in raw_arg or "*" in raw_arg or "full" in raw_arg:
-            tier_filter = "Other"
-        elif "t3" in raw_arg:
-            tier_filter = "T3"
-        elif "t2" in raw_arg:
-            tier_filter = "T2"
-        else:
-            tier_filter = "T1"  # Global default: Tier 1 (including Major)
+    def _saved(self) -> dict:
+        if self.settings_path is None:
+            return notify_config()
+        return notify_config(self.settings_path)
 
+    def _write_settings(self, values: dict) -> None:
+        if self.settings_path is None:
+            update_settings(values)
+        else:
+            update_settings(values, self.settings_path)
+
+    def _cfg(self) -> RemindConfig:
+        raw = self._saved()
+        return RemindConfig(
+            event_days=int(raw["event_days"]),
+            event_hours=int(raw["event_hours"]),
+            min_stars=int(raw["min_stars"]),
+            watch=bool(raw.get("watch", True)),
+            ignored=frozenset(raw.get("ignored") or []),
+        )
+
+    def _silent(self) -> bool:
+        return bool(self._saved().get("silent", True))
+
+    def _quiet(self, ids: list[str] | None = None, *, all_matches: bool = False) -> None:
+        with self._state_lock:
+            if all_matches:
+                self._state["quiet_all"] = True
+            if ids:
+                have = {str(x) for x in (self._state.get("quiet_ids") or [])}
+                have.update(ids)
+                self._state["quiet_ids"] = sorted(have)
+            _save_state(self._state, self.state_path)
+
+    def _cmd_matches(self, chat_id: int, arg: str) -> None:
+        raw = arg.strip().lower()
+        if "all" in raw or "全部" in raw or "*" in raw:
+            tier = "Other"
+        elif "t3" in raw:
+            tier = "T3"
+        elif "t2" in raw:
+            tier = "T2"
+        else:
+            tier = "T1"
         try:
             rows = fetch_matches(self.session)
         except CloudflareError as e:
             self._reply(chat_id, f"Cloudflare 拦了列表页：{e}\n发 /cookie 更新 Cookie")
             return
-        # Exclude matches where both teams are TBD
-        def _both_tbd(r: dict) -> bool:
-            _u1 = (r.get("team1") or "").strip().upper()
-            _u2 = (r.get("team2") or "").strip().upper()
-            return (not _u1 or _u1 in ("?", "TBD")) and (not _u2 or _u2 in ("?", "TBD"))
-
-        rows = [r for r in rows if not _both_tbd(r)]
-        if text_only:
-            if not rows:
-                self._reply(chat_id, "暂无可显示的比赛（或双方均为 TBD）")
-                return
-            text = format_match_list(rows, starred_only=(tier_filter != "Other"))
-            log.debug("matches text_len=%s", len(text))
-            self._reply(chat_id, text)
+        if tier != "Other":
+            floor = tier_rank(tier)
+            rows = [
+                r
+                for r in rows
+                if tier_rank(classify_event_tier(r.get("event") or "", int(r.get("stars") or 0))) <= floor
+            ]
+        if not rows:
+            hint = "发 /matches all 看全部。" if tier != "Other" else ""
+            self._reply(chat_id, f"暂无符合筛选的比赛。{hint}".strip())
             return
+        self._reply(chat_id, format_match_list(rows, starred_only=False))
 
-        # Send immediate upload_photo chat action so user sees feedback right away
-        self.tg.send_chat_action(chat_id, "upload_photo")
-
-        # Attempt image generation
-        try:
-            from datetime import datetime, timedelta, timezone
-            cst = timezone(timedelta(hours=8))
-            push_time = datetime.now(cst).strftime("%H:%M")
-
-            max_rank = tier_rank(tier_filter)
-            if tier_filter == "Other":
-                matches_in_tier = list(rows)
-            else:
-                event_tier_map: dict[str, str] = {}
-                for r in rows:
-                    ev = r.get("event") or "Other Matches"
-                    st = int(r.get("stars") or 0)
-                    t = classify_event_tier(ev, st)
-                    if ev not in event_tier_map or tier_rank(t) < tier_rank(event_tier_map[ev]):
-                        event_tier_map[ev] = t
-
-                matches_in_tier = [
-                    r for r in rows
-                    if tier_rank(event_tier_map.get(r.get("event") or "Other Matches", classify_event_tier(r.get("event") or "", int(r.get("stars") or 0)))) <= max_rank
-                    and int(r.get("stars") or 0) >= 1
-                ]
-
-            # Cache key based on match IDs, live state, and score/time
-            cache_sig = tier_filter + ":" + ",".join(
-                f"{m.get('id')}:{m.get('live')}:{m.get('time')}" for m in matches_in_tier
-            )
-            now_ts = time.time()
-            cached = getattr(self, "_matches_img_cache", {}).get(tier_filter)
-            if cached and cached[0] == cache_sig and (now_ts - cached[1] < MATCHES_IMG_CACHE_TTL):
-                img_bytes = cached[2]
-                log.debug("matches image cache hit for %s", tier_filter)
-            else:
-                try:
-                    from hltv_bot.events import ensure_event_logos
-                    from hltv_bot.team_logos import ensure_team_logos
-
-                    logo_urls = []
-                    event_pairs: list[tuple[str, str]] = []
-                    for r in matches_in_tier:
-                        logo_urls.append(r.get("team1_logo") or "")
-                        logo_urls.append(r.get("team2_logo") or "")
-                        event_pairs.append((str(r.get("event_id") or ""), str(r.get("event_logo") or "")))
-                    ensure_team_logos(logo_urls)
-                    ensure_event_logos(event_pairs)
-                except Exception:
-                    log.debug("team logo cache skipped", exc_info=True)
-                img_bytes = render_matches_image(
-                    rows,
-                    tier_filter=tier_filter,
-                    updated_at=f"{push_time} UTC+8",
-                )
-                if not hasattr(self, "_matches_img_cache"):
-                    self._matches_img_cache = {}
-                self._matches_img_cache[tier_filter] = (cache_sig, now_ts, img_bytes)
-
-            # Build caption with quick /watch shortcuts for live & top matches
-            caption_lines = [f"<b>HLTV Matches</b> · <code>{push_time} UTC+8</code>"]
-            if not matches_in_tier:
-                nxt = {"T1": "t2", "T2": "t3"}.get(tier_filter, "")
-                extra = f"，可试 <code>/matches {nxt}</code>" if nxt else ""
-                caption_lines.append(f"暂无符合筛选的比赛{extra}")
-            live_matches = [r for r in matches_in_tier if r.get("live") == "1"]
-            def _is_determined_match(m: dict) -> bool:
-                _t1 = (m.get("team1") or "").strip().upper()
-                _t2 = (m.get("team2") or "").strip().upper()
-                if not _t1 or not _t2 or _t1 in ("?", "TBD") or _t2 in ("?", "TBD"):
-                    return False
-                return True
-
-            upcoming_top = [
-                r for r in matches_in_tier
-                if r.get("live") != "1"
-                and int(r.get("stars") or 0) >= 2
-                and _is_determined_match(r)
-            ][:4]
-
-            if live_matches:
-                caption_lines.append("🔴 <b>LIVE:</b>")
-                for r in live_matches[:3]:
-                    t1 = h(r.get("team1") or "?")
-                    t2 = h(r.get("team2") or "?")
-                    mid = h(r.get("id") or "")
-                    caption_lines.append(f"• {t1} vs {t2} ➔ <code>/watch {mid}</code>")
-
-            if upcoming_top:
-                caption_lines.append("⏰ <b>UPCOMING:</b>")
-                for r in upcoming_top:
-                    t1 = h(r.get("team1") or "?")
-                    t2 = h(r.get("team2") or "?")
-                    clock = h((r.get("time") or "").strip())
-                    mid = h(r.get("id") or "")
-                    time_prefix = f"[{clock}] " if clock else ""
-                    caption_lines.append(f"• {time_prefix}{t1} vs {t2} ➔ <code>/watch {mid}</code>")
-
-            caption_lines.append("<i>Filter: /matches [t1|t2|t3|all|text]</i>")
-            caption = "\n".join(caption_lines)
-
-            self._reply_photo(chat_id, img_bytes, caption=caption)
-            log.info("matches photo sent chat=%s tier=%s matches=%s", chat_id, tier_filter, len(matches_in_tier))
-            return
-        except Exception as e:
-            log.exception("matches image render failed, falling back to text: %s", e)
-            text = format_match_list(rows, starred_only=(tier_filter != "Other"))
-            self._reply(chat_id, text)
-
-    def _cmd_events(self, chat_id: int, arg: str = "") -> None:
-        raw_arg = arg.strip().lower()
-        text_only = "text" in raw_arg or "txt" in raw_arg
-        if "all" in raw_arg or "全部" in raw_arg or "*" in raw_arg:
-            allowed_tiers = ("Major", "T1", "T2", "T3", "Other")
-            tier_label = "All Events"
-        elif "t2" in raw_arg:
-            allowed_tiers = ("Major", "T1", "T2")
-            tier_label = "Major / T1 / T2"
-        elif "major" in raw_arg:
-            allowed_tiers = ("Major",)
-            tier_label = "Major"
+    def _cmd_events(self, chat_id: int, arg: str) -> None:
+        raw = arg.strip().lower()
+        if "all" in raw or "全部" in raw:
+            tiers = ("Major", "T1", "T2", "T3", "Other")
+        elif "t2" in raw:
+            tiers = ("Major", "T1", "T2")
         else:
-            allowed_tiers = ("Major", "T1")
-            tier_label = "Major / T1"
-
+            tiers = ("Major", "T1")
         try:
-            raw_events = fetch_events(self.session)
+            rows = filter_and_sort_events(fetch_events(self.session), allowed_tiers=tiers)
         except CloudflareError as e:
             self._reply(chat_id, f"Cloudflare 拦了赛事页：{e}\n发 /cookie 更新 Cookie")
             return
-        except Exception as e:
-            log.exception("fetch_events error: %s", e)
-            self._reply(chat_id, f"获取赛事列表失败：{e}")
-            return
+        self._reply(chat_id, format_events_html(rows))
 
-        filtered = filter_and_sort_events(raw_events, allowed_tiers=allowed_tiers)
-        if text_only:
-            if not filtered:
-                self._reply(chat_id, "未找到符合条件的赛事。发 <code>/events all</code> 查看全部。")
+    def _cmd_window(self, chat_id: int, arg: str) -> None:
+        parts = arg.split()
+        if len(parts) != 2 or not parts[0].isdigit() or not parts[1].isdigit():
+            cfg = self._cfg()
+            self._reply(chat_id, f"用法 <code>/window 天 小时</code>\n当前 {cfg.event_days} 天 → {cfg.event_hours} 小时")
+            return
+        days, hours = int(parts[0]), int(parts[1])
+        if not (1 <= days <= 60 and 1 <= hours < days * 24):
+            self._reply(chat_id, "天数 1–60，小时要小于天数×24")
+            return
+        self._write_settings({"event_days": days, "event_hours": hours})
+        self._reply(chat_id, f"赛事提醒：开赛前 <b>{days}</b> 天，直到前 <b>{hours}</b> 小时")
+
+    def _cmd_stars(self, chat_id: int, arg: str) -> None:
+        raw = arg.strip()
+        if not raw.isdigit():
+            self._reply(chat_id, f"用法 <code>/stars 0-5</code>\n当前 {self._cfg().min_stars}")
+            return
+        n = max(0, min(5, int(raw)))
+        self._write_settings({"min_stars": n})
+        self._reply(chat_id, f"比赛提醒最低星级 <b>{n}</b>")
+
+    def _cmd_silent(self, chat_id: int, arg: str) -> None:
+        raw = arg.strip().lower()
+        if raw in {"0", "off", "false", "no", "关", "关闭"}:
+            self._write_settings({"silent": False})
+            self._reply(chat_id, "通知会响铃")
+            return
+        if raw in {"", "1", "on", "true", "yes", "开", "开启"}:
+            self._write_settings({"silent": True})
+            self._reply(chat_id, "通知无声")
+            return
+        self._reply(chat_id, "用法 <code>/silent</code> 或 <code>/silent off</code>")
+
+    def _cmd_ignore(self, chat_id: int, arg: str) -> None:
+        ids = [p for p in arg.split() if p.isdigit()]
+        current = list(self._saved().get("ignored") or [])
+        if not ids:
+            if not current:
+                self._reply(chat_id, "没有忽略的比赛。\n用法 <code>/ignore 比赛id</code>")
                 return
-            text = format_events_html(filtered, limit=15)
-            self._reply(chat_id, text)
+            lines = ["<b>已忽略</b>"]
+            lines.extend(f"• <code>{h(mid)}</code>" for mid in current)
+            self._reply(chat_id, "\n".join(lines))
             return
+        for mid in ids:
+            if mid not in current:
+                current.append(mid)
+        self._write_settings({"ignored": current})
+        self._reply(chat_id, "已忽略 " + " ".join(f"<code>{h(mid)}</code>" for mid in ids))
 
-        shown = filtered[:15]
-        self.tg.send_chat_action(chat_id, "upload_photo")
-        try:
-            from datetime import datetime, timedelta, timezone
-
-            cst = timezone(timedelta(hours=8))
-            push_time = datetime.now(cst).strftime("%H:%M")
-
-            cache_sig = tier_label + ":" + ",".join(
-                f"{ev.get('id')}:{ev.get('live')}:{ev.get('days_left')}" for ev in shown
-            )
-            now_ts = time.time()
-            cached = getattr(self, "_events_img_cache", {}).get(tier_label)
-            if cached and cached[0] == cache_sig and (now_ts - cached[1] < EVENTS_IMG_CACHE_TTL):
-                img_bytes = cached[2]
-                log.debug("events image cache hit for %s", tier_label)
-            else:
-                try:
-                    from hltv_bot.events import ensure_event_logos, ensure_flags
-
-                    ensure_event_logos([(str(ev.get("id") or ""), str(ev.get("logo_url") or "")) for ev in shown])
-                    ensure_flags([str(ev.get("country_code") or "") for ev in shown])
-                except Exception:
-                    log.debug("event logo cache skipped", exc_info=True)
-                img_bytes = render_events_image(
-                    filtered,
-                    tier_filter=tier_label,
-                    updated_at=f"{push_time} UTC+8",
-                    limit=15,
-                )
-                if not hasattr(self, "_events_img_cache"):
-                    self._events_img_cache = {}
-                self._events_img_cache[tier_label] = (cache_sig, now_ts, img_bytes)
-
-            caption_lines = [
-                f"<b>HLTV Events</b> · <code>{push_time} UTC+8</code>",
-            ]
-            if not filtered:
-                if tier_label == "Major":
-                    caption_lines.append("未找到 Major。可试 <code>/events t2</code>")
-                elif tier_label == "All Events":
-                    caption_lines.append("未来三个月没有赛事")
-                else:
-                    caption_lines.append("未找到符合条件的赛事。可试 <code>/events t2</code> 或 <code>/events all</code>")
-            caption_lines.append(f"<i>Filter: {tier_label} · /events [t2|major|all|text]</i>")
-            self._reply_photo(chat_id, img_bytes, caption="\n".join(caption_lines), filename="events.png")
-            log.info("events photo sent chat=%s tier=%s events=%s", chat_id, tier_label, len(filtered))
+    def _cmd_unignore(self, chat_id: int, arg: str) -> None:
+        ids = [p for p in arg.split() if p.isdigit()]
+        if not ids:
+            self._reply(chat_id, "用法 <code>/unignore 比赛id</code>")
             return
-        except Exception as e:
-            log.exception("events image render failed, falling back to text: %s", e)
-            text = format_events_html(filtered, limit=15)
-            self._reply(chat_id, text)
+        current = [mid for mid in (self._saved().get("ignored") or []) if mid not in ids]
+        self._write_settings({"ignored": current})
+        self._quiet(ids)
+        self._reply(chat_id, "已恢复 " + " ".join(f"<code>{h(mid)}</code>" for mid in ids) + "\n下一次比分变化才会推")
 
-    def _watch_hint(self, list_id: str) -> str:
-        return (
-            f"本群已加入。其它群发 <code>/watch</code> 或 "
-            f"<code>/watch {h(list_id)}</code> 加入同一场。\n"
-            "本群退出 <code>/stop</code> · 全部停止 <code>/stop all</code>"
-        )
-
-    def _join_watch(self, state: WatchState, chat_id: int) -> None:
-        html, _, _ = render_watch(state, None, [])
-        card = state.cards.get(int(chat_id))
-        if card and card.message_id:
-            self._reply(
-                chat_id,
-                "本群已在观赛。/bump 顶到最新 · /stop 退出本群",
-            )
-            return
-        log.info("watch join chat=%s listId=%s", chat_id, state.list_id)
-        self._flush_watch(state, html, send_new=True, chat_id=chat_id)
-        self._reply(chat_id, self._watch_hint(state.list_id))
-
-    def _put_watch_card(self, state: WatchState, chat_id: int, html: str) -> None:
-        card = state.card(chat_id)
-        try:
-            if card.message_id:
-                self._flush_watch(state, html, chat_id=chat_id)
-            else:
-                self._flush_watch(state, html, send_new=True, chat_id=chat_id)
-        except Exception:
-            log.exception("watch card failed chat=%s", chat_id)
+    def _cmd_stop_watch(self, chat_id: int) -> None:
+        self._write_settings({"watch": False})
+        self._reply(chat_id, "已暂停全部比分推送。赛事提醒还在。\n恢复发 <code>/watch</code>")
 
     def _cmd_watch(self, chat_id: int, arg: str) -> None:
-        raw = arg.strip()
-        w = self.watch
-        live = w is not None and not w.stop.is_set()
-        if not raw:
-            if live and w is not None:
-                self._join_watch(w, chat_id)
-                return
-            self._reply(
-                chat_id,
-                "用法: /watch 2396932\n已有观赛时本群发 /watch 即可加入",
-            )
+        raw = arg.strip().lower()
+        if raw in {"0", "off", "false", "no", "关", "关闭"}:
+            self._cmd_stop_watch(chat_id)
             return
-        try:
-            meta = fetch_match_meta(self.session, raw)
-        except CloudflareError as e:
-            self._reply(chat_id, f"详情页 Cloudflare：{e}\n发 /cookie 更新 Cookie")
-            return
-        list_id = meta.get("scorebotId") or "".join(ch for ch in raw if ch.isdigit())
-        if not list_id:
-            self._reply(chat_id, "没有 data-scorebot-id")
-            return
-        list_id = str(list_id)
-        if live and w is not None and w.list_id == list_id:
-            self._join_watch(w, chat_id)
-            return
-        old_cards: dict[int, WatchCard] = {}
-        if live and w is not None:
-            old_cards = dict(w.cards)
-        self._stop_watch()
-        t1, t2 = meta.get("team1") or "?", meta.get("team2") or "?"
-        log.info("watch start listId=%s %s vs %s url=%s", list_id, t1, t2, meta.get("url"))
-        self._ws_fail.reset()
-        state = WatchState(
-            list_id=list_id,
-            meta=meta,
-            cards=old_cards,
-            last_bump=time.time(),
-            debug_view=True,
-        )
-        append_trace(state.trace, f"watch start listId={list_id} {t1} vs {t2}")
-        html, _, _ = render_watch(state, None, [])
-        targets = {int(chat_id)}
-        targets.update(old_cards)
-        for cid in sorted(targets):
-            self._put_watch_card(state, cid, html)
-        self.watch = state
-        self._thread = threading.Thread(target=self._watch_loop, args=(state,), daemon=True)
-        self._thread.start()
-        self._reply(chat_id, self._watch_hint(list_id))
-
-    def _cmd_bump(self, chat_id: int) -> None:
-        w = self.watch
-        if not w or w.stop.is_set() or not w.text:
-            self._reply(chat_id, "没有正在 watch 的消息")
-            return
-        card = w.cards.get(int(chat_id))
-        log.info("bump chat=%s old_msg=%s", chat_id, card.message_id if card else None)
-        self._flush_watch(w, w.text, send_new=True, chat_id=chat_id)
-
-    def _cmd_stop(self, chat_id: int, arg: str = "") -> None:
-        w = self.watch
-        if not w or w.stop.is_set():
-            self._reply(chat_id, "没有正在 watch")
-            return
-        if arg.strip().lower() in {"all", "全部", "*"}:
-            n = len(w.cards)
-            self._stop_watch(delete_cards=True)
-            self._reply(chat_id, f"已停止全部（{n} 个群）")
-            return
-        self._delete_watch_cards(w, chat_id=int(chat_id))
-        w.cards.pop(int(chat_id), None)
-        if not w.cards:
-            self._stop_watch()
-            self._reply(chat_id, "已停止")
-            return
-        log.info("watch leave chat=%s remaining=%s", chat_id, list(w.cards))
-        self._reply(
-            chat_id,
-            "本群已退出。其它群仍在观赛。全部停止发 /stop all",
-        )
-
-    def _cmd_status(self, chat_id: int) -> None:
-        names = self.session.cookie_names()
-        w = self.watch
-        watch_line = "idle"
-        if w and not w.stop.is_set():
-            cards = ",".join(
-                f"{c.chat_id}:{c.message_id}" for c in w.cards.values()
-            ) or "-"
-            watch_line = f"watching {w.list_id} cards={cards}"
-        from datetime import datetime, timedelta, timezone
-        cst = timezone(timedelta(hours=8))
-        deployed_str = datetime.fromtimestamp(self.started_at, cst).strftime("%m-%d %H:%M:%S")
-        exported = "-"
-        if self.keeper_exported_at:
-            exported = f"{max(0.0, time.monotonic() - self.keeper_exported_at):.0f}s ago"
-        cdp_line = self.keeper_cdp if self.cdp_url else "off"
-        keeper_title = self.keeper_title or "-"
-        from hltv_bot.cdp import chrome_cgroup_bytes, vnc_up
-
-        rss = chrome_cgroup_bytes()
-        chrome_line = cdp_line
-        if rss is not None:
-            chrome_line = f"{cdp_line} {rss / 1048576:.0f}M"
-        tab = keeper_title
-        if self.keeper_url_seen:
-            tab = f"{keeper_title}"
-        cf_live = "yes" if self.keeper_clearance else "NO"
-        if self.keeper_challenge:
-            cf_live = "challenge"
-        http_via = (os.environ.get("HLTV_HTTP") or "chrome").strip().lower()
-        if http_via in {"curl", "cffi", "off", "0"}:
-            http_via = "curl"
-        else:
-            http_via = "chrome"
-
-        self._reply(
-            chat_id,
-            format_kv_table(
-                "Status",
-                [
-                    ("deployed", f"{deployed_str} (UTC+8)"),
-                    ("impersonate", h(self.session.impersonate)),
-                    ("cf_clearance", "yes" if self.session.has_clearance() else "NO"),
-                    ("cookies", h(", ".join(names) or "(none)")),
-                    ("session", h(str(self.session.path or ""))),
-                    ("chrome", h(chrome_line)),
-                    ("tab", h(tab)),
-                    ("cf live", h(cf_live)),
-                    ("vnc", "on" if vnc_up() else "off"),
-                    ("http", http_via),
-                    ("exported", h(exported)),
-                    ("watch", h(watch_line)),
-                    ("new card", "/bump only"),
-                    ("admins", h(", ".join(str(i) for i in sorted(self.admin_ids)))),
-                    ("groups", str(len(list_groups()))),
-                ],
-            ),
-        )
+        self._write_settings({"watch": True})
+        self._quiet(all_matches=True)
+        ignored = self._saved().get("ignored") or []
+        extra = ""
+        if ignored:
+            extra = "\n仍忽略 " + " ".join(f"<code>{h(mid)}</code>" for mid in ignored)
+        self._reply(chat_id, "比分推送已开。Major/T1 且至少 1 星的比赛都会拉。" + extra + "\n不补发暂停期间的旧比分。")
 
     def _cmd_allow(self, chat_id: int, arg: str, *, chat_title: str, chat_type: str) -> None:
         target = arg.strip()
@@ -691,22 +472,51 @@ class HltvTelegramBot:
             self._reply(chat_id, "在目标群里发 /allow，或 /allow -100xxxxxxxxxx")
             return
         added = add_group(gid, title)
-        log.info("allow chat=%s title=%s added=%s", gid, title, added)
-        self._reply(
-            chat_id,
-            ("已加入" if added else "已在名单里") + f" <code>{gid}</code> {title}".rstrip(),
-        )
+        self._reply(chat_id, ("已加入" if added else "已在名单里") + f" <code>{gid}</code> {title}".rstrip())
 
     def _cmd_deny(self, chat_id: int, arg: str) -> None:
         target = arg.strip()
-        if target.lstrip("-").isdigit():
-            gid = int(target)
-        else:
-            gid = int(chat_id)
+        gid = int(target) if target.lstrip("-").isdigit() else int(chat_id)
         if remove_group(gid):
             self._reply(chat_id, f"已移除 <code>{gid}</code>")
         else:
             self._reply(chat_id, f"名单里没有 <code>{gid}</code>")
+
+    def _cmd_groups(self, chat_id: int) -> None:
+        rows = list_groups()
+        if not rows:
+            self._reply(chat_id, "还没有通知群。把 bot 拉进群后发 /allow")
+            return
+        lines = ["<b>通知群</b>"]
+        for g in rows:
+            lines.append(f"• <code>{h(g.get('id'))}</code> {h(g.get('title') or '')}".rstrip())
+        self._reply(chat_id, "\n".join(lines))
+
+    def _cmd_status(self, chat_id: int) -> None:
+        cfg = self._cfg()
+        with self._state_lock:
+            tracked = len(self._state.get("matches") or {})
+            seeded = bool(self._state.get("matches_seeded"))
+        when = ""
+        if self.last_poll_at:
+            when = datetime.fromtimestamp(self.last_poll_at, CST).strftime("%m-%d %H:%M:%S")
+        lines = [
+            "<b>Status</b>",
+            "时区 <code>UTC+8</code>",
+            f"通知群 <b>{len(group_ids())}</b>",
+            f"无声 <b>{'yes' if self._silent() else 'no'}</b>",
+            f"赛事窗口 前 <b>{cfg.event_days}</b> 天 → 前 <b>{cfg.event_hours}</b> 小时",
+            f"比赛星级 ≥ <b>{cfg.min_stars}</b> 且 Major/T1",
+            f"比分推送 <b>{'on' if cfg.watch else 'off'}</b>",
+            f"忽略 <b>{len(cfg.ignored)}</b>",
+            f"cf_clearance <b>{'yes' if self.session.has_clearance() else 'no'}</b>",
+            "抓取 <code>curl</code>",
+            f"已跟踪比赛 <b>{tracked}</b> seeded=<code>{seeded}</code>",
+            f"上次轮询 <code>{h(when or '-')}</code>",
+        ]
+        if self.last_error:
+            lines.append(f"最近错误 <code>{h(self.last_error[:180])}</code>")
+        self._reply(chat_id, "\n".join(lines))
 
     def _cmd_debug(
         self,
@@ -716,365 +526,55 @@ class HltvTelegramBot:
         chat_title: str,
         chat_type: str,
     ) -> None:
-        rows = list_groups()
-        listed = int(chat_id) in group_ids()
-        group_html = (
-            "<br>".join(
-                f"<code>{h(g.get('id'))}</code> {h(g.get('title') or '')}" for g in rows
-            )
-            if rows
-            else "<i>empty</i>"
-        )
-        html = format_kv_table(
-            "debug",
-            [
-                ("user_id", f"<code>{h(user_id)}</code>"),
-                ("chat_id", f"<code>{h(chat_id)}</code>"),
-                ("chat_type", h(chat_type or "?")),
-                ("title", h(chat_title or "-")),
-                ("bot_admin", str(self.is_admin(user_id))),
-                ("can_setup", str(self.can_setup_chat(chat_id, user_id, chat_type))),
-                ("chat_listed", str(listed)),
-                ("admins", h(", ".join(str(i) for i in sorted(self.admin_ids)))),
-                ("groups", group_html),
-            ],
-        )
-        log.info(
-            "debug user=%s chat=%s type=%s listed=%s admin=%s groups=%s",
-            user_id,
+        self._reply(
             chat_id,
-            chat_type,
-            listed,
-            self.is_admin(user_id),
-            len(rows),
+            "\n".join(
+                [
+                    "<b>debug</b>",
+                    f"user <code>{h(user_id)}</code>",
+                    f"chat <code>{h(chat_id)}</code> {h(chat_type)} {h(chat_title)}",
+                    f"admin <code>{self.is_admin(user_id)}</code>",
+                    f"listed <code>{int(chat_id) in group_ids()}</code>",
+                ]
+            ),
         )
-        self._reply(chat_id, html)
-
-    def _cmd_groups(self, chat_id: int) -> None:
-        rows = list_groups()
-        if not rows:
-            self._reply(chat_id, "还没有授权群。把 bot 拉进群后发 /allow")
-            return
-        lines = ["<b>授权群</b>\n"]
-        for g in rows:
-            lines.append(f"• <code>{h(g.get('id'))}</code> {h(g.get('title') or '')}".rstrip())
-        self._reply(chat_id, "\n".join(lines))
-
-    def handle_added_to_chat(self, upd: dict) -> None:
-        member = upd.get("my_chat_member") or {}
-        chat = member.get("chat") or {}
-        new = (member.get("new_chat_member") or {}).get("status") or ""
-        old = (member.get("old_chat_member") or {}).get("status") or ""
-        from_id = (member.get("from") or {}).get("id")
-        cid = chat.get("id")
-        title = chat.get("title") or ""
-        ctype = chat.get("type") or ""
-        log.info(
-            "my_chat_member chat=%s type=%s title=%r from=%s %s -> %s",
-            cid,
-            ctype,
-            title,
-            from_id,
-            old,
-            new,
-        )
-        if new not in ("member", "administrator") or old in ("member", "administrator"):
-            return
-        if cid is None:
-            return
-        if self.can_setup_chat(int(cid), from_id, ctype):
-            self._reply(
-                cid,
-                f"<b>已进群</b>\n<b>{h(title)}</b>\n发 /allow 加入推送名单",
-            )
-            return
-        log.info("added to chat but adder cannot /allow from=%s", from_id)
-
-    def _session_path(self) -> Path:
-        return Path(self.session.path or "data/session.json")
 
     def _cmd_cookie(self, chat_id: int, arg: str, *, message_id: int | None) -> None:
         if arg.strip():
             self._apply_cookie(chat_id, arg, message_id=message_id)
             return
         self._await_cookie.add(chat_id)
-        self._reply(
-            chat_id,
-            "把 DevTools → Network → Cookie 整行贴过来（可带 Cookie: 前缀），\n"
-            "或直接贴整份 data/session.json。\n"
-            "发完后会尽量删掉你的消息。取消请发 /status。",
-        )
+        self._reply(chat_id, "把 Cookie 整行或 session.json 贴过来。取消发 /status。")
 
     def _apply_cookie(self, chat_id: int, raw: str, *, message_id: int | None) -> None:
         self._await_cookie.discard(chat_id)
-        orig = self.session
-        if not orig.path:
-            orig.path = self._session_path()
-        orig.apply_paste(raw)
-        names = orig.cookie_names()
+        if not self.session.path:
+            self.session.path = Path(os.environ.get("HLTV_SESSION") or "data/session.json")
+        self.session.apply_paste(raw)
+        names = self.session.cookie_names()
         if not names:
             self._reply(chat_id, "Cookie 是空的，没写入有效内容")
             return
         if message_id is not None:
             self.tg.delete_message(chat_id, message_id)
-        extra = ""
-        if self.watch and not self.watch.stop.is_set():
-            extra = "\n正在 watch：新 cookie 会在下一轮连接中使用；已断开的卡片重新 /watch。"
         self._reply(
             chat_id,
             "Cookie 已更新\n"
             f"cf_clearance: {'yes' if self.session.has_clearance() else 'NO（请贴完整头）'}\n"
-            f"names: {', '.join(names)}"
-            + extra,
+            f"names: {', '.join(names)}",
         )
 
-    def _delete_watch_cards(self, state: WatchState, *, chat_id: int | None = None) -> None:
-        cards = (
-            [state.cards[int(chat_id)]]
-            if chat_id is not None and int(chat_id) in state.cards
-            else list(state.cards.values())
-        )
-        for card in cards:
-            mid = card.message_id
-            if not mid:
-                continue
-            try:
-                self.tg.delete_message(card.chat_id, mid)
-                log.info("watch delete chat=%s msg=%s", card.chat_id, mid)
-            except Exception:
-                log.debug(
-                    "watch delete failed chat=%s msg=%s",
-                    card.chat_id,
-                    mid,
-                )
-            card.message_id = None
-
-    def _stop_watch(self, *, delete_cards: bool = False) -> None:
-        if self.watch:
-            if delete_cards:
-                self._delete_watch_cards(self.watch)
-            self.watch.stop.set()
-        self.watch = None
-        self._ws_fail.reset()
-        try:
-            from hltv_bot.cdp import close_extra_pages
-
-            close_extra_pages()
-        except Exception:
-            log.debug("close extra tabs after stop skipped", exc_info=True)
-
-    def _watch_loop(self, state: WatchState) -> None:
-        feed = ScorebotFeed()
-        try:
-            stream = iter_scorebot(
-                self.session,
-                state.list_id,
-                base=scorebot_base(state.meta.get("scorebotUrl")),
-                match_url=str(state.meta.get("url") or "") or None,
-            )
-            for name, payload in stream:
-                if state.stop.is_set() or self.watch is not state:
-                    log.info("watch stop listId=%s event=%s", state.list_id, name)
-                    return
-                log.debug("watch event %s %s", name, event_brief(name, payload))
-                status_changed = False
-                if name not in WATCH_EVENT_NAMES:
-                    log.debug("watch ignore event %s", name)
-                    continue
-                if name == "trace" and isinstance(payload, dict):
-                    text = str(payload.get("text") or "")
-                    append_trace(state.trace, text)
-                    if text:
-                        log.info("watch %s", clip(text, 200))
-                    live_ok = bool(feed.board) and not watch_debug_mode(
-                        state.link,
-                        has_board=True,
-                        last_data_at=state.last_data_at,
-                        now=time.time(),
-                    )
-                    if live_ok:
-                        continue
-                elif name == "ws_fail" and isinstance(payload, dict):
-                    self._on_ws_fail(state, payload)
-                    continue
-                elif name == "status" and isinstance(payload, dict):
-                    apply_link_status(state, payload)
-                    if state.transport == "ws":
-                        self._ws_fail.reset()
-                    status_changed = True
-                    append_trace(state.trace, f"link {state.link} {state.notice}".strip())
-                    log.info(
-                        "watch link %s notice=%s next_at=%.0f",
-                        state.link,
-                        state.notice,
-                        state.next_at,
-                    )
-                elif name == "scoreboard" and isinstance(payload, dict):
-                    changed = feed.apply_scoreboard(payload)
-                    state.last_data_at = time.time()
-                    if changed:
-                        log.info("watch scoreboard %s", feed.last_board_brief)
-                elif name in LOG_EVENT_NAMES:
-                    before = len(feed.log)
-                    feed.apply_log(payload)
-                    state.last_data_at = time.time()
-                    log.info(
-                        "watch log %s feed %s -> %s",
-                        event_brief(name, payload),
-                        before,
-                        len(feed.log),
-                    )
-                elif name == "tick":
-                    now = time.time()
-                    if (
-                        feed.board
-                        and state.last_data_at
-                        and (now - state.last_data_at) >= WATCH_STALE
-                        and not state.debug_view
-                    ):
-                        match_ended = False
-                        match_url = str(state.meta.get("url") or "")
-                        if match_url:
-                            try:
-                                meta_chk = fetch_match_meta(self.session, match_url, timeout=6.0)
-                                if meta_chk and meta_chk.get("live") == "0":
-                                    match_ended = True
-                            except Exception:
-                                pass
-                        if match_ended:
-                            log.info("match finished confirmed listId=%s url=%s", state.list_id, match_url)
-                            self._settle_watch(state, feed.board, feed.log)
-                            return
-                        append_trace(
-                            state.trace,
-                            f"stale no scoreboard/log {int(now - state.last_data_at)}s",
-                        )
-                        status_changed = True
-                    elif (
-                        state.pending
-                        and state.text
-                        and not state.edits_frozen(now)
-                        and (now - state.last_edit) >= watch_edit_interval(state)
-                    ):
-                        self._flush_watch(state, state.text)
-                        continue
-                    else:
-                        continue
-                self._commit_watch(
-                    state,
-                    feed.board,
-                    feed.log,
-                    status_changed=status_changed,
-                    event_name=name,
-                )
-        except CloudflareError as e:
-            state.notice = f"Cloudflare {e.status} · /cookie"
-            state.next_at = 0.0
-            append_trace(state.trace, state.notice)
-            self._mark_watch_down(state, "disconnected")
-            self._notify_admins(f"⚠️ <b>HLTV Cookie 已失效 (Cloudflare {e.status})</b>\n请在有环境的机器烤好后发 /cookie 更新")
-        except Exception as e:
-            state.notice = str(e)[:80] or "ended"
-            append_trace(state.trace, state.notice)
-            if feed.board:
-                self._settle_watch(state, feed.board, feed.log)
-            else:
-                self._mark_watch_down(state, "disconnected")
-            if not state.stop.is_set():
-                log.info("watch ended: %s", e)
-
-    def _commit_watch(
-        self,
-        state: WatchState,
-        board: dict,
-        log_rows: list,
-        *,
-        status_changed: bool,
-        event_name: str,
-    ) -> None:
-        html, snap, debug = render_watch(state, board, log_rows)
-        fp = watch_fingerprint(
-            snap,
-            debug=debug,
-            link=state.link,
-            notice=state.notice,
-            next_at=state.next_at,
-            trace_tail=state.trace[-1] if state.trace else "",
-        )
-        mode_switch = debug != state.debug_view
-        if fp == state.fingerprint and not status_changed and not mode_switch:
-            log.debug("watch skip unchanged fp=%s", clip(fp, 120))
+    def handle_added_to_chat(self, upd: dict) -> None:
+        member = upd.get("my_chat_member") or {}
+        chat = member.get("chat") or {}
+        new = (member.get("new_chat_member") or {}).get("status") or ""
+        old = (member.get("old_chat_member") or {}).get("status") or ""
+        cid = chat.get("id")
+        if new not in ("member", "administrator") or old in ("member", "administrator") or cid is None:
             return
-        state.debug_view = debug
-        state.text = html
-        state.last_snap = snap
-        state.fingerprint = fp
-        state.pending = True
-        now = time.time()
-        if state.edits_frozen(now):
-            log.debug("watch defer frozen for %.1fs %s", state.edit_frozen_until - now, snap_brief(snap))
-            return
-        wait = now - state.last_edit
-        if wait < watch_edit_interval(state):
-            log.debug(
-                "watch defer interval wait=%.2fs %s",
-                wait,
-                snap_brief(snap),
-            )
-            return
-        log.debug(
-            "watch render %s html=%s debug=%s %s",
-            event_name,
-            len(html),
-            debug,
-            snap_brief(snap),
-        )
-        self._flush_watch(state, html)
-
-    def _notify_admins(self, text: str) -> None:
-        """Plain HTML to admin DMs. No auto-delete; not a watch card."""
-        for aid in sorted(self.admin_ids):
-            try:
-                self.tg.send_message(aid, text)
-            except Exception:
-                log.exception("notify admin %s", aid)
-
-    def _notify_admins_photo(
-        self,
-        photo_bytes: bytes,
-        *,
-        caption: str,
-        filename: str = "cf-challenge.png",
-    ) -> None:
-        for aid in sorted(self.admin_ids):
-            try:
-                self.tg.send_photo(aid, photo_bytes, caption=caption[:1024], filename=filename)
-            except Exception:
-                log.exception("notify admin photo %s", aid)
-
-    def _on_ws_fail(self, state: WatchState, payload: dict) -> None:
-        err = str(payload.get("error") or "websocket failed")
-        now = time.monotonic()
-        if not self._ws_fail.note(err, now):
-            log.debug("ws fail queued n=%s pending=%s", self._ws_fail.n, self._ws_fail.pending)
-            return
-        info = self._ws_fail.consume(now)
-        t1 = str(state.meta.get("team1") or "?")
-        t2 = str(state.meta.get("team2") or "?")
-        text = (
-            f"<b>scorebot WS 持续失败</b> ×{info['total']} / {fmt_span(info['elapsed'])}\n"
-            f"listId=<code>{h(state.list_id)}</code> {h(t1)} vs {h(t2)}\n"
-            f"本批 {info['n']} 次 · 退避重试中 · 每 {int(WS_RETRY_EVERY)}s 再试\n"
-            f"last: <code>{h(info['error'])}</code>"
-        )
-        log.info(
-            "ws fail admin n=%s total=%s listId=%s last=%s",
-            info["n"],
-            info["total"],
-            state.list_id,
-            clip(info["error"], 80),
-        )
-        self._notify_admins(text)
+        from_id = (member.get("from") or {}).get("id")
+        if self.can_setup_chat(int(cid), from_id, chat.get("type") or ""):
+            self._reply(int(cid), f"<b>已进群</b>\n<b>{h(chat.get('title') or '')}</b>\n发 /allow 加入通知")
 
     def _schedule_delete(self, chat_id: int, message_id: int) -> None:
         delay = float(self.msg_ttl or 0)
@@ -1087,9 +587,7 @@ class HltvTelegramBot:
             except Exception:
                 log.debug("delete_message chat=%s msg=%s failed", chat_id, message_id)
 
-        t = threading.Timer(delay, _run)
-        t.daemon = True
-        t.start()
+        threading.Timer(delay, _run).start()
 
     def _reply(self, chat_id: int, text: str) -> dict:
         msg = self.tg.send_message(chat_id, text)
@@ -1098,157 +596,158 @@ class HltvTelegramBot:
             self._schedule_delete(chat_id, int(mid))
         return msg
 
-    def _reply_photo(
-        self,
-        chat_id: int,
-        photo_bytes: bytes,
-        *,
-        caption: str = "",
-        filename: str = "matches.png",
-    ) -> dict:
-        msg = self.tg.send_photo(chat_id, photo_bytes, caption=caption, filename=filename)
-        mid = msg.get("message_id") if isinstance(msg, dict) else None
-        if mid is not None:
-            self._schedule_delete(chat_id, int(mid))
-        return msg
-
-    def _send_rich(self, chat_id: int, html: str) -> dict:
-        try:
-            return self.tg.send_rich(chat_id, html)
-        except Exception as e:
-            log.warning("sendRichMessage failed: %s html=%s", e, clip(html, 240))
-            return self.tg.send_rich(chat_id, plain_to_rich(html))
-
-    def _flush_watch(
-        self,
-        state: WatchState,
-        html: str | None = None,
-        *,
-        send_new: bool = False,
-        chat_id: int | None = None,
-    ) -> None:
-        body = html or ""
-        if not body:
-            return
-        now = time.time()
-        snap = state.last_snap or {}
-        state.text = body
-        if not send_new and state.edits_frozen(now):
-            state.pending = True
-            log.debug("watch edit frozen for %.1fs", state.edit_frozen_until - now)
-            return
-        if send_new:
-            cid = int(chat_id) if chat_id is not None else next(iter(state.cards), 0)
-            if not cid:
-                log.warning("watch send skipped: no chat")
-                return
-            card = state.card(cid)
-            msg = self._send_rich(cid, body)
-            if isinstance(msg, dict) and msg.get("message_id"):
-                card.message_id = msg["message_id"]
-            card.sent_html = body
-            card.record_edit(now)
-            state.last_bump = now
-            state.last_edit = now
-            state.pending = False
-            log.info(
-                "watch send chat=%s msg=%s %s",
-                cid,
-                card.message_id,
-                snap_brief(snap),
-            )
-            return
-        targets = [state.card(chat_id)] if chat_id is not None else list(state.cards.values())
-        if not targets:
-            log.warning("watch edit skipped: no cards (will not send a new card)")
-            return
-        edited = False
-        for card in targets:
-            mid = card.message_id
-            if not body or body == card.sent_html:
-                continue
-            if not mid:
-                log.warning(
-                    "watch edit skipped: no message id chat=%s (will not send a new card)",
-                    card.chat_id,
-                )
-                continue
-            if not card.can_edit(now):
-                state.pending = True
-                log.debug("watch edit rate limited chat=%s msg=%s", card.chat_id, mid)
-                continue
+    def _notify_admins(self, text: str) -> None:
+        for aid in sorted(self.admin_ids):
             try:
-                self.tg.edit_rich(card.chat_id, mid, body)
-                card.record_edit(now)
-                log.info(
-                    "watch edit chat=%s msg=%s %s",
-                    card.chat_id,
-                    mid,
-                    snap_brief(snap),
-                )
-            except TelegramRateLimit as e:
-                wait = state.freeze_edits(now, e.retry_after)
-                log.warning(
-                    "watch edit 429 freeze %.0fs chat=%s retry_after=%.0f",
-                    wait,
-                    card.chat_id,
-                    e.retry_after,
-                )
-                return
-            except Exception as e:
-                if is_not_modified(e):
-                    log.debug("watch not modified chat=%s msg=%s", card.chat_id, mid)
-                else:
-                    log.warning(
-                        "watch edit_rich failed chat=%s: %s html=%s",
-                        card.chat_id,
-                        e,
-                        clip(body, 240),
-                    )
-                    continue
-            card.sent_html = body
-            card.message_id = mid
-            edited = True
-        if edited:
-            state.pending = False
-            state.last_edit = now
-
-    def _settle_watch(self, state: WatchState, board: dict, feed: list) -> None:
-        state.link = "ended"
-        state.notice = state.notice or "ended"
-        html, snap, _ = render_watch(state, board, feed, debug=False, live=False)
-        state.text = html
-        state.last_snap = snap
-        try:
-            self._flush_watch(state, html)
-        except Exception:
-            log.debug("settle flush failed", exc_info=True)
-
-    def _mark_watch_down(self, state: WatchState, link: str) -> None:
-        state.link = link
-        if state.last_snap and (state.last_snap.get("teams") or state.last_snap.get("scoreText")):
-            snap = dict(state.last_snap)
-            snap["link"] = link
-            snap["notice"] = state.notice
-            snap["next_at"] = state.next_at
-            state.last_snap = snap
-            try:
-                self._flush_watch(state, format_rich_watch_card(snap))
+                self.tg.send_message(aid, text)
             except Exception:
-                log.debug("watch down keep board failed", exc_info=True)
+                log.exception("notify admin %s", aid)
+
+    def _notify_admins_photo(self, photo_bytes: bytes, *, caption: str, filename: str = "cf-challenge.png") -> None:
+        for aid in sorted(self.admin_ids):
+            try:
+                self.tg.send_photo(aid, photo_bytes, caption=caption[:1024], filename=filename)
+            except Exception:
+                log.exception("notify admin photo %s", aid)
+
+    def _broadcast(self, html: str) -> None:
+        silent = self._silent()
+        ids = sorted(group_ids())
+        if not ids:
+            log.info("remind skipped, no groups: %s", html.replace("\n", " ")[:120])
             return
-        state.debug_view = True
-        snap = dict(state.last_snap or {"live": True, "teams": [], "log": []})
-        snap["link"] = link
-        snap["notice"] = state.notice
-        snap["next_at"] = state.next_at
-        state.last_snap = snap
+        for gid in ids:
+            try:
+                self.tg.send_message(gid, html, silent=silent)
+            except Exception:
+                log.exception("remind chat=%s", gid)
+
+    def _note_cf(self, where: str, err: Exception) -> None:
+        self.last_error = f"{where}: {err}"
+        now = time.monotonic()
+        if self._cf_alerted_at and now - self._cf_alerted_at < CF_ALERT_EVERY:
+            return
+        self._cf_alerted_at = now
+        self._notify_admins(f"<b>HLTV Cookie 失效</b>\n{h(where)}\n发 /cookie 更新")
+
+    def _events_once(self) -> list | None:
+        if self._events_loaded:
+            return self._event_rows
+        if time.monotonic() < self._events_retry_at:
+            return None
         try:
-            html, _, _ = render_watch(state, None, [], debug=True)
-            state.text = html
-            self._flush_watch(state, html)
-        except Exception:
-            pass
+            self._event_rows = fetch_events(self.session)
+        except CloudflareError as e:
+            self._note_cf("events", e)
+            self._events_retry_at = time.monotonic() + 300
+            return None
+        except Exception as e:
+            self.last_error = f"events: {e}"
+            log.exception("fetch events")
+            self._events_retry_at = time.monotonic() + 300
+            return None
+        self._events_loaded = True
+        log.info("events loaded once n=%s", len(self._event_rows or []))
+        return self._event_rows
+
+    def _pending_start(self) -> list[dict]:
+        """LIVE rows that still need the match page to see log start."""
+        cfg = self._cfg()
+        if not cfg.watch:
+            return []
+        out: list[dict] = []
+        for row in self._list_rows:
+            if row.get("live") != "1":
+                continue
+            mid = str(row.get("id") or "")
+            if not mid or mid in cfg.ignored or not match_allowed(row, cfg):
+                continue
+            if self._page.get(mid, {}).get("started") == "1":
+                continue
+            out.append(row)
+        return out
+
+    def _merge_rows(self) -> list[dict]:
+        merged: list[dict] = []
+        for row in self._list_rows:
+            item = dict(row)
+            extra = self._page.get(str(item.get("id") or ""))
+            if extra:
+                item.update(extra)
+            merged.append(item)
+        return merged
+
+    def _refresh_list(self) -> None:
+        try:
+            self._list_rows = fetch_matches(self.session)
+        except CloudflareError as e:
+            self._note_cf("matches", e)
+            return
+        except Exception as e:
+            self.last_error = f"matches: {e}"
+            log.exception("fetch matches")
+            return
+        self._list_at = time.monotonic()
+        alive = {str(r.get("id") or "") for r in self._list_rows}
+        self._page = {k: v for k, v in self._page.items() if k in alive}
+
+    def _refresh_page(self, row: dict) -> None:
+        mid = str(row.get("id") or "")
+        try:
+            board = fetch_match_board(self.session, str(row.get("url") or mid))
+        except Exception as e:
+            log.warning("match page %s: %s", mid, e)
+            return
+        # The page is only for the start log. Series and map numbers stay on the list,
+        # so a BO3's 1-0 is not replaced by one map's 8-6.
+        if board.get("started") or self._page.get(mid, {}).get("started") == "1":
+            self._page[mid] = {"started": "1"}
+        else:
+            self._page[mid] = {}
+
+    def tick_reminders(self) -> int:
+        events = self._events_once()
+        pending = self._pending_start()
+        # Odd turns, and only while someone is waiting for log start: one match page.
+        # Every other turn, and the whole series after start: the matches list.
+        if pending and self._list_at and self._rr % 2 == 1:
+            row = pending[(self._rr // 2) % len(pending)]
+            self._refresh_page(row)
+        else:
+            self._refresh_list()
+        self._rr += 1
+        rows = self._merge_rows() if self._list_at else None
+        if rows is None and events is None:
+            return 0
+        with self._state_lock:
+            state, notes = plan_reminders(
+                self._state,
+                rows,
+                events,
+                now=datetime.now(CST),
+                cfg=self._cfg(),
+            )
+            self._state = state
+            _save_state(state, self.state_path)
+        self.last_poll_at = time.time()
+        if rows is not None and events is not None:
+            self.last_error = ""
+        for note in notes:
+            log.info("remind %s", note.key)
+            self._broadcast(note.html)
+        return len(notes)
+
+    def _poll_loop(self) -> None:
+        while not self._stop.is_set():
+            began = time.monotonic()
+            try:
+                self.tick_reminders()
+            except Exception:
+                log.exception("remind tick")
+            target = random.uniform(MATCH_PAGE_MIN, MATCH_PAGE_MAX)
+            wait = max(0.0, target - (time.monotonic() - began))
+            log.info("next poll in %.0fs", wait)
+            self._stop.wait(wait)
 
     def register_commands(self) -> None:
         jobs: list[tuple[list[dict], dict | None]] = [
@@ -1269,29 +768,22 @@ class HltvTelegramBot:
                 raise
 
     def run(self) -> None:
-        log.info("bot start admins=%s", sorted(self.admin_ids))
-        from hltv_bot.keeper import start_keeper_thread
-
-        start_keeper_thread(self)
+        log.info("bot start admins=%s groups=%s http=curl", sorted(self.admin_ids), sorted(group_ids()))
+        threading.Thread(target=self._poll_loop, daemon=True, name="hltv-remind").start()
         try:
             self.register_commands()
-            log.info("setMyCommands ok")
         except Exception:
             log.exception("setMyCommands failed")
         offset = 0
-        while True:
+        while not self._stop.is_set():
             try:
                 updates = self.tg.get_updates(offset=offset, timeout=25)
             except Exception:
                 log.exception("getUpdates failed")
                 time.sleep(GET_UPDATES_FAIL_SLEEP)
                 continue
-            if updates:
-                log.info("updates n=%s", len(updates))
             for upd in updates:
-                offset = upd["update_id"] + 1
-                keys = [k for k in upd if k != "update_id"]
-                log.info("update id=%s keys=%s", upd.get("update_id"), keys)
+                offset = int(upd["update_id"]) + 1
                 if upd.get("my_chat_member"):
                     try:
                         self.handle_added_to_chat(upd)
@@ -1303,7 +795,6 @@ class HltvTelegramBot:
                 chat = msg.get("chat") or {}
                 cid = chat.get("id")
                 if cid is None or not text:
-                    log.info("skip empty chat=%s text=%r", cid, text)
                     continue
                 try:
                     self.handle_text(
@@ -1317,7 +808,7 @@ class HltvTelegramBot:
                 except Exception as e:
                     log.exception("handle_text chat=%s", cid)
                     try:
-                        self._reply(cid, f"错误: {e}")
+                        self._reply(int(cid), f"错误: {e}")
                     except Exception:
                         pass
 
@@ -1335,7 +826,6 @@ def bot_from_env() -> HltvTelegramBot:
     session_path = os.environ.get("HLTV_SESSION") or "data/session.json"
     if not Path(session_path).exists():
         raise SystemExit(f"缺少 {session_path}（复制 data/session.example.json 并贴入 Cookie）")
-    bump = float(os.environ.get("HLTV_BUMP_SECONDS") or "0")
     raw_admins = os.environ.get("TELEGRAM_ADMIN_IDS") or str(DEFAULT_ADMIN_ID)
     admin_ids: set[int] = set()
     for part in raw_admins.replace(";", ",").split(","):
@@ -1347,14 +837,11 @@ def bot_from_env() -> HltvTelegramBot:
     seed = os.environ.get("TELEGRAM_CHAT_ID") or ""
     if seed.strip().lstrip("-").isdigit():
         add_group(int(seed.strip()), "seed")
-    from hltv_bot.keeper import cdp_url_from_env, export_every_from_env
-
+    os.environ.setdefault("HLTV_HTTP", "curl")
+    os.environ.setdefault("HLTV_SCOREBOT", "off")
     return HltvTelegramBot(
         Telegram(token),
         load_session(session_path),
         admin_ids=admin_ids,
-        bump_seconds=bump,
-        cdp_url=cdp_url_from_env(os.environ.get("HLTV_CDP_URL")),
-        keeper_url=os.environ.get("HLTV_KEEPER_URL") or None,
-        export_every=export_every_from_env(os.environ.get("HLTV_CDP_EXPORT_EVERY")),
+        cdp_url=None,
     )

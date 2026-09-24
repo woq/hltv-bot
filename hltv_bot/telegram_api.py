@@ -167,16 +167,16 @@ class Telegram:
             retry_429=False,
         )
 
-    def send_message(self, chat_id: int | str, text: str) -> dict:
-        return self._call(
-            "sendMessage",
-            {
-                "chat_id": chat_id,
-                "text": text[:4000],
-                "parse_mode": "HTML",
-                "disable_web_page_preview": True,
-            },
-        )
+    def send_message(self, chat_id: int | str, text: str, *, silent: bool = False) -> dict:
+        payload = {
+            "chat_id": chat_id,
+            "text": text[:4000],
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True,
+        }
+        if silent:
+            payload["disable_notification"] = True
+        return self._call("sendMessage", payload)
 
     def send_photo(
         self,

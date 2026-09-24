@@ -1,6 +1,61 @@
 from hltv_bot.matches import format_start_time, parse_match_list, parse_match_meta, pretty_name
 
 
+def test_live_log_start_is_not_the_list_live_flag():
+    from hltv_bot.matches import live_log_started
+
+    assert live_log_started('<div class="countdown">Starting soon</div>') is False
+    assert live_log_started('<div class="live-log"><div class="log-row">start</div></div>') is True
+    assert live_log_started('<div class="scorebot">Round start</div>') is True
+    assert live_log_started('{"text":"start"}') is True
+
+
+def test_parse_match_board_streak_is_the_trailing_run():
+    from hltv_bot.matches import parse_match_board
+
+    def cells(wins: list[bool]) -> str:
+        bits = []
+        for won in wins:
+            if won:
+                bits.append('<img class="round-history-outcome" title="won">')
+            else:
+                bits.append('<div class="round-history-bar t empty"></div>')
+        return "".join(bits)
+
+    # G2 drops one, then takes five straight. Spirit is the other row.
+    g2 = [False, True, True, True, True, True]
+    spirit = [not x for x in g2]
+    html = f"""
+    <div class="mapholder">
+      <div class="results-teamname">G2</div>
+      <div class="results-team-score">6</div>
+      <div class="mapname">Dust2</div>
+      <div class="results-team-score">1</div>
+      <div class="results-teamname">Spirit</div>
+      <div class="round-history-team">{cells(g2)}</div>
+      <div class="round-history-team">{cells(spirit)}</div>
+    </div>
+    """
+    board = parse_match_board(html)
+    assert board["map"] == "Dust2"
+    assert board["map_score"] == "6-1"
+    assert board["streak"] == 5
+    assert board["streak_team"] == "G2"
+
+
+def test_parse_match_list_reads_series_score():
+    html = """
+    <div class="liveMatch">
+      <div class="matchTeam"><div class="matchTeamName">G2</div><div class="matchTeamScore">1</div></div>
+      <div class="matchTeam"><div class="matchTeamName">Spirit</div><div class="matchTeamScore">0</div></div>
+      <a href="/matches/2396932/g2-vs-spirit-blast">x</a>
+    </div>
+    """
+    rows = parse_match_list(html)
+    assert rows[0]["score1"] == "1"
+    assert rows[0]["score2"] == "0"
+
+
 def test_parse_match_list_dedupes():
     html = """
     <div class="liveMatch-container">

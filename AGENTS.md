@@ -1,13 +1,15 @@
 # Agent notes
 
-## Telegram 输出
+## 主线
 
-分流，不要把所有出站都做成 Rich。细则：`docs/rich-message.md`。
+主线是 API 提醒，不启动完整 Chrome。完整 Chrome / 页内记分板在分支 `archive/chrome-full`。
 
-- **`/watch` / `/bump`**：Rich Message。全局只 watch 一场。卡片只发给发过 `/watch` 的群（已有场次本群 `/watch` 加入）；不要默认广播所有授权群。新卡片只有该群 `/bump`。`/stop` 退本群并删除该群观赛卡片，`/stop all` 停全部并删掉所有观赛卡片。换比赛不要删旧卡片，原地 edit。
-- **`/matches` 和其余通知**：`/matches` 默认渲染深色图片（`sendPhoto`，支持 `T1`/`T2`/`T3` 评级筛选，附快捷 `/watch` 命令）并支持 `text` 纯文本回退；其余通知普通 `sendMessage` + HTML。好复制，**不用**按 Rich 规范检查。30s 后自动删（用户命令也删；若群组未授予 Bot 删消息管理员权限则跳过，**`/watch` 命令和观赛卡片不删**）。
-- 记分板为**单条** Rich：比分表 + 回合史 + 名单简表 + log + 链接状态整合在同一条消息内。不要 h3/ul/footer 文章壳。log 文案全英语。最小编辑间隔 3s，每分钟最多 19 次滑动窗口；超出或 429 时合并延迟，不发新卡片。`/bump` 是新消息，不占 edit 配额。alive 抖动不单独触发 edit。
-- 拿不到数据时改成 DEBUG 痕迹；恢复后再 edit 回记分板。有过比分后链路断开则结算（LIVE→SCORE），不拆卡片。
+- 抓取默认 `HLTV_HTTP=curl`（`curl_cffi` + `data/session.json`）。不要在 `run()` 里启动 keeper，也不要 `systemctl start hltv-chrome`。
+- 通知只发 `data/chats.json` 里的群，默认 `disable_notification`（`/silent off` 才响）。
+- 时间一律 **UTC+8**。
+- 比赛：星级达到 `/stars`（默认 1）**并且**赛事名是 Major/T1。开赛前 15 分钟一条。比分只跟赛程总页，一份请求覆盖同时进行的 BO1/BO3/BO5，间隔 3–5 秒。总页 LIVE 不发「已开赛」。真正开打才进比赛页看 live log 的 `start`，而且只在还没看到 start 时、每隔一次总页请求才打开一场；看到 start 后整场 BO 都不再进比赛页。比分单边连加到 ≥5 时加一行 `⚡`。从列表消失时结束一条。`/ignore id` 丢掉一场，`/stop` 暂停全部比分推送，`/watch` 恢复且不补发。进程起来后的第一次成功轮询只记账。
+- 赛事：只要 Major / T1。启动时拉一次赛事页，开赛时间之后本地计时，不再请求赛事页。窗口是开赛前 N 天到前 N 小时（`/window`，默认 7 天 → 6 小时），阶段是「进入窗口 / 剩 1 天 / 到达 N 小时」。
+- `/matches`、`/events` 是文本回复，30 秒后删。没有 `/watch` 卡片。
 
 ## 提交 / push 前
 

@@ -37,6 +37,7 @@ jobs:
             --exclude 'data/session.json' \
             --exclude 'data/chats.json' \
             --exclude 'data/settings.json' \
+            --exclude 'data/reminders.json' \
             ./ "$HOST:/opt/hltv-bot/"
           $SSH "$HOST" bash -s <<'REMOTE'
           set -euo pipefail

@@ -1,8 +1,8 @@
 # hltv-bot
 
-HLTV 比赛列表 / 详情 / Scorebot 长连接（Game log）+ Telegram：`/matches` 默认深色图片（`text` 才是纯文本）；`/watch` 用 Rich Message 原地 `edit`；刷下去时 `/bump` 再发一条。
+HLTV 赛程和赛事页（`curl_cffi`）+ Telegram 提醒。时间 **UTC+8**。通知发到已授权群，默认无声。
 
-线上 Scorebot 走常驻 Chrome 比赛页里的 WebSocket。`curl_cffi` 只在 Chrome 不可用、或 `HLTV_SCOREBOT=curl` 时做握手再 Upgrade。
+完整 Chrome 记分板在分支 `archive/chrome-full`，主线不启动它。Cookie 仍用 `/cookie` 贴到 `data/session.json`。
 
 ## 文档
 
@@ -89,32 +89,33 @@ python3 -m hltv_bot bot
 
 | 命令 | |
 |---|---|
-| `/matches` | 今日比赛 |
-| `/watch` | 本群观赛；已有场次发 `/watch` 加入 |
-| `/bump` | 顶到最新 |
-| `/stop` | 本群退出；`/stop all` 停全部 |
-| `/allow` | 授权本群 |
-| `/deny` | 取消授权 |
-| `/groups` | 已授权群 |
+| `/matches` | 比赛列表。`t2` / `t3` / `all` 放宽筛选 |
+| `/events` | Major / T1 赛事 |
+| `/groups` | 通知群 |
+| `/ignore 比赛id` | 这场不再推比分 |
+| `/unignore 比赛id` | 恢复这场。不补发当前比分 |
+| `/stop` | 暂停全部比分推送。赛事提醒还在 |
+| `/watch` | 恢复比分推送 |
+| `/allow` | 把本群加入通知 |
+| `/deny` | 移出通知 |
+| `/window 7 6` | 赛事提醒：开赛前 7 天，直到前 6 小时 |
+| `/stars 1` | 比赛提醒最低星级 |
+| `/silent` | 无声开关，默认开 |
 | `/cookie` | 更新 Cookie |
 | `/status` | 状态 |
 
 默认管理员 Telegram user id：`1442477170`（`.env` 里 `TELEGRAM_ADMIN_IDS`，逗号分隔可加多个）。
 
-把 bot 拉进私有群后，用该账号发 `/allow`。直播命令只在已授权群生效；`/allow` `/deny` `/groups` `/cookie` `/status` 仅管理员。
+把 bot 拉进群后，用管理员账号发 `/allow`。开赛、比分、赛事提醒只发这些群，默认无声。比赛要至少 1 星，并且赛事是 Major 或 T1。比分看赛程总页，每 3–5 秒一次，同时打的 BO1/BO3/BO5 都在这一页上。LIVE 只是直播位；还没在比赛页 live log 里看到 start 之前，才会抽空打开那场页面，看到之后就不再进。赛事页只在启动时拉一次，之后按固定开赛时间本地提醒。一方比分连续单边上涨满 5 分，消息里会多一行标记。`/ignore`、`/stop`、`/watch` 和其它管理命令只给管理员。
 
-Watch **全局一场** Scorebot。默认**只给发了 `/watch` 的群**发卡片；其它群自己 `/watch`（可无 id）加入。新卡片只有该群手动 `/bump`。`/stop` 退出本群，`/stop all` 停全部。
-
-普通回复和用户命令（**除 `/watch`**）30 秒后自动删，避免刷屏；观赛卡片一直留着。
+命令回复 30 秒后自动删。提醒消息留着。
 
 ## 建议跑在哪
 
-启动时会调用 Telegram `setMyCommands`：群里是 matches/watch/bump/stop，私聊管理员额外有 allow/deny/groups/cookie/status。点输入框 `/` 就能看到。若群里 bot 收不到命令，去 @BotFather → /setprivacy → Disable。
+启动时会调用 Telegram `setMyCommands`。若群里 bot 收不到命令，去 @BotFather → /setprivacy → Disable。
 
-限流：`/matches` 8s、`/watch` 6s、`/bump` 4s；live **edit 最少间隔 3s、每分钟最多 19 次**（合并延迟，429 冻结）；HLTV 列表缓存 45s。
+限流：`/matches`、`/events` 8 秒；列表缓存 45 秒；提醒大约每 90 秒看一次页面。
 
-线上 bot 和 Chrome 在同一台 VPS。手机只开 Telegram。MCP 只用来调试，不要当 24h 进程。
+Bot 默认 `HLTV_LOG=DEBUG`。改成 INFO：`HLTV_LOG=INFO python3 -m hltv_bot bot`。
 
-Bot 默认 `HLTV_LOG=DEBUG`，Scorebot / Telegram / HTTP 都会打到 stdout。改成 INFO：`HLTV_LOG=INFO python3 -m hltv_bot bot`。
-
-提交或 push 前跑 `AGENTS.md` 里那条 pytest（Rich、watch、snapshot、CDP、keeper、Chrome scorebot）。
+提交或 push 前跑 `AGENTS.md` 里那条 pytest。
