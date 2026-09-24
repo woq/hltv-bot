@@ -792,24 +792,28 @@ def format_match_list(
             n = star_n(r)
             live = r.get("live") == "1"
             clock = h(r.get("time") or ("LIVE" if live else ""))
-            mark = "🔴" if live else "▫️"
+            mark = "🔴" if live else "·"
             t1 = h(r.get("team1") or r.get("title") or "?")
             t2 = h(r.get("team2") or "")
             sc1 = (r.get("score1") or "").strip()
             sc2 = (r.get("score2") or "").strip()
             if sc1 or sc2:
-                vs = f"{t1} <b>{h(sc1 or '0')}-{h(sc2 or '0')}</b> {t2}".rstrip()
+                face = f"<b>{t1}</b>\n<code>{h(sc1 or '0')}</code>  –  <code>{h(sc2 or '0')}</code>\n<b>{t2}</b>"
+            elif t2:
+                face = f"<b>{t1}</b>\nvs\n<b>{t2}</b>"
             else:
-                vs = f"{t1} — {t2}" if t2 else t1
+                face = f"<b>{t1}</b>"
             url = (r.get("url") or "").strip()
             star_s = "⭐" * n if n else ""
-            time_bit = f"<code>{clock}</code>  " if clock else ""
-            lines.append(f"{mark} {time_bit}<b>{vs}</b>")
-            tail = f"{star_s}  " if star_s else ""
+            head = f"{mark}  <code>{clock}</code>" if clock else mark
+            foot = []
+            if star_s:
+                foot.append(star_s)
             if url:
-                lines.append(f'{tail}<a href="{h(url)}">详情</a>')
+                foot.append(f'<a href="{h(url)}">打开</a>')
             else:
-                lines.append(f"{tail}<code>{h(r.get('id') or '')}</code>")
+                foot.append(f"<code>{h(r.get('id') or '')}</code>")
+            lines.append("<blockquote>" + head + "\n" + face + "\n" + "  ".join(foot) + "</blockquote>")
         blocks.append("\n".join(lines))
     hint = (
         "<i>时间 UTC+8 · /matches all 显示无星比赛</i>"

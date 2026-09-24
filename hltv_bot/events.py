@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import re
 from datetime import datetime, timedelta, timezone
-from html import unescape
+from html import escape, unescape
 from pathlib import Path
 from typing import Sequence
 
@@ -403,35 +403,36 @@ def format_events_html(events: Sequence[dict], *, limit: int = 15) -> str:
     if not events:
         return "暂无近期 Major / T1 赛事信息。"
 
-    lines = ["<b>🏆 近期赛事 (Major / T1)</b>\n"]
+    lines = ["<b>近期赛事</b>", "<i>Major / T1</i>", ""]
     for ev in events[:limit]:
         tier = ev.get("tier") or "T2"
-        badge = "👑 [Major]" if tier == "Major" else ("🥇 [T1]" if tier == "T1" else "🥈 [T2]")
-        name = ev.get("name") or "Unknown Event"
-
+        badge = "Major" if tier == "Major" else tier
+        name = escape(ev.get("name") or "Unknown Event")
         date_range = format_event_date_range(ev.get("start_ts") or 0, ev.get("end_ts") or 0, pending="待定")
-
         days_left = ev.get("days_left", 9999)
         if ev.get("live"):
-            status_str = "🔴 <b>进行中 (LIVE)</b>"
+            status_str = "进行中"
         elif days_left > 0:
-            status_str = f"⏳ <b>还有 {days_left} 天开赛</b>"
+            status_str = f"还有 {days_left} 天开赛"
         elif days_left == 0:
-            status_str = "⏳ <b>今天开赛</b>"
+            status_str = "今天开赛"
         else:
-            status_str = f"⏳ <b>进行中 (第 {-days_left + 1} 天)</b>"
-
-        meta_parts = [f"📅 {date_range}"]
-        loc = ev.get("location")
-        if loc:
-            meta_parts.append(f"📍 {loc}")
+            status_str = f"进行中 · 第 {-days_left + 1} 天"
+        loc = (ev.get("location") or "").strip()
+        flag = country_code_to_emoji(str(ev.get("country_code") or ""))
+        place = " ".join(bit for bit in (flag, loc) if bit)
         prize = ev.get("prize")
+        quote = [f"<b>{name}</b>", badge]
+        if place:
+            quote.append(place)
+        quote.append(date_range)
+        quote.append(f"<b>{status_str}</b>")
         if prize and prize not in ("_", "TBA", "Other"):
-            meta_parts.append(f"💰 {prize}")
-        meta_str = " · ".join(meta_parts)
-
-        lines.append(f"{badge} <b>{name}</b>\n   {status_str}\n   {meta_str}\n")
-
+            quote.append(prize)
+        url = (ev.get("url") or "").strip()
+        if url:
+            quote.append(f'<a href="{escape(url)}">打开赛事</a>')
+        lines.append("<blockquote>" + "\n".join(quote) + "</blockquote>")
     return "\n".join(lines).strip()
 
 

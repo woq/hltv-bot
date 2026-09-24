@@ -50,7 +50,7 @@ jobs:
           cd /opt/hltv-bot
           test -f .env || cp .env.example .env
           test -f data/session.json || cp data/session.example.json data/session.json
-          apt-get install -y -qq libpango-1.0-0 libpangocairo-1.0-0 libcairo2 libgdk-pixbuf-2.0-0 fonts-dejavu-core
+          apt-get install -y -qq libpango-1.0-0 libpangocairo-1.0-0 libcairo2 libgdk-pixbuf-2.0-0 fonts-dejavu-core fonts-wqy-zenhei fonts-noto-color-emoji
           uv sync
           install -m 644 deploy/hltv-bot.service /etc/systemd/system/hltv-bot.service
           install -m 644 deploy/chrome-session/hltv-chrome.service /etc/systemd/system/hltv-chrome.service

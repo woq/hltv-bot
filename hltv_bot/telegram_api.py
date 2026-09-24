@@ -185,6 +185,7 @@ class Telegram:
         *,
         caption: str = "",
         filename: str = "matches.png",
+        silent: bool = False,
     ) -> dict:
         import uuid
 
@@ -194,6 +195,8 @@ class Telegram:
         if caption:
             fields["caption"] = caption[:1024]
             fields["parse_mode"] = "HTML"
+        if silent:
+            fields["disable_notification"] = "true"
         for k, v in fields.items():
             body_parts.append(
                 f"--{boundary}\r\nContent-Disposition: form-data; name=\"{k}\"\r\n\r\n{v}\r\n".encode("utf-8")

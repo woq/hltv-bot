@@ -365,7 +365,11 @@ class HltvTelegramBot:
             hint = "发 /matches all 看全部。" if tier != "Other" else ""
             self._reply(chat_id, f"暂无符合筛选的比赛。{hint}".strip())
             return
-        self._reply(chat_id, format_match_list(rows, starred_only=False))
+        shown = rows[:12]
+        caption = f"<b>比赛</b>  {len(shown)} 场 · UTC+8"
+        if len(rows) > len(shown):
+            caption += f"\n<i>共 {len(rows)} 场，图里是前 {len(shown)} 场</i>"
+        self._reply_card(chat_id, {"view": "matches", "rows": shown}, caption, format_match_list(rows, starred_only=False))
 
     def _cmd_events(self, chat_id: int, arg: str) -> None:
         raw = arg.strip().lower()
@@ -380,7 +384,24 @@ class HltvTelegramBot:
         except CloudflareError as e:
             self._reply(chat_id, f"Cloudflare 拦了赛事页：{e}\n发 /cookie 更新 Cookie")
             return
-        self._reply(chat_id, format_events_html(rows))
+        from hltv_bot.events import country_code_to_emoji, format_event_date_range
+
+        shown = rows[:8]
+        card_rows = []
+        for ev in shown:
+            card_rows.append(
+                {
+                    "id": str(ev.get("id") or ""),
+                    "name": ev.get("name") or "",
+                    "tier": ev.get("tier") or "",
+                    "logo_url": ev.get("logo_url") or "",
+                    "flag": country_code_to_emoji(str(ev.get("country_code") or "")),
+                    "location": ev.get("location") or "",
+                    "when": format_event_date_range(ev.get("start_ts") or 0, ev.get("end_ts") or 0),
+                }
+            )
+        caption = f"<b>赛事</b>  {len(shown)} 场"
+        self._reply_card(chat_id, {"view": "events", "rows": card_rows}, caption, format_events_html(rows))
 
     def _cmd_window(self, chat_id: int, arg: str) -> None:
         parts = arg.split()
@@ -589,6 +610,20 @@ class HltvTelegramBot:
 
         threading.Timer(delay, _run).start()
 
+    def _reply_card(self, chat_id: int, card: dict, caption: str, fallback: str) -> None:
+        try:
+            from hltv_bot.cards import render_card
+
+            png = render_card(card)
+        except Exception:
+            log.exception("card render")
+            self._reply(chat_id, fallback)
+            return
+        msg = self.tg.send_photo(chat_id, png, caption=caption, filename="hltv.png")
+        mid = msg.get("message_id") if isinstance(msg, dict) else None
+        if mid is not None:
+            self._schedule_delete(chat_id, int(mid))
+
     def _reply(self, chat_id: int, text: str) -> dict:
         msg = self.tg.send_message(chat_id, text)
         mid = msg.get("message_id") if isinstance(msg, dict) else None
@@ -610,15 +645,28 @@ class HltvTelegramBot:
             except Exception:
                 log.exception("notify admin photo %s", aid)
 
-    def _broadcast(self, html: str) -> None:
+    def _broadcast(self, note) -> None:
         silent = self._silent()
         ids = sorted(group_ids())
+        caption = note.html if hasattr(note, "html") else str(note)
         if not ids:
-            log.info("remind skipped, no groups: %s", html.replace("\n", " ")[:120])
+            log.info("remind skipped, no groups: %s", caption.replace("\n", " ")[:120])
             return
+        png = None
+        card = getattr(note, "card", None)
+        if card:
+            try:
+                from hltv_bot.cards import render_card
+
+                png = render_card(card)
+            except Exception:
+                log.exception("card render")
         for gid in ids:
             try:
-                self.tg.send_message(gid, html, silent=silent)
+                if png:
+                    self.tg.send_photo(gid, png, caption=caption, filename="hltv.png", silent=silent)
+                else:
+                    self.tg.send_message(gid, caption, silent=silent)
             except Exception:
                 log.exception("remind chat=%s", gid)
 
@@ -734,7 +782,7 @@ class HltvTelegramBot:
             self.last_error = ""
         for note in notes:
             log.info("remind %s", note.key)
-            self._broadcast(note.html)
+            self._broadcast(note)
         return len(notes)
 
     def _poll_loop(self) -> None:

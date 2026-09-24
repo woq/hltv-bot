@@ -192,12 +192,12 @@ def test_format_events_html():
         },
     ]
     html = format_events_html(events)
-    assert "<b>🏆 近期赛事 (Major / T1)</b>" in html
-    assert "👑 [Major] <b>PGL Major Singapore 2026</b>" in html
-    assert "🥇 [T1] <b>ESL Pro League Season 24</b>" in html
-    assert "⏳ <b>还有 15 天开赛</b>" in html
-    assert "📍 Katowice, Poland" in html
-    assert "💰 $1,000,000" in html
+    assert "<b>近期赛事</b>" in html
+    assert "<b>PGL Major Singapore 2026</b>" in html
+    assert "<b>ESL Pro League Season 24</b>" in html
+    assert "<b>还有 15 天开赛</b>" in html
+    assert "Katowice, Poland" in html
+    assert "$1,000,000" in html
 
 
 def test_country_code_to_emoji_and_format_location():

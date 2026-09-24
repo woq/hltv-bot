@@ -433,7 +433,7 @@ def test_format_match_list_excludes_both_tbd():
         {"id": "3", "team1": "?", "team2": "", "event": "IEM", "stars": "3"},
     ]
     res = format_match_list(matches)
-    assert "Spirit — G2" in res
-    assert "TBD — TBD" not in res
+    assert "Spirit" in res and "G2" in res
+    assert "TBD" not in res
     assert "id=2" not in res
 

@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
 from hltv_bot.bot import DEFAULT_ADMIN_ID, HltvTelegramBot
-from hltv_bot.reminders import CST, RemindConfig, empty_state, plan_reminders, score_text
+from hltv_bot.reminders import CST, RemindConfig, _event_html, empty_state, plan_reminders, score_text
 from hltv_bot.session import BrowserSession
 
 
@@ -101,7 +101,7 @@ def test_match_soon_live_score_and_final():
     state, notes = plan_reminders(state, [], None, now=now, cfg=cfg)
     assert notes[0].key == "m:1:final"
     assert "结束" in notes[0].html
-    assert "1-0" in notes[0].html
+    assert "<code>1</code>" in notes[0].html and "<code>0</code>" in notes[0].html
     assert "1" not in state["matches"]
 
 
@@ -143,7 +143,7 @@ def test_streak_mark_and_ignore_and_pause():
         assert notes
         marked = notes[0].html
     assert marked is not None
-    assert "连赢 5 回合" in marked
+    assert "连赢" in marked and "5" in marked
     assert "G2" in marked
 
     paused = RemindConfig(watch=False)
@@ -175,6 +175,13 @@ def test_event_stages_major_and_t1_only():
     state, notes = plan_reminders(state, None, [days], now=later, cfg=cfg)
     assert [n.key for n in notes] == ["e:days:day"]
     assert "还有" in notes[0].html
+    flagged = _event_html(
+        {**days, "country_code": "DE", "location": "Cologne"},
+        now,
+        "days",
+    )
+    assert "🇩🇪" in flagged
+    assert "Cologne" in flagged
 
     closing = now + timedelta(days=2, hours=20)
     state, notes = plan_reminders(state, None, [days], now=closing, cfg=cfg)

@@ -6,7 +6,7 @@ import copy
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from hltv_bot.events import classify_tier
+from hltv_bot.events import classify_tier, country_code_to_emoji
 from hltv_bot.format import h
 
 CST = timezone(timedelta(hours=8))
@@ -17,6 +17,7 @@ SOON_MINUTES = 15
 class Notice:
     key: str
     html: str
+    card: dict | None = None
 
 
 STREAK_MARK = 5
@@ -143,47 +144,119 @@ def _link(url: str) -> str:
     url = (url or "").strip()
     if not url:
         return ""
-    return f'\n<a href="{h(url)}">HLTV</a>'
+    word = "打开赛事" if "/events/" in url else "打开比赛"
+    return f'<a href="{h(url)}">{word}</a>'
 
 
-def _teams(row: dict, *, with_score: str = "") -> str:
+_KIND = {
+    "soon": "即将开赛",
+    "live": "已开赛",
+    "score": "比分",
+    "final": "结束",
+}
+
+
+def _score_pair(score: str) -> tuple[str, str] | None:
+    text = (score or "").strip()
+    if "-" not in text:
+        return None
+    left, right = text.split("-", 1)
+    left, right = left.strip(), right.strip()
+    if not left and not right:
+        return None
+    return left or "0", right or "0"
+
+
+def _face(row: dict, score: str) -> str:
     t1 = h(row.get("team1") or "?")
     t2 = h(row.get("team2") or "?")
-    if with_score:
-        return f"{t1} <b>{h(with_score)}</b> {t2}"
-    return f"{t1} vs {t2}"
+    pair = _score_pair(score)
+    if pair is None:
+        return f"<b>{t1}</b>\nvs\n<b>{t2}</b>"
+    return f"<b>{t1}</b>\n<code>{h(pair[0])}</code>  –  <code>{h(pair[1])}</code>\n<b>{t2}</b>"
 
 
-def _event_line(row: dict) -> str:
-    name = (row.get("event") or "").strip()
-    return f"\n{h(name)}" if name else ""
+def _meta_lines(row: dict, when: datetime | None) -> list[str]:
+    lines: list[str] = []
+    event = (row.get("event") or "").strip()
+    if event:
+        lines.append(f"<i>{h(event)}</i>")
+    map_name = (row.get("map") or "").strip()
+    map_score = (row.get("map_score") or "").strip()
+    if map_name or map_score:
+        bits = [h(map_name)] if map_name else []
+        if map_score:
+            bits.append(f"<code>{h(map_score)}</code>")
+        lines.append("  ".join(bits))
+    clock = _clock(when, str(row.get("time") or ""))
+    if clock:
+        lines.append(f"<code>{h(clock)}</code>  ·  UTC+8")
+    else:
+        lines.append("UTC+8")
+    return lines
 
 
-def _score_extra(row: dict) -> str:
-    bits: list[str] = []
-    mp = (row.get("map_score") or "").strip()
-    if mp:
-        name = (row.get("map") or "").strip()
-        bits.append(f"\n{h(name) if name else '地图'} <b>{h(mp)}</b>")
+def _streak_line(row: dict) -> str:
     n = _streak_n(row)
     team = (row.get("streak_team") or "").strip()
-    if n >= STREAK_MARK and team:
-        bits.append(f"\n<b>⚡ 连赢 {n} 回合 · {h(team)}</b>")
-    return "".join(bits)
+    if n < STREAK_MARK or not team:
+        return ""
+    return f"⚡  <b>{h(team)}</b>  连赢 <b>{n}</b> 回合"
+
+
+def _match_caption(kind: str, row: dict, when: datetime | None, score: str = "") -> str:
+    label = _KIND.get(kind, kind)
+    t1 = h(row.get("team1") or "?")
+    t2 = h(row.get("team2") or "?")
+    show = score if kind in {"live", "score", "final"} else ""
+    pair = _score_pair(show)
+    if pair:
+        head = f"<b>{label}</b>  {t1} <code>{h(pair[0])}</code>–<code>{h(pair[1])}</code> {t2}"
+    else:
+        head = f"<b>{label}</b>  {t1} vs {t2}"
+    lines = [head]
+    event = (row.get("event") or "").strip()
+    if event:
+        lines.append(f"<i>{h(event)}</i>")
+    clock = _clock(when, str(row.get("time") or ""))
+    if clock:
+        lines.append(f"<code>{h(clock)}</code> UTC+8")
+    streak = _streak_line(row)
+    if streak and kind in {"live", "score", "final"}:
+        lines.append(streak)
+    link = _link(str(row.get("url") or ""))
+    if link:
+        lines.append(link)
+    return "\n".join(lines)
+
+
+def _match_card(kind: str, row: dict, when: datetime | None, score: str = "") -> dict:
+    show = score if kind in {"live", "score", "final"} else ""
+    pair = _score_pair(show)
+    streak = ""
+    n = _streak_n(row)
+    team = (row.get("streak_team") or "").strip()
+    if n >= STREAK_MARK and team and kind in {"live", "score", "final"}:
+        streak = f"{team}  连赢 {n} 回合"
+    return {
+        "view": "match",
+        "kind": kind,
+        "label": _KIND.get(kind, kind),
+        "team1": row.get("team1") or "?",
+        "team2": row.get("team2") or "?",
+        "logo1": row.get("team1_logo") or "",
+        "logo2": row.get("team2_logo") or "",
+        "event_logo": row.get("event_logo") or "",
+        "pair": pair,
+        "event": row.get("event") or "",
+        "map": "  ".join(x for x in (row.get("map") or "", row.get("map_score") or "") if x),
+        "clock": _clock(when, str(row.get("time") or "")),
+        "streak": streak,
+    }
 
 
 def _match_html(kind: str, row: dict, when: datetime | None, score: str = "") -> str:
-    label = {"soon": "即将开赛", "live": "已开赛", "score": "比分", "final": "结束"}.get(kind, kind)
-    clock = _clock(when, str(row.get("time") or ""))
-    clock_bit = f"\n<code>{h(clock)} UTC+8</code>" if clock else "\n<code>UTC+8</code>"
-    extra = _score_extra(row) if kind in {"live", "score", "final"} else ""
-    return (
-        f"<b>{label}</b> {_teams(row, with_score=score)}"
-        f"{_event_line(row)}"
-        f"{extra}"
-        f"{clock_bit}"
-        f"{_link(str(row.get('url') or ''))}"
-    )
+    return _match_caption(kind, row, when, score)
 
 
 def _hours_left(ev: dict, now: datetime) -> float | None:
@@ -228,15 +301,38 @@ def _event_html(ev: dict, now: datetime, stage: str) -> str:
         clock = datetime.fromtimestamp(start_ts, CST).strftime("%m-%d %H:%M")
     tier = classify_tier(str(ev.get("name") or ""))
     loc = (ev.get("location") or "").strip()
-    loc_bit = f"\n{h(loc)}" if loc else ""
-    tail = "最后提醒" if stage == "hours" else _remain_text(hours)
-    return (
-        f"<b>赛事</b> {h(tier)} <b>{h(ev.get('name') or '')}</b>"
-        f"\n开赛 <code>{h(clock)} UTC+8</code>"
-        f"\n{h(tail)}"
-        f"{loc_bit}"
-        f"{_link(str(ev.get('url') or ''))}"
-    )
+    flag = country_code_to_emoji(str(ev.get("country_code") or ""))
+    place = " ".join(bit for bit in (flag, h(loc) if loc else "") if bit)
+    tail = "<b>最后提醒</b>" if stage == "hours" else _remain_text(hours)
+    lines = [f"<b>赛事</b>  {h(tier)}  <b>{h(ev.get('name') or '')}</b>"]
+    if place:
+        lines.append(place)
+    if clock:
+        lines.append(f"<code>{h(clock)}</code> UTC+8")
+    lines.append(tail)
+    link = _link(str(ev.get("url") or ""))
+    if link:
+        lines.append(link)
+    return "\n".join(lines)
+
+
+def _event_card(ev: dict, now: datetime, stage: str) -> dict:
+    hours = _hours_left(ev, now) or 0
+    start_ts = int(ev.get("start_ts") or 0)
+    clock = ""
+    if start_ts:
+        clock = datetime.fromtimestamp(start_ts, CST).strftime("%m-%d %H:%M")
+    return {
+        "view": "event",
+        "tier": classify_tier(str(ev.get("name") or "")),
+        "id": str(ev.get("id") or ""),
+        "name": ev.get("name") or "",
+        "logo_url": ev.get("logo_url") or "",
+        "flag": country_code_to_emoji(str(ev.get("country_code") or "")),
+        "location": (ev.get("location") or "").strip(),
+        "clock": clock,
+        "remain": "最后提醒" if stage == "hours" else _remain_text(hours),
+    }
 
 
 def _snapshot_match(row: dict, *, opened: bool, soon: bool, score: str) -> dict:
@@ -246,6 +342,9 @@ def _snapshot_match(row: dict, *, opened: bool, soon: bool, score: str) -> dict:
         "score": score,
         "team1": row.get("team1") or "",
         "team2": row.get("team2") or "",
+        "team1_logo": row.get("team1_logo") or "",
+        "team2_logo": row.get("team2_logo") or "",
+        "event_logo": row.get("event_logo") or "",
         "event": row.get("event") or "",
         "url": row.get("url") or "",
         "time": row.get("time") or "",
@@ -362,16 +461,16 @@ def plan_reminders(
                 speak = _speak(cfg, mid, base)
                 if started and not opened:
                     if speak:
-                        notes.append(Notice(f"m:{mid}:live", _match_html("live", row, start, score)))
+                        notes.append(Notice(f"m:{mid}:live", _match_html("live", row, start, score), _match_card("live", row, start, score)))
                     opened = True
                     soon_sent = True
                 elif soon and not soon_sent and not opened:
                     if speak:
-                        notes.append(Notice(f"m:{mid}:soon", _match_html("soon", row, start)))
+                        notes.append(Notice(f"m:{mid}:soon", _match_html("soon", row, start), _match_card("soon", row, start)))
                     soon_sent = True
                 elif opened and sig and sig != old_sig:
                     if speak:
-                        notes.append(Notice(f"m:{mid}:score:{sig}", _match_html("score", row, start, score)))
+                        notes.append(Notice(f"m:{mid}:score:{sig}", _match_html("score", row, start, score), _match_card("score", row, start, score)))
                 if live or started:
                     soon_sent = True
                 nxt[mid] = _snapshot_match(row, opened=opened, soon=soon_sent, score=score or str(old.get("score") or ""))
@@ -382,6 +481,9 @@ def plan_reminders(
                 row = {
                     "team1": old.get("team1"),
                     "team2": old.get("team2"),
+                    "team1_logo": old.get("team1_logo"),
+                    "team2_logo": old.get("team2_logo"),
+                    "event_logo": old.get("event_logo"),
                     "event": old.get("event"),
                     "url": old.get("url"),
                     "time": old.get("time"),
@@ -395,7 +497,11 @@ def plan_reminders(
                 }
                 if _speak(cfg, mid, base):
                     notes.append(
-                        Notice(f"m:{mid}:final", _match_html("final", row, start_at(row), str(old.get("score") or "")))
+                        Notice(
+                            f"m:{mid}:final",
+                            _match_html("final", row, start_at(row), str(old.get("score") or "")),
+                            _match_card("final", row, start_at(row), str(old.get("score") or "")),
+                        )
                     )
                 quiet.discard(mid)
             base["matches"] = nxt
@@ -414,7 +520,7 @@ def plan_reminders(
                 continue
             stages[eid] = stage
             if base.get("events_seeded") and prev_ev.get(eid) != stage:
-                notes.append(Notice(f"e:{eid}:{stage}", _event_html(ev, now, stage)))
+                notes.append(Notice(f"e:{eid}:{stage}", _event_html(ev, now, stage), _event_card(ev, now, stage)))
         base["events"] = stages
         base["events_seeded"] = True
 
