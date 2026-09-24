@@ -437,3 +437,22 @@ def test_format_match_list_excludes_both_tbd():
     assert "TBD" not in res
     assert "id=2" not in res
 
+
+def test_format_match_list_retains_id_when_url_present():
+    from hltv_bot.format import format_match_list
+
+    matches = [
+        {
+            "id": "2396932",
+            "team1": "Spirit",
+            "team2": "G2",
+            "event": "IEM",
+            "stars": "3",
+            "url": "https://www.hltv.org/matches/2396932/spirit-vs-g2",
+        },
+    ]
+    res = format_match_list(matches)
+    assert "<code>2396932</code>" in res
+    assert '<a href="https://www.hltv.org/matches/2396932/spirit-vs-g2">打开</a>' in res
+
+

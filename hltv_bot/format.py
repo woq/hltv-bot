@@ -809,10 +809,11 @@ def format_match_list(
             foot = []
             if star_s:
                 foot.append(star_s)
+            mid = (r.get("id") or "").strip()
+            if mid:
+                foot.append(f"<code>{h(mid)}</code>")
             if url:
                 foot.append(f'<a href="{h(url)}">打开</a>')
-            else:
-                foot.append(f"<code>{h(r.get('id') or '')}</code>")
             lines.append("<blockquote>" + head + "\n" + face + "\n" + "  ".join(foot) + "</blockquote>")
         blocks.append("\n".join(lines))
     hint = (

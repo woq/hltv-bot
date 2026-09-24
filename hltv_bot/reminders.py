@@ -218,6 +218,13 @@ def _match_caption(kind: str, row: dict, when: datetime | None, score: str = "")
     event = (row.get("event") or "").strip()
     if event:
         lines.append(f"<i>{h(event)}</i>")
+    map_name = (row.get("map") or "").strip()
+    map_score = (row.get("map_score") or "").strip()
+    if map_name or map_score:
+        bits = [h(map_name)] if map_name else []
+        if map_score:
+            bits.append(f"<code>{h(map_score)}</code>")
+        lines.append("  ".join(bits))
     clock = _clock(when, str(row.get("time") or ""))
     if clock:
         lines.append(f"<code>{h(clock)}</code> UTC+8")

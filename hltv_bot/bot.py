@@ -365,10 +365,14 @@ class HltvTelegramBot:
             hint = "发 /matches all 看全部。" if tier != "Other" else ""
             self._reply(chat_id, f"暂无符合筛选的比赛。{hint}".strip())
             return
+        if "text" in raw or "txt" in raw:
+            self._reply(chat_id, format_match_list(rows, starred_only=False))
+            return
         shown = rows[:12]
         caption = f"<b>比赛</b>  {len(shown)} 场 · UTC+8"
         if len(rows) > len(shown):
             caption += f"\n<i>共 {len(rows)} 场，图里是前 {len(shown)} 场</i>"
+        caption += "\n<i>发 /watch ID 实时盯盘 · /matches all 看全部</i>"
         self._reply_card(chat_id, {"view": "matches", "rows": shown}, caption, format_match_list(rows, starred_only=False))
 
     def _cmd_events(self, chat_id: int, arg: str) -> None:
@@ -384,6 +388,9 @@ class HltvTelegramBot:
         except CloudflareError as e:
             self._reply(chat_id, f"Cloudflare 拦了赛事页：{e}\n发 /cookie 更新 Cookie")
             return
+        if "text" in raw or "txt" in raw:
+            self._reply(chat_id, format_events_html(rows))
+            return
         from hltv_bot.events import country_code_to_emoji, format_event_date_range
 
         shown = rows[:8]
@@ -398,9 +405,11 @@ class HltvTelegramBot:
                     "flag": country_code_to_emoji(str(ev.get("country_code") or "")),
                     "location": ev.get("location") or "",
                     "when": format_event_date_range(ev.get("start_ts") or 0, ev.get("end_ts") or 0),
+                    "prize": (ev.get("prize") or "").strip(),
                 }
             )
         caption = f"<b>赛事</b>  {len(shown)} 场"
+        caption += "\n<i>/events all 查看全部赛事</i>"
         self._reply_card(chat_id, {"view": "events", "rows": card_rows}, caption, format_events_html(rows))
 
     def _cmd_window(self, chat_id: int, arg: str) -> None:

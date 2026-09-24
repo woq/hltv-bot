@@ -243,3 +243,43 @@ def test_parse_match_meta():
     assert meta["team1"] == "G2"
 
 
+def test_cmd_matches_text_mode(monkeypatch):
+    from hltv_bot.bot import HltvTelegramBot
+    from hltv_bot.session import BrowserSession
+
+    class FakeTg:
+        def __init__(self):
+            self.messages = []
+            self.photos = []
+
+        def send_message(self, chat_id, text):
+            self.messages.append(text)
+            return {"message_id": 1}
+
+        def send_photo(self, chat_id, photo_bytes, caption="", filename=""):
+            self.photos.append(caption)
+            return {"message_id": 2}
+
+    fake_tg = FakeTg()
+    sess = BrowserSession(impersonate="chrome131", headers={}, cookie="")
+    bot = HltvTelegramBot(fake_tg, sess)
+
+    mock_rows = [
+        {"id": "2396932", "team1": "Spirit", "team2": "G2", "event": "IEM", "stars": "3", "url": "https://hltv.org/1"},
+    ]
+    monkeypatch.setattr("hltv_bot.bot.fetch_matches", lambda s: mock_rows)
+
+    # 1. Text mode
+    bot._cmd_matches(123, "text")
+    assert len(fake_tg.messages) == 1
+    assert "2396932" in fake_tg.messages[0]
+    assert len(fake_tg.photos) == 0
+
+    # 2. Photo mode
+    bot._cmd_matches(123, "")
+    assert len(fake_tg.photos) == 1
+    assert "比赛" in fake_tg.photos[0]
+    assert "实时盯盘" in fake_tg.photos[0]
+
+
+

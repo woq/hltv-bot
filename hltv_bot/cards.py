@@ -26,7 +26,15 @@ html, body {
 .trow { display: flex; align-items: center; margin-top: 14px; }
 .tlogo, .tlogo-ph { width: 28px; height: 28px; margin-right: 12px; object-fit: contain; flex: 0 0 28px; }
 .tlogo-ph, .elogo-ph { display: inline-block; background: #2a261f; }
-.name { flex: 1; font-size: 28px; line-height: 1; font-weight: 700; }
+.name {
+  flex: 1;
+  font-size: 28px;
+  line-height: 1;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .sc {
   width: 52px;
   text-align: right;
@@ -38,7 +46,8 @@ html, body {
 .sc.live { color: #ff5a3c; }
 .sc.final { color: #f3ecdf; }
 .sc.soon { color: #5c564c; }
-.elogo, .elogo-ph { height: 16px; width: auto; max-width: 48px; object-fit: contain; margin-right: 8px; vertical-align: middle; }
+.elogo { height: 16px; width: auto; max-width: 48px; object-fit: contain; margin-right: 8px; vertical-align: middle; }
+.elogo-ph { display: none; }
 .eventline { display: flex; align-items: center; }
 .rule { height: 1px; background: #2c2822; margin: 22px 0 16px; }
 .event { font-size: 16px; color: #d9cbb6; }
@@ -260,39 +269,46 @@ def _matches_html(card: dict, height: int, width: int) -> str:
         clock = row.get("time") or ""
         stars = "★" * _stars(row)
         slot_cls = "slot" if live else "slot off"
+        sc_accent = "live" if live else ("final" if (a or b) else "soon")
+        mid = str(row.get("id") or "").strip()
+        id_str = f"#{mid}" if mid else ""
+        sub_items = [x for x in [clock, stars, row.get("event"), id_str] if x]
+        sub_str = "  ·  ".join(_e(x) for x in sub_items)
         bits.append(
             "<tr>"
             f"<td class='{slot_cls}'><div>LIVE</div></td>"
-            "<td class='body'>"
-            + _team_row(row.get("team1") or "?", a, row.get("team1_logo") or "", "")
-            + _team_row(row.get("team2") or "?", b, row.get("team2_logo") or "", "")
+            "<td class='body mbody'>"
+            + _team_row(row.get("team1") or "?", a, row.get("team1_logo") or "", sc_accent)
+            + _team_row(row.get("team2") or "?", b, row.get("team2_logo") or "", sc_accent)
             + "<div class='sub'>"
             + _img(_logo_uri(row.get("event_logo") or ""), "elogo")
-            + f"{_e(clock)}   {_e(stars)}   {_e(row.get('event'))}</div>"
+            + f"{sub_str}</div>"
             + "</td></tr>"
         )
     if not rows:
-        bits.append("<tr><td class='slot off'><div>LIVE</div></td><td class='body'>没有比赛</td></tr>")
+        bits.append("<tr><td class='slot off'><div>LIVE</div></td><td class='body mbody'>没有比赛</td></tr>")
     table = "<table class='sheet'>" + "".join(bits[1:]) + "</table>"
     return _page(bits[0] + table, height, width)
 
 
 def _events_html(card: dict, height: int, width: int) -> str:
     rows = list(card.get("rows") or [])[:8]
-    bits = ["<div class='sheet-title'>赛事</div>"]
+    bits = ["<div class='sheet-title'>赛事  ·  Major / T1</div>"]
     for ev in rows:
         logo = _event_logo_uri(str(ev.get("id") or ""), str(ev.get("logo_url") or ""))
         bg = ""
         if logo.startswith("data:image"):
             bg = f"<div class='event-bg' style=\"background-image:url('{logo}')\"></div><div class='event-shade'></div>"
+        place = " ".join(x for x in (ev.get("flag") or "", ev.get("location") or "") if x)
+        sub_items = [ev.get("tier"), place, ev.get("when"), ev.get("prize")]
+        sub_str = "  ·  ".join(_e(x) for x in sub_items if x)
         bits.append(
             "<div class='event-card' style='margin-top:10px;padding-top:8px;border-top:1px solid #2c2822'>"
             + bg
             + "<div class='event-copy'>"
             + f"<div class='name' style='font-size:16px'>{_e(ev.get('name'))}</div>"
-            + "<div class='sub'>"
-            + f"{_e(ev.get('tier'))}   {ev.get('flag') or ''} {_e(ev.get('location'))}   {_e(ev.get('when'))}"
-            + "</div></div></div>"
+            + f"<div class='sub'>{sub_str}</div>"
+            + "</div></div>"
         )
     if not rows:
         bits.append("<div class='sub'>没有赛事</div>")
