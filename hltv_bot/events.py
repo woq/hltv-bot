@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Sequence
 
 from hltv_bot.http import request
-from hltv_bot.render import classify_event_tier
 from hltv_bot.session import BrowserSession
 
 log = logging.getLogger("hltv_bot.events")
@@ -341,6 +340,59 @@ def parse_events_list(html: str) -> list[dict]:
             unique.append(ev)
 
     return unique
+
+
+_TIER_KEYWORDS = {
+    "T1": [
+        "major", "pgl", "iem", "katowice", "cologne",
+        "blast", "esl pro league", "epl", "world final",
+    ],
+    "T2": [
+        "cct", "challenger league", "ecl", "res", "yalla",
+        "compass", "thunderpick", "mesa", "fiesta", "nodwin", "starladder",
+    ],
+    "T3": [
+        "closed qualifier", "open qualifier", "qualifier",
+        "cash cup", "academy", "regional cup", "series qualifier", "esea",
+    ],
+}
+
+
+def classify_event_tier(event_name: str, stars: int = 0) -> str:
+    """Classify match/event into T1, T2, T3 or Other."""
+    ev = (event_name or "").lower()
+    if stars >= 4:
+        return "T1"
+
+    is_qualifier = bool(re.search(r"\b(qualifier|closed|open\s+qualifier)\b", ev))
+
+    for kw in _TIER_KEYWORDS["T1"]:
+        if kw in ev:
+            if is_qualifier:
+                return "T2" if stars >= 1 else "T3"
+            return "T1"
+
+    if stars >= 2:
+        return "T2"
+
+    for kw in _TIER_KEYWORDS["T2"]:
+        if kw in ev:
+            if is_qualifier:
+                return "T3"
+            return "T2"
+
+    for kw in _TIER_KEYWORDS["T3"]:
+        if kw in ev:
+            return "T3"
+
+    if stars == 1:
+        return "T3"
+
+    return "Other"
+
+
+def tier_rank(tier: str) -> int:
+    return {"T1": 1, "T2": 2, "T3": 3, "Other": 4}.get(tier, 5)
 
 
 def classify_tier(name: str) -> str:

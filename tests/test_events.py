@@ -248,36 +248,34 @@ def test_filter_and_sort_events_3_months():
     assert len(filtered_all) == 2
 
 
-def test_render_events_image():
-    from hltv_bot.render import render_events_image
+def test_classify_event_tier():
+    from hltv_bot.events import classify_event_tier
 
-    events = [
-        {
-            "id": "4",
-            "name": "StarLadder StarSeries Fall 2026",
-            "tier": "T2",
-            "live": True,
-            "start_ts": 1789639200,
-            "end_ts": 1789898400,
-            "location": "",
-            "country_code": "",
-            "prize": "",
-            "days_left": -1,
-        },
-        {
-            "id": "3",
-            "name": "ESL Pro League Season 24",
-            "tier": "T1",
-            "live": False,
-            "start_ts": 1791021600,
-            "end_ts": 1791712800,
-            "location": "Katowice, Poland",
-            "country_code": "PL",
-            "prize": "$1,000,000",
-            "days_left": 15,
-        },
-    ]
-    img_bytes = render_events_image(events, tier_filter="Major / T1 / T2")
-    assert len(img_bytes) > 1000
-    assert img_bytes[:8] == b"\x89PNG\r\n\x1a\n"
+    # T1 cases
+    assert classify_event_tier("PGL CS2 Major Copenhagen 2024", 0) == "T1"
+    assert classify_event_tier("IEM Cologne 2026", 1) == "T1"
+    assert classify_event_tier("BLAST Premier World Final", 2) == "T1"
+    assert classify_event_tier("Random Local Cup", 4) == "T1"  # 4-5 stars
+
+    # T2 cases
+    assert classify_event_tier("CCT Season 2 Europe Series 1", 1) == "T2"
+    assert classify_event_tier("ESL Challenger League Season 50", 1) == "T2"
+    assert classify_event_tier("Thunderpick World Championship", 0) == "T2"
+    assert classify_event_tier("Low Tier Event", 2) == "T2"  # 2-3 stars
+
+    # T3 cases
+    assert classify_event_tier("CCT 2026 Europe Series 8 Closed Qualifier", 0) == "T3"
+    assert classify_event_tier("ESEA Main Season 51", 0) == "T3"
+    assert classify_event_tier("Random Cup", 1) == "T3"
+
+    # Other cases
+    assert classify_event_tier("Unknown Lan Cup", 0) == "Other"
+
+
+def test_tier_rank_ordering():
+    from hltv_bot.events import tier_rank
+
+    assert tier_rank("T1") < tier_rank("T2")
+    assert tier_rank("T2") < tier_rank("T3")
+    assert tier_rank("T3") < tier_rank("Other")
 

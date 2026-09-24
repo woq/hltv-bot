@@ -16,9 +16,14 @@ from datetime import datetime
 from pathlib import Path
 
 from hltv_bot.chats import add_group, group_ids, list_groups, remove_group
-from hltv_bot.events import fetch_events, filter_and_sort_events, format_events_html
+from hltv_bot.events import (
+    classify_event_tier,
+    fetch_events,
+    filter_and_sort_events,
+    format_events_html,
+    tier_rank,
+)
 from hltv_bot.format import format_match_list, h
-from hltv_bot.render import classify_event_tier, tier_rank
 from hltv_bot.http import CloudflareError
 from hltv_bot.matches import fetch_match_board, fetch_matches
 from hltv_bot.ratelimit import Cooldown
