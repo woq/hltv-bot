@@ -46,6 +46,7 @@ def test_chrome_challenge_html_raises(monkeypatch):
         "hltv_bot.cdp.fetch_via_chrome",
         lambda url, timeout=25.0: (200, b"<title>Just a moment...</title>", {}),
     )
+    monkeypatch.setattr("hltv_bot.http._HTML_GAP.sleep", lambda *a, **k: 0.0)
     sess = BrowserSession("chrome131", {}, "cf_clearance=x")
     try:
         request(sess, "GET", "https://www.hltv.org/matches")

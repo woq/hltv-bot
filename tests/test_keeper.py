@@ -85,7 +85,8 @@ def test_healthy_overlay_and_restored(tmp_path, monkeypatch):
         screenshot_png=None,
     )
     monkeypatch.setattr("hltv_bot.keeper.fetch_keeper_snapshot", lambda *a, **k: snap)
-    tick_keeper(bot)
+    monkeypatch.setattr("hltv_bot.keeper.close_extra_pages", lambda *a, **k: None)
+    tick_keeper(bot, sleep=lambda s: None)
     assert "cf_clearance=newcf" in bot.session.cookie
     assert any("restored" in t[1] for t in tg.sent)
 

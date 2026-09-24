@@ -18,6 +18,9 @@ hltv-bot = "hltv_bot.__main__:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+filterwarnings = [
+  "ignore:HarfBuzz-Subset will be required:DeprecationWarning",
+]
 
 [dependency-groups]
 dev = [
