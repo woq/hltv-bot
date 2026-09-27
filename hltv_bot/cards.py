@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 from html import escape
+from pathlib import Path
 
 _BG = (18, 17, 14)
 
@@ -14,7 +15,8 @@ html, body {
   margin: 0; padding: 0;
   background: #12110e;
   color: #f3ecdf;
-  font-family: "WenQuanYi Zen Hei", "Noto Sans CJK SC", "DejaVu Sans", sans-serif;
+  font-family: "Rajdhani", "WenQuanYi Zen Hei", "Noto Sans CJK SC", "DejaVu Sans", sans-serif;
+  text-rendering: geometricPrecision;
 }
 .card { width: PAGEWpx; padding: 28px 26px 22px; }
 .kicker {
@@ -38,7 +40,7 @@ html, body {
 .sc {
   width: 52px;
   text-align: right;
-  font-family: "Liberation Sans", "DejaVu Sans", sans-serif;
+  font-family: "Rajdhani", "Liberation Sans", "DejaVu Sans", sans-serif;
   font-size: 36px;
   line-height: 1;
   color: #e6ff4d;
@@ -64,7 +66,7 @@ html, body {
 .g-line { margin-top: 4px; font-size: 15px; line-height: 1.45; color: #f3ecdf; }
 .when {
   margin-top: 8px;
-  font-family: "Liberation Sans", "DejaVu Sans", sans-serif;
+  font-family: "Rajdhani", "Liberation Sans", "DejaVu Sans", sans-serif;
   font-size: 15px;
   letter-spacing: 0.06em;
   color: #a39886;
@@ -86,7 +88,7 @@ html, body {
   font-size: 9px;
   letter-spacing: 0.06em;
   color: transparent;
-  font-family: "Liberation Sans", "DejaVu Sans", sans-serif;
+  font-family: "Rajdhani", "Liberation Sans", "DejaVu Sans", sans-serif;
 }
 .mtag.on { color: #ff5a3c; }
 .mtime {
@@ -94,7 +96,7 @@ html, body {
   font-size: 12px;
   letter-spacing: 0.04em;
   color: #a39886;
-  font-family: "Liberation Sans", "DejaVu Sans", sans-serif;
+  font-family: "Rajdhani", "Liberation Sans", "DejaVu Sans", sans-serif;
 }
 .mstars { color: #e6ff4d; font-size: 12px; letter-spacing: 0.12em; }
 .mmap {
@@ -119,7 +121,7 @@ td.slot div {
   font-size: 9px;
   letter-spacing: 0.04em;
   color: #ff5a3c;
-  font-family: "Liberation Sans", "DejaVu Sans", sans-serif;
+  font-family: "Rajdhani", "Liberation Sans", "DejaVu Sans", sans-serif;
 }
 td.slot.off div { color: #12110e; }
 td.body { padding: 8px 0 8px; border-top: 1px solid #2c2822; }
@@ -241,9 +243,11 @@ def _png(html: str) -> bytes:
     import pypdfium2
     from PIL import Image, ImageChops
 
+    # CSS pixels are 96 per inch; PDF points are 72. scale=4 is 3 device
+    # pixels per CSS pixel, so phone screens are not enlarging a soft image.
     pdf = weasyprint.HTML(string=html).write_pdf()
     doc = pypdfium2.PdfDocument(pdf)
-    image = doc[0].render(scale=2).to_pil().convert("RGB")
+    image = doc[0].render(scale=4).to_pil().convert("RGB")
     bg = Image.new("RGB", image.size, _BG)
     diff = ImageChops.difference(image, bg)
     box = diff.getbbox()
@@ -254,8 +258,28 @@ def _png(html: str) -> bytes:
     return out.getvalue()
 
 
+def _font_css() -> str:
+    directory = Path(__file__).resolve().parent / "fonts"
+    faces = []
+    for weight, filename in (
+        (400, "Rajdhani-Regular.ttf"),
+        (500, "Rajdhani-Medium.ttf"),
+        (600, "Rajdhani-SemiBold.ttf"),
+        (700, "Rajdhani-Bold.ttf"),
+    ):
+        uri = (directory / filename).as_uri()
+        faces.append(
+            "@font-face{"
+            "font-family:'Rajdhani';"
+            f"src:url('{uri}');"
+            f"font-weight:{weight};font-style:normal;"
+            "}"
+        )
+    return "".join(faces)
+
+
 def _page(body: str, height: int, width: int) -> str:
-    css = _CSS.replace("PAGEW", str(width)).replace("PAGEH", str(height))
+    css = _font_css() + _CSS.replace("PAGEW", str(width)).replace("PAGEH", str(height))
     return (
         "<!doctype html><html><head><meta charset='utf-8'><style>"
         + css
