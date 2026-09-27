@@ -4,7 +4,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from html import escape
 
-from hltv_bot.matches import both_sides_open, match_meta_line
+from hltv_bot.matches import both_sides_open, map_order
 
 CST = timezone(timedelta(hours=8))
 
@@ -758,7 +758,7 @@ def format_match_list(
     rows = rows[:limit]
     if not rows:
         if starred_only:
-            return "没有带星级的比赛。\n发 <code>/matches all</code> 查看全部。"
+            return "没有 1 星及以上的比赛。"
         return "今天没有抓到比赛。"
 
     grouped: dict[str, list[dict]] = {}
@@ -798,9 +798,16 @@ def format_match_list(
                 face = f"<b>{t1}</b>\nvs\n<b>{t2}</b>"
             else:
                 face = f"<b>{t1}</b>"
-            meta = match_meta_line(r)
-            if meta:
-                face += f"\n{h(meta)}"
+            current, rest = map_order(r)
+            fmt = (r.get("format") or "").strip().lower()
+            map_bits = []
+            if current:
+                map_bits.append(f"<b>{h(current)}</b>")
+            map_bits.extend(h(name) for name in rest)
+            if fmt:
+                map_bits.append(h(fmt))
+            if map_bits:
+                face += "\n" + " · ".join(map_bits)
             url = (r.get("url") or "").strip()
             star_s = "⭐" * n if n else ""
             head = f"{mark}  <code>{clock}</code>" if clock else mark
@@ -815,7 +822,7 @@ def format_match_list(
             lines.append("<blockquote>" + head + "\n" + face + "\n" + "  ".join(foot) + "</blockquote>")
         blocks.append("\n".join(lines))
     hint = (
-        "<i>时间 UTC+8 · /matches all 显示无星比赛</i>"
+        "<i>时间 UTC+8 · 至少 1 星</i>"
         if starred_only
         else "<i>时间 UTC+8 · /matches 只看有星赛事</i>"
     )
@@ -902,7 +909,7 @@ def format_match_list_rich(
             + "</table>"
         )
     hint = (
-        "时间 UTC+8 · /matches all 显示无星比赛"
+        "时间 UTC+8 · 至少 1 星"
         if starred_only
         else "时间 UTC+8 · /matches 只看有星赛事"
     )

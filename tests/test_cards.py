@@ -55,6 +55,7 @@ def test_matches_card_html_and_render():
                 "live": "1",
                 "format": "bo3",
                 "maps": "Nuke · Ancient · Mirage",
+                "map_index": "0",
             },
             {
                 "id": "2396933",
@@ -72,7 +73,9 @@ def test_matches_card_html_and_render():
     html = _matches_html(card, 400, 416)
     assert html.count("class='mcard mbody'") == 2
     assert "mtag on" in html
-    assert "Nuke · Ancient · Mirage · bo3" in html
+    assert "mmap-now'>Nuke" in html
+    assert "mmap-rest'>Ancient" in html
+    assert "mmap-rest'>Mirage" in html
     assert "当前图" not in html
     assert "#2396932" in html
     assert "#2396933" in html

@@ -310,7 +310,12 @@ class HltvTelegramBot:
             return
         if cmd not in ADMIN_CMDS | {"/start", "/help", "/hltv"} and not listed and not self.is_admin(user_id):
             return
-        if cmd.startswith("/") and message_id is not None and self.can_delete_in_chat(chat_id):
+        if (
+            cmd.startswith("/")
+            and cmd not in {"/events", "/event"}
+            and message_id is not None
+            and self.can_delete_in_chat(chat_id)
+        ):
             self._schedule_delete(chat_id, int(message_id))
         if cmd.startswith("/") and user_id is not None:
             interval = CMD_COOLDOWN.get(cmd, DEFAULT_CMD_COOLDOWN)
@@ -432,6 +437,15 @@ class HltvTelegramBot:
             self._reply(chat_id, f"Cloudflare 拦了列表页：{e}\n发 /cookie 更新 Cookie")
             return
         rows = prepare_match_list(rows, datetime.now(CST))
+        min_stars = self._cfg().min_stars
+
+        def _stars_of(row: dict) -> int:
+            try:
+                return int(row.get("stars") or 0)
+            except (TypeError, ValueError):
+                return 0
+
+        rows = [row for row in rows if _stars_of(row) >= min_stars]
         if tier != "Other":
             floor = tier_rank(tier)
             rows = [
@@ -440,8 +454,8 @@ class HltvTelegramBot:
                 if tier_rank(classify_event_tier(r.get("event") or "", int(r.get("stars") or 0))) <= floor
             ]
         if not rows:
-            hint = "发 /matches all 看全部。" if tier != "Other" else ""
-            self._reply(chat_id, f"暂无符合筛选的比赛。{hint}".strip())
+            hint = "发 /matches all 看其他赛事。" if tier != "Other" else ""
+            self._reply(chat_id, f"暂无 {min_stars} 星及以上的比赛。{hint}".strip())
             return
         if "text" in raw or "txt" in raw:
             self._reply(chat_id, format_match_list(rows, starred_only=False))
@@ -467,7 +481,7 @@ class HltvTelegramBot:
             self._reply(chat_id, f"Cloudflare 拦了赛事页：{e}\n发 /cookie 更新 Cookie")
             return
         if "text" in raw or "txt" in raw:
-            self._reply(chat_id, format_events_html(rows))
+            self._reply(chat_id, format_events_html(rows), keep=True)
             return
         from hltv_bot.events import country_code_to_emoji, format_event_date_range
 
@@ -488,7 +502,7 @@ class HltvTelegramBot:
             )
         caption = f"<b>赛事</b>  {len(shown)} 场"
         caption += "\n<i>/events all 查看全部赛事</i>"
-        self._reply_card(chat_id, {"view": "events", "rows": card_rows}, caption, format_events_html(rows))
+        self._reply_card(chat_id, {"view": "events", "rows": card_rows}, caption, format_events_html(rows), keep=True)
 
     def _cmd_window(self, chat_id: int, arg: str) -> None:
         del arg
@@ -812,24 +826,24 @@ class HltvTelegramBot:
 
         threading.Timer(delay, _run).start()
 
-    def _reply_card(self, chat_id: int, card: dict, caption: str, fallback: str) -> None:
+    def _reply_card(self, chat_id: int, card: dict, caption: str, fallback: str, *, keep: bool = False) -> None:
         try:
             from hltv_bot.cards import render_card
 
             png = render_card(card)
         except Exception:
             log.exception("card render")
-            self._reply(chat_id, fallback)
+            self._reply(chat_id, fallback, keep=keep)
             return
         msg = self.tg.send_photo(chat_id, png, caption=caption, filename="hltv.png")
         mid = msg.get("message_id") if isinstance(msg, dict) else None
-        if mid is not None:
+        if mid is not None and not keep:
             self._schedule_delete(chat_id, int(mid))
 
-    def _reply(self, chat_id: int, text: str) -> dict:
+    def _reply(self, chat_id: int, text: str, *, keep: bool = False) -> dict:
         msg = self.tg.send_message(chat_id, text)
         mid = msg.get("message_id") if isinstance(msg, dict) else None
-        if mid is not None:
+        if mid is not None and not keep:
             self._schedule_delete(chat_id, int(mid))
         return msg
 

@@ -100,9 +100,13 @@ html, body {
 .mmap {
   margin-top: 8px;
   font-size: 13px;
-  letter-spacing: 0.04em;
-  color: #e6ff4d;
+  letter-spacing: 0.03em;
 }
+.mmap-now { color: #e6ff4d; font-weight: 700; }
+.mmap-rest { color: #8d8478; }
+.mmap-rest::before { content: " · "; color: #5c564c; }
+.mmap-fmt { color: #5c564c; }
+.mmap-fmt::before { content: " · "; }
 table.sheet { width: 100%; border-collapse: collapse; }
 td.slot {
   width: 36px;
@@ -385,9 +389,25 @@ def _guide_html(card: dict, height: int, width: int) -> str:
     return _page("".join(bits), height, width)
 
 
-def _matches_html(card: dict, height: int, width: int) -> str:
-    from hltv_bot.matches import match_meta_line
+def _map_line(row: dict) -> str:
+    from hltv_bot.matches import map_order
 
+    current, rest = map_order(row)
+    fmt = (row.get("format") or "").strip().lower()
+    if not current and not rest and not fmt:
+        return ""
+    bits = ["<div class='mmap'>"]
+    if current:
+        bits.append(f"<span class='mmap-now'>{_e(current)}</span>")
+    for name in rest:
+        bits.append(f"<span class='mmap-rest'>{_e(name)}</span>")
+    if fmt:
+        bits.append(f"<span class='mmap-fmt'>{_e(fmt)}</span>")
+    bits.append("</div>")
+    return "".join(bits)
+
+
+def _matches_html(card: dict, height: int, width: int) -> str:
     rows = list(card.get("rows") or [])[:12]
     bits = [f"<div class='sheet-title'>{_e(card.get('title') or '比赛  ·  UTC+8')}</div>"]
     for row in rows:
@@ -401,7 +421,6 @@ def _matches_html(card: dict, height: int, width: int) -> str:
         sc_accent = "live" if live else ("final" if (a or b) else "soon")
         mid = str(row.get("id") or "").strip()
         event = (row.get("event") or "").strip()
-        meta = match_meta_line(row)
         foot = "  ·  ".join(x for x in (event, f"#{mid}" if mid else "") if x)
         bits.append(
             "<div class='mcard mbody'>"
@@ -429,7 +448,7 @@ def _matches_html(card: dict, height: int, width: int) -> str:
             + "<div class='sub'>"
             + _img(_event_logo_uri(str(row.get("event_id") or ""), str(row.get("event_logo") or ""), "s"), "elogo")
             + f"{_e(foot)}</div>"
-            + (f"<div class='mmap'>{_e(meta)}</div>" if meta else "")
+            + _map_line(row)
             + "</div>"
         )
     if not rows:

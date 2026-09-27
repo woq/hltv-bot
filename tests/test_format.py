@@ -292,7 +292,7 @@ def test_match_list_rich_text():
         ],
         starred_only=True,
     )
-    assert "all" in hidden.lower()
+    assert "1 星" in hidden
     shown = format_match_list(
         [
             {

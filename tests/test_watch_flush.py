@@ -42,3 +42,33 @@ def test_command_reply_is_scheduled_for_delete(monkeypatch):
     assert scheduled["delay"] == MSG_TTL
     assert tg.sent
     assert tg.sent[0][2] is False
+
+
+def test_events_list_and_daily_digest_are_not_deleted(monkeypatch):
+    from hltv_bot.reminders import Notice
+
+    tg = Tg()
+    bot = HltvTelegramBot(tg, BrowserSession("chrome131", {}, "cf_clearance=x"), admin_ids={1})
+    timers: list = []
+
+    def fake_timer(*args, **kwargs):
+        timers.append(args)
+
+        class T:
+            def start(self):
+                return None
+
+        return T()
+
+    monkeypatch.setattr("hltv_bot.bot.threading.Timer", fake_timer)
+    monkeypatch.setattr("hltv_bot.bot.fetch_events", lambda sess: [{"id": "1", "name": "BLAST", "tier": "T1"}])
+    monkeypatch.setattr("hltv_bot.bot.filter_and_sort_events", lambda rows, allowed_tiers=(): rows)
+    monkeypatch.setattr("hltv_bot.cards.render_card", lambda card: b"png")
+    bot.handle_text(1, "/events", user_id=1, message_id=9)
+    assert timers == []
+    assert tg.sent
+
+    monkeypatch.setattr("hltv_bot.bot.group_ids", lambda: [5])
+    bot._broadcast(Notice("d:2026-09-27:10", "<b>赛程</b>", {"view": "matches", "rows": []}))
+    assert timers == []
+    assert any(item[0] == 5 for item in tg.sent)

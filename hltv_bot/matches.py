@@ -129,15 +129,35 @@ def show_on_list(row: dict, now: datetime | None = None, *, days: int = LIST_DAY
     return begin <= start < begin + timedelta(days=days)
 
 
-def match_meta_line(row: dict) -> str:
-    """Map names from the list page, plus bo1/bo3/bo5.
+def map_order(row: dict) -> tuple[str, list[str]]:
+    """Current map first, then the others in series order.
 
-    The matches page names the map pool (``data-maps``), not which map is live.
+    ``data-maps`` is the series order. The live map is the one after the maps
+    already won. When that count is missing on a live series, the first map
+    is the current one.
     """
+    names = [part.strip() for part in re.split(r"\s*·\s*", row.get("maps") or "") if part.strip()]
+    if not names:
+        one = (row.get("map") or "").strip()
+        return (one, []) if one else ("", [])
+    idx = row.get("map_index")
+    try:
+        current_i = int(idx) if str(idx).strip() != "" else -1
+    except (TypeError, ValueError):
+        current_i = -1
+    if current_i < 0 or current_i >= len(names):
+        return "", names
+    current = names[current_i]
+    rest = [name for i, name in enumerate(names) if i != current_i]
+    return current, rest
+
+
+def match_meta_line(row: dict) -> str:
     fmt = (row.get("format") or "").strip().lower()
-    one = (row.get("map") or "").strip()
-    pool = (row.get("maps") or "").strip()
-    label = one or pool
+    current, rest = map_order(row)
+    parts = [current] if current else []
+    parts.extend(rest)
+    label = " · ".join(parts)
     if label and fmt:
         return f"{label} · {fmt}"
     return label or fmt
@@ -249,6 +269,8 @@ def _abs_logo(src: str) -> str:
 
 def _is_placeholder_logo(src: str) -> bool:
     low = src.lower()
+    if "teamplaceholder" in low:
+        return False
     return any(tok in low for tok in ("placeholder", "nologo", "blank", "defaultlogo"))
 
 
@@ -293,9 +315,15 @@ def _team_logo_urls(chunk: str) -> tuple[str, str]:
         attrs = m.group(1)
         src = _abs_logo(_img_attr(attrs, "src"))
         cls = _img_attr(attrs, "class").lower()
-        if not src:
+        if not src or _is_placeholder_logo(src):
             continue
-        if "matchteamlogo" not in cls and "teamlogo" not in src.lower() and "/team/" not in src.lower():
+        if (
+            "team-logo" not in cls
+            and "teamlogo" not in cls
+            and "teamlogo" not in src.lower()
+            and "/team/" not in src.lower()
+            and "teamplaceholder" not in src.lower()
+        ):
             continue
         alt = _img_attr(attrs, "alt") or _img_attr(attrs, "title")
         if "night-only" in cls:
@@ -304,8 +332,6 @@ def _team_logo_urls(chunk: str) -> tuple[str, str]:
             variant = "day"
         else:
             variant = "any"
-        if _is_placeholder_logo(src):
-            src = ""
         if slots:
             prev = slots[-1]
             prev_alt = prev.get("alt") or ""
@@ -454,10 +480,16 @@ def _parse_wrappers(html: str, *, limit: int = 100, exclude_tbd: bool = False) -
         bo = _BO_META.search(chunk)
         fmt = bo.group(1).lower() if bo else ""
         pool = _MAP_POOL.search(chunk)
-        maps = ""
-        if pool:
-            names = [pretty_name(part.strip()) for part in pool.group(1).split(",") if part.strip()]
-            maps = " · ".join(names)
+        map_names = [pretty_name(part.strip()) for part in (pool.group(1).split(",") if pool else []) if part.strip()]
+        maps = " · ".join(map_names)
+        won = [part for part in re.findall(r'data-livescore-maps-won-for="([^"]*)"', chunk) if part.isdigit()]
+        map_index = ""
+        if len(won) >= 2 and map_names:
+            played = int(won[0]) + int(won[1])
+            if played < len(map_names):
+                map_index = str(played)
+        elif live and fmt in {"bo3", "bo5"} and map_names:
+            map_index = "0"
         scores = _CURRENT_MAP_SCORE.findall(chunk)
         if len(scores) < 2:
             scores = list(_team_scores(chunk))
@@ -489,6 +521,7 @@ def _parse_wrappers(html: str, *, limit: int = 100, exclude_tbd: bool = False) -
                 "stars": str(max(0, min(5, stars))),
                 "format": fmt,
                 "maps": maps,
+                "map_index": map_index,
                 "score1": score1,
                 "score2": score2,
                 "time": format_start_time(unix, live=live),

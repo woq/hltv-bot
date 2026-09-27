@@ -36,6 +36,7 @@ def test_wrapper_list_reads_bo_and_current_map_score():
     assert live["score1"] == "3"
     assert live["score2"] == "5"
     assert live["maps"] == "Nuke · Ancient · Mirage"
+    assert live["map_index"] == "0"
     assert live["live"] == "1"
     assert live["event"] == "1win Private Club Season 1"
     bo1 = next(r for r in rows if r["id"] == "2398758")
@@ -44,6 +45,31 @@ def test_wrapper_list_reads_bo_and_current_map_score():
     assert bo1["team2"] == "PAQT"
     assert bo1["score1"] == ""
     assert bo1["live"] == "0"
+
+
+def test_series_maps_lead_with_the_current_one():
+    from hltv_bot.matches import map_order
+
+    assert map_order({"maps": "Nuke · Ancient · Mirage", "map_index": "1"}) == (
+        "Ancient",
+        ["Nuke", "Mirage"],
+    )
+
+
+def test_letter_placeholder_is_a_team_logo():
+    html = """
+    <div class="match-wrapper" data-match-id="1" team1="9" team2="8" live="false">
+      <a href="/matches/1/alpha-vs-beta-cup">
+        <div class="match-teamname">Alpha</div>
+        <div class="match-teamname">Beta</div>
+        <img class="match-team-logo" alt="Alpha" src="/dynamic-svg/teamplaceholder?letter=A">
+        <img class="match-team-logo" alt="Beta" src="/dynamic-svg/teamplaceholder?letter=B">
+      </a>
+    </div>
+    """
+    rows = parse_match_list(html, limit=0)
+    assert "teamplaceholder?letter=A" in rows[0]["team1_logo"]
+    assert rows[0]["team1_id"] == "9"
 
 
 def test_long_team_names_shorten_to_the_card_gap():
