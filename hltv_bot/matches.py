@@ -129,6 +129,20 @@ def show_on_list(row: dict, now: datetime | None = None, *, days: int = LIST_DAY
     return begin <= start < begin + timedelta(days=days)
 
 
+def match_meta_line(row: dict) -> str:
+    """Map names from the list page, plus bo1/bo3/bo5.
+
+    The matches page names the map pool (``data-maps``), not which map is live.
+    """
+    fmt = (row.get("format") or "").strip().lower()
+    one = (row.get("map") or "").strip()
+    pool = (row.get("maps") or "").strip()
+    label = one or pool
+    if label and fmt:
+        return f"{label} · {fmt}"
+    return label or fmt
+
+
 def prepare_match_list(rows: list[dict], now: datetime | None = None) -> list[dict]:
     now = now or datetime.now(CST)
     kept = [row for row in rows if show_on_list(row, now)]
@@ -151,6 +165,51 @@ def format_start_time(unix_raw: str | int | None, *, live: bool = False) -> str:
     if dt.date() != now.date():
         return dt.strftime("%m/%d ") + clock
     return clock
+
+
+def _wide(ch: str) -> bool:
+    import unicodedata
+
+    return unicodedata.east_asian_width(ch) in {"W", "F"}
+
+
+def name_units(text: str) -> int:
+    """Latin letters count as 1. Wide characters, mostly CJK, count as 2."""
+    return sum(2 if _wide(ch) else 1 for ch in text)
+
+
+_NAME_FILLER = {"esports", "esport", "e-sports", "gaming", "club"}
+_NAME_SKIP = {"of", "the", "and"}
+
+
+def short_team(name: str, limit: int) -> str:
+    """Fit a team name into `limit` width units.
+
+    The list card fits 22 Latin letters between the logo and the score.
+    The single match card fits 16. Wide characters count as two.
+    """
+    text = " ".join((name or "").split())
+    if not text or name_units(text) <= limit:
+        return text
+    words = [word for word in text.split(" ") if word.lower() not in _NAME_FILLER]
+    trimmed = " ".join(words) or text
+    if name_units(trimmed) <= limit:
+        return trimmed
+    if len(words) >= 3 and all(word.isascii() for word in words):
+        letters = [word[0] for word in words if word.lower() not in _NAME_SKIP and word]
+        if 2 <= len(letters) <= limit:
+            return "".join(letters)
+    if len(words) >= 2 and 4 <= name_units(words[0]) <= limit:
+        return words[0]
+    kept: list[str] = []
+    used = 0
+    for ch in trimmed:
+        width = 2 if _wide(ch) else 1
+        if used + width > limit - 1:
+            break
+        kept.append(ch)
+        used += width
+    return "".join(kept).rstrip() + "…"
 
 
 def pretty_name(text: str) -> str:
@@ -352,6 +411,7 @@ _WRAPPER_OPEN = re.compile(r'<div class="match-wrapper\b', re.I)
 _BO_META = re.compile(r'<div class="match-meta">\s*(bo\d)\s*</div>', re.I)
 _TEAM_LINE = re.compile(r'class="[^"]*match-teamname[^"]*"[^>]*>\s*([^<]+)', re.I)
 _CURRENT_MAP_SCORE = re.compile(r'data-livescore-current-map-score="(\d+)"', re.I)
+_MAP_POOL = re.compile(r'data-maps="([^"]*)"', re.I)
 
 
 def _parse_wrappers(html: str, *, limit: int = 100, exclude_tbd: bool = False) -> list[dict[str, str]]:
@@ -375,8 +435,12 @@ def _parse_wrappers(html: str, *, limit: int = 100, exclude_tbd: bool = False) -
         if mid in seen:
             continue
         seen.add(mid)
-        head = chunk[:500]
+        head = chunk[:800]
         live = 'live="true"' in head or "live-match-container" in head
+        t1_id_m = re.search(r'\bteam1="(\d+)"', head)
+        t2_id_m = re.search(r'\bteam2="(\d+)"', head)
+        team1_id = t1_id_m.group(1) if t1_id_m else ""
+        team2_id = t2_id_m.group(1) if t2_id_m else ""
         names = [_clean(x) for x in _TEAM_LINE.findall(chunk) if _clean(x)]
         t1, t2, event = _teams_event_from_slug(slug)
         if len(names) >= 2:
@@ -389,6 +453,11 @@ def _parse_wrappers(html: str, *, limit: int = 100, exclude_tbd: bool = False) -
         t1, t2, event = pretty_name(t1), pretty_name(t2), pretty_name(event)
         bo = _BO_META.search(chunk)
         fmt = bo.group(1).lower() if bo else ""
+        pool = _MAP_POOL.search(chunk)
+        maps = ""
+        if pool:
+            names = [pretty_name(part.strip()) for part in pool.group(1).split(",") if part.strip()]
+            maps = " · ".join(names)
         scores = _CURRENT_MAP_SCORE.findall(chunk)
         if len(scores) < 2:
             scores = list(_team_scores(chunk))
@@ -408,6 +477,8 @@ def _parse_wrappers(html: str, *, limit: int = 100, exclude_tbd: bool = False) -
                 "url": _abs(href),
                 "team1": t1,
                 "team2": t2,
+                "team1_id": team1_id,
+                "team2_id": team2_id,
                 "team1_logo": logo1,
                 "team2_logo": logo2,
                 "event": event,
@@ -417,6 +488,7 @@ def _parse_wrappers(html: str, *, limit: int = 100, exclude_tbd: bool = False) -
                 "live": "1" if live else "0",
                 "stars": str(max(0, min(5, stars))),
                 "format": fmt,
+                "maps": maps,
                 "score1": score1,
                 "score2": score2,
                 "time": format_start_time(unix, live=live),

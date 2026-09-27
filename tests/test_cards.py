@@ -53,6 +53,8 @@ def test_matches_card_html_and_render():
                 "event": "IEM Cologne 2026",
                 "stars": "5",
                 "live": "1",
+                "format": "bo3",
+                "maps": "Nuke · Ancient · Mirage",
             },
             {
                 "id": "2396933",
@@ -67,8 +69,11 @@ def test_matches_card_html_and_render():
             },
         ],
     }
-    html = _matches_html(card, 300, 416)
-    assert "class='body mbody'" in html
+    html = _matches_html(card, 400, 416)
+    assert html.count("class='mcard mbody'") == 2
+    assert "mtag on" in html
+    assert "Nuke · Ancient · Mirage · bo3" in html
+    assert "当前图" not in html
     assert "#2396932" in html
     assert "#2396933" in html
     assert "sc live" in html

@@ -154,52 +154,39 @@ def format_location(loc: str, cc: str = "", sess: BrowserSession | None = None) 
 _LOGO_CACHE_DIR = Path("data/event_logos")
 
 
-def get_cached_logo_data_uri(event_id: str, logo_url: str = "") -> str:
-    """Return data URI for a cached event logo. Touches the file so prune keeps it."""
-    del logo_url
+def event_logo_stem(event_id: str, size: str) -> str:
+    """`l` is the events-list art. `s` is the small icon used everywhere else."""
     stem = _stem(str(event_id or ""))
     if not stem:
         return ""
+    return f"{stem}-l" if size == "l" else f"{stem}-s"
+
+
+def get_cached_logo_data_uri(event_id: str, logo_url: str = "", *, size: str = "l") -> str:
+    """Return a cached event logo. A month-old file is not refreshed here."""
+    del logo_url
     from hltv_bot.team_logos import data_uri_for, find_cached_stem
 
-    path = find_cached_stem(_LOGO_CACHE_DIR, stem)
+    stem = event_logo_stem(event_id, size)
+    path = find_cached_stem(_LOGO_CACHE_DIR, stem) if stem else None
+    if path is None and size == "l":
+        path = find_cached_stem(_LOGO_CACHE_DIR, _stem(str(event_id or "")))
     if path is None:
         return ""
-    return data_uri_for(path)
+    return data_uri_for(path, touch=False)
 
 
-def ensure_event_logos(pairs: list[tuple[str, str]]) -> None:
-    """Download event logos shown on the next card. Drops files unused for 7 days."""
-    from hltv_bot.team_logos import EVENT_LOGO_MAX_AGE_SEC, download_images, find_cached_stem, prune_image_dir, save_image
+def ensure_event_logos(pairs: list[tuple[str, str]], *, size: str = "l") -> None:
+    """Cache event art by event id and size. Refresh after 30 days."""
+    from hltv_bot.team_logos import EVENT_LOGO_MAX_AGE_SEC, ensure_id_logos, prune_image_dir
 
     prune_image_dir(_LOGO_CACHE_DIR, EVENT_LOGO_MAX_AGE_SEC)
-    pending: list[tuple[str, str]] = []
-    seen: set[str] = set()
+    keyed: list[tuple[str, str]] = []
     for event_id, logo_url in pairs:
-        stem = _stem(str(event_id or ""))
-        url = unescape((logo_url or "").strip())
-        if not stem or not url or stem in seen:
-            continue
-        seen.add(stem)
-        path = find_cached_stem(_LOGO_CACHE_DIR, stem)
-        if path is not None:
-            try:
-                path.touch()
-            except OSError:
-                pass
-            continue
-        if url.startswith("//"):
-            url = "https:" + url
-        elif url.startswith("/"):
-            url = "https://www.hltv.org" + url
-        pending.append((stem, url))
-    if not pending:
-        return
-    fetched = download_images([url for _, url in pending])
-    for stem, url in pending:
-        data = fetched.get(url)
-        if data:
-            save_image(_LOGO_CACHE_DIR, stem, data)
+        stem = event_logo_stem(event_id, size)
+        if stem:
+            keyed.append((stem, unescape((logo_url or "").strip())))
+    ensure_id_logos(_LOGO_CACHE_DIR, keyed, EVENT_LOGO_MAX_AGE_SEC)
 
 
 def cache_event_logo(event_id: str, logo_url: str, sess: BrowserSession | None = None) -> str:
@@ -529,8 +516,10 @@ def fetch_events(sess: BrowserSession, timeout: float = 25.0) -> list[dict]:
                 if img_m:
                     aside_logo = unescape(img_m.group(1))
                     for r in rows:
-                        if r.get("id") == eid and not r.get("logo_url"):
-                            r["logo_url"] = aside_logo
+                        if r.get("id") == eid:
+                            r["logo_small_url"] = aside_logo
+                            if not r.get("logo_url"):
+                                r["logo_url"] = aside_logo
     except Exception as e:
         log.debug("failed to enrich logos from homepage aside: %s", e)
 

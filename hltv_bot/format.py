@@ -4,7 +4,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from html import escape
 
-from hltv_bot.matches import both_sides_open
+from hltv_bot.matches import both_sides_open, match_meta_line
 
 CST = timezone(timedelta(hours=8))
 
@@ -798,11 +798,9 @@ def format_match_list(
                 face = f"<b>{t1}</b>\nvs\n<b>{t2}</b>"
             else:
                 face = f"<b>{t1}</b>"
-            fmt = (r.get("format") or "").strip().lower()
-            if fmt in {"bo3", "bo5"} and (sc1 or sc2):
-                face += f"\n当前图 · {h(fmt)}"
-            elif fmt in {"bo1", "bo3", "bo5"}:
-                face += f"\n{h(fmt)}"
+            meta = match_meta_line(r)
+            if meta:
+                face += f"\n{h(meta)}"
             url = (r.get("url") or "").strip()
             star_s = "⭐" * n if n else ""
             head = f"{mark}  <code>{clock}</code>" if clock else mark

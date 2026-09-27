@@ -14,6 +14,7 @@ def test_wrapper_list_reads_bo_and_current_map_score():
         <div class="match-teamname">SINNERS</div>
         <span data-livescore-current-map-score="3"></span>
         <span data-livescore-current-map-score="5"></span>
+        <div data-maps="Nuke,Ancient,Mirage"></div>
       </a>
     </div>
     <div class="match-wrapper" data-match-id="2398758" data-stars="0" live="false">
@@ -34,6 +35,7 @@ def test_wrapper_list_reads_bo_and_current_map_score():
     assert live["format"] == "bo3"
     assert live["score1"] == "3"
     assert live["score2"] == "5"
+    assert live["maps"] == "Nuke · Ancient · Mirage"
     assert live["live"] == "1"
     assert live["event"] == "1win Private Club Season 1"
     bo1 = next(r for r in rows if r["id"] == "2398758")
@@ -42,6 +44,17 @@ def test_wrapper_list_reads_bo_and_current_map_score():
     assert bo1["team2"] == "PAQT"
     assert bo1["score1"] == ""
     assert bo1["live"] == "0"
+
+
+def test_long_team_names_shorten_to_the_card_gap():
+    from hltv_bot.matches import short_team
+
+    assert short_team("Natus Vincere", 22) == "Natus Vincere"
+    assert short_team("Ninjas in Pyjamas", 16) == "NiP"
+    assert short_team("THUNDER dOWNUNDER", 16) == "THUNDER"
+    assert short_team("GamerLegionAcademyExtra", 16).endswith("…")
+    assert short_team("电子竞技俱乐部战队名称", 16).endswith("…")
+    assert len(short_team("电子竞技俱乐部战队名称", 16)) <= 9
 
 
 def test_list_hides_open_sides_and_matches_beyond_three_days():

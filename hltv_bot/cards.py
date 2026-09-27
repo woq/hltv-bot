@@ -74,6 +74,35 @@ html, body {
 .flag { font-family: "Noto Color Emoji", "DejaVu Sans", sans-serif; }
 .remain { margin-top: 14px; font-size: 22px; }
 .sheet-title { font-size: 12px; letter-spacing: 0.22em; color: #a39886; }
+.mcard {
+  margin-top: 14px;
+  padding: 12px 12px 11px;
+  background: #221f1a;
+  border-radius: 12px;
+}
+.mhead { display: flex; align-items: center; }
+.mtag {
+  width: 38px;
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  color: transparent;
+  font-family: "Liberation Sans", "DejaVu Sans", sans-serif;
+}
+.mtag.on { color: #ff5a3c; }
+.mtime {
+  flex: 1;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  color: #a39886;
+  font-family: "Liberation Sans", "DejaVu Sans", sans-serif;
+}
+.mstars { color: #e6ff4d; font-size: 12px; letter-spacing: 0.12em; }
+.mmap {
+  margin-top: 8px;
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  color: #e6ff4d;
+}
 table.sheet { width: 100%; border-collapse: collapse; }
 td.slot {
   width: 36px;
@@ -93,7 +122,8 @@ td.body { padding: 8px 0 8px; border-top: 1px solid #2c2822; }
 .mbody .trow { margin-top: 4px; }
 .mbody .name { font-size: 15px; }
 .mbody .sc { width: 28px; font-size: 16px; }
-.mbody .tlogo, .mbody .tlogo-ph { width: 16px; height: 16px; flex-basis: 16px; margin-right: 6px; }
+.mbody .tlogo, .mbody .tlogo-ph { width: 22px; height: 22px; flex-basis: 22px; margin-right: 8px; }
+.tlogo svg, .mbody .tlogo svg { width: 100%; height: 100%; display: block; }
 .sub {
   display: flex;
   align-items: center;
@@ -126,6 +156,25 @@ def _e(value: object) -> str:
 
 _CARD_W = 520
 _LIST_W = 416  # list cards are 20% narrower for a phone
+# List name column is the gap between the 22px logo and the score on a 416px card.
+# At 15px that is 22 Latin letters. The 520px match card uses 28px type, so 16.
+# A CJK character counts as two letters.
+LIST_NAME_UNITS = 22
+CARD_NAME_UNITS = 16
+
+
+def _team_logo_uri(team_id: str, url: str) -> str:
+    team_id = str(team_id or "").strip()
+    if team_id.isdigit():
+        try:
+            from hltv_bot.team_logos import team_logo_uri
+
+            found = team_logo_uri(team_id, url)
+            if found:
+                return found
+        except Exception:
+            pass
+    return _logo_uri(url)
 
 
 def _logo_uri(url: str) -> str:
@@ -143,28 +192,32 @@ def _logo_uri(url: str) -> str:
         return ""
 
 
-def _event_logo_uri(event_id: str, url: str) -> str:
+def _event_logo_uri(event_id: str, url: str, size: str = "s") -> str:
     url = (url or "").strip()
     event_id = str(event_id or "").strip()
     if url.startswith("data:image"):
         return url
-    if event_id and url:
+    if event_id:
         try:
             from hltv_bot.events import ensure_event_logos, get_cached_logo_data_uri
 
-            ensure_event_logos([(event_id, url)])
-            found = get_cached_logo_data_uri(event_id)
+            ensure_event_logos([(event_id, url)], size=size)
+            found = get_cached_logo_data_uri(event_id, size=size)
             if found:
                 return found
+            if size == "s":
+                found = get_cached_logo_data_uri(event_id, size="l")
+                if found:
+                    return found
         except Exception:
             return ""
-    return _logo_uri(url)
+    return ""
 
 
 def render_card(card: dict) -> bytes:
     view = card.get("view") or "match"
     if view == "matches":
-        height = 96 + 128 * max(1, min(len(card.get("rows") or []), 12))
+        height = 48 + 168 * max(1, min(len(card.get("rows") or []), 12))
         html = _matches_html(card, height, _LIST_W)
     elif view == "events":
         height = 118 + 88 * max(1, min(len(card.get("rows") or []), 8))
@@ -209,17 +262,51 @@ def _page(body: str, height: int, width: int) -> str:
 
 
 def _img(uri: str, cls: str) -> str:
+    if uri.startswith("data:image/svg"):
+        svg = _svg_markup(uri)
+        if svg:
+            return f'<span class="{cls}">{svg}</span>'
     if uri.startswith("data:image"):
         return f'<img class="{cls}" src="{uri}" />'
     return f'<span class="{cls}-ph"></span>'
 
 
-def _team_row(name: str, score: str, logo: str, accent: str) -> str:
+def _svg_markup(uri: str) -> str:
+    import base64
+    import re
+
+    raw = uri.split(",", 1)
+    if len(raw) != 2:
+        return ""
+    try:
+        text = base64.b64decode(raw[1]).decode("utf-8", "replace")
+    except Exception:
+        return ""
+    start = text.lower().find("<svg")
+    if start < 0:
+        return ""
+    svg = text[start:]
+    if "class=" in svg[:80].lower():
+        return svg
+    return re.sub(r"<svg\b", "<svg class='logo-svg'", svg, count=1, flags=re.I)
+
+
+def _team_row(
+    name: str,
+    score: str,
+    logo: str,
+    accent: str,
+    *,
+    team_id: str = "",
+    limit: int = CARD_NAME_UNITS,
+) -> str:
+    from hltv_bot.matches import short_team
+
     mark = _e(score) if score else "–"
     return (
         "<div class='trow'>"
-        + _img(_logo_uri(logo), "tlogo")
-        + f"<div class='name'>{_e(name)}</div>"
+        + _img(_team_logo_uri(team_id, logo), "tlogo")
+        + f"<div class='name'>{_e(short_team(name, limit))}</div>"
         + f"<div class='sc {accent}'>{mark}</div>"
         + "</div>"
     )
@@ -233,11 +320,11 @@ def _match_html(card: dict, height: int, width: int) -> str:
     right = pair[1] if pair and len(pair) > 1 else ""
     bits = [
         f"<div class='kicker'>{_e(card.get('label'))}</div>",
-        _team_row(card.get("team1") or "?", left, card.get("logo1") or "", accent),
-        _team_row(card.get("team2") or "?", right, card.get("logo2") or "", accent),
+        _team_row(card.get("team1") or "?", left, card.get("logo1") or "", accent, team_id=str(card.get("team1_id") or "")),
+        _team_row(card.get("team2") or "?", right, card.get("logo2") or "", accent, team_id=str(card.get("team2_id") or "")),
         "<div class='rule'></div>",
         "<div class='eventline'>"
-        + _img(_logo_uri(card.get("event_logo") or ""), "elogo")
+        + _img(_event_logo_uri(str(card.get("event_id") or ""), str(card.get("event_logo") or ""), "s"), "elogo")
         + f"<div class='event'>{_e(card.get('event'))}</div></div>",
     ]
     if card.get("note"):
@@ -248,15 +335,17 @@ def _match_html(card: dict, height: int, width: int) -> str:
 
 
 def _event_html(card: dict, height: int, width: int) -> str:
-    logo = _event_logo_uri(str(card.get("id") or ""), str(card.get("logo_url") or ""))
-    bg = ""
-    if logo.startswith("data:image"):
-        bg = f"<div class='event-bg' style=\"background-image:url('{logo}')\"></div><div class='event-shade'></div>"
+    logo = _event_logo_uri(
+        str(card.get("id") or ""),
+        str(card.get("logo_small_url") or card.get("logo_url") or ""),
+        "s",
+    )
     bits = [
         "<div class='event-card'>",
-        bg,
         "<div class='event-copy'>",
-        f"<div class='kicker'>赛事  ·  {_e(card.get('tier'))}</div>",
+        "<div class='eventline'>"
+        + _img(logo, "elogo")
+        + f"<div class='kicker'>赛事  ·  {_e(card.get('tier'))}</div></div>",
         f"<div class='name' style='margin-top:22px'>{_e(card.get('name'))}</div>",
     ]
     place = " ".join(x for x in (card.get("flag") or "", card.get("location") or "") if x)
@@ -297,43 +386,62 @@ def _guide_html(card: dict, height: int, width: int) -> str:
 
 
 def _matches_html(card: dict, height: int, width: int) -> str:
+    from hltv_bot.matches import match_meta_line
+
     rows = list(card.get("rows") or [])[:12]
     bits = [f"<div class='sheet-title'>{_e(card.get('title') or '比赛  ·  UTC+8')}</div>"]
     for row in rows:
         live = row.get("live") == "1"
         a = (row.get("score1") or "").strip()
         b = (row.get("score2") or "").strip()
-        clock = row.get("time") or ""
+        clock = (row.get("time") or "").strip()
+        if live and clock.upper() == "LIVE":
+            clock = ""
         stars = "★" * _stars(row)
-        slot_cls = "slot" if live else "slot off"
         sc_accent = "live" if live else ("final" if (a or b) else "soon")
         mid = str(row.get("id") or "").strip()
-        id_str = f"#{mid}" if mid else ""
-        note = _list_note(row, scored=bool(a or b))
-        sub_items = [x for x in [clock, stars, note, row.get("event"), id_str] if x]
-        sub_str = "  ·  ".join(_e(x) for x in sub_items)
+        event = (row.get("event") or "").strip()
+        meta = match_meta_line(row)
+        foot = "  ·  ".join(x for x in (event, f"#{mid}" if mid else "") if x)
         bits.append(
-            "<tr>"
-            f"<td class='{slot_cls}'><div>LIVE</div></td>"
-            "<td class='body mbody'>"
-            + _team_row(row.get("team1") or "?", a, row.get("team1_logo") or "", sc_accent)
-            + _team_row(row.get("team2") or "?", b, row.get("team2_logo") or "", sc_accent)
+            "<div class='mcard mbody'>"
+            "<div class='mhead'>"
+            f"<span class='mtag{' on' if live else ''}'>LIVE</span>"
+            f"<span class='mtime'>{_e(clock)}</span>"
+            f"<span class='mstars'>{_e(stars)}</span>"
+            "</div>"
+            + _team_row(
+                row.get("team1") or "?",
+                a,
+                row.get("team1_logo") or "",
+                sc_accent,
+                team_id=str(row.get("team1_id") or ""),
+                limit=LIST_NAME_UNITS,
+            )
+            + _team_row(
+                row.get("team2") or "?",
+                b,
+                row.get("team2_logo") or "",
+                sc_accent,
+                team_id=str(row.get("team2_id") or ""),
+                limit=LIST_NAME_UNITS,
+            )
             + "<div class='sub'>"
-            + _img(_logo_uri(row.get("event_logo") or ""), "elogo")
-            + f"{sub_str}</div>"
-            + "</td></tr>"
+            + _img(_event_logo_uri(str(row.get("event_id") or ""), str(row.get("event_logo") or ""), "s"), "elogo")
+            + f"{_e(foot)}</div>"
+            + (f"<div class='mmap'>{_e(meta)}</div>" if meta else "")
+            + "</div>"
         )
     if not rows:
-        bits.append("<tr><td class='slot off'><div>LIVE</div></td><td class='body mbody'>没有比赛</td></tr>")
-    table = "<table class='sheet'>" + "".join(bits[1:]) + "</table>"
-    return _page(bits[0] + table, height, width)
+        bits.append("<div class='mcard mbody'>没有比赛</div>")
+    return _page("".join(bits), height, width)
 
 
 def _events_html(card: dict, height: int, width: int) -> str:
     rows = list(card.get("rows") or [])[:8]
     bits = ["<div class='sheet-title'>赛事  ·  Major / T1</div>"]
     for ev in rows:
-        logo = _event_logo_uri(str(ev.get("id") or ""), str(ev.get("logo_url") or ""))
+        logo = _event_logo_uri(str(ev.get("id") or ""), str(ev.get("logo_url") or ""), "l")
         bg = ""
         if logo.startswith("data:image"):
             bg = f"<div class='event-bg' style=\"background-image:url('{logo}')\"></div><div class='event-shade'></div>"
@@ -351,15 +459,6 @@ def _events_html(card: dict, height: int, width: int) -> str:
     if not rows:
         bits.append("<div class='sub'>没有赛事</div>")
     return _page("".join(bits), height, width)
-
-
-def _list_note(row: dict, *, scored: bool) -> str:
-    fmt = (row.get("format") or "").strip().lower()
-    if fmt not in {"bo1", "bo3", "bo5"}:
-        return ""
-    if fmt == "bo1" or not scored:
-        return fmt
-    return f"当前图 · {fmt}"
 
 
 def _stars(row: dict) -> int:

@@ -4,6 +4,24 @@ from pathlib import Path
 from hltv_bot import team_logos
 
 
+def test_team_logo_is_cached_by_team_id(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(team_logos, "CACHE_DIR", tmp_path)
+    png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
+    calls: list[str] = []
+
+    def fake_download(urls):
+        calls.extend(urls)
+        return {urls[0]: png}
+
+    monkeypatch.setattr(team_logos, "download_images", fake_download)
+    first = team_logos.team_logo_uri("12895", "https://img-cdn.hltv.org/teamlogo/a.png?w=50")
+    second = team_logos.team_logo_uri("12895", "https://img-cdn.hltv.org/teamlogo/a-night.png?w=100")
+    assert first.startswith("data:image/png")
+    assert second == first
+    assert calls == ["https://img-cdn.hltv.org/teamlogo/a.png?w=50"]
+    assert (tmp_path / "12895.png").is_file()
+
+
 def test_logo_cache_key_ignores_query():
     a = team_logos.logo_cache_key("https://img-cdn.hltv.org/teamlogo/g2.svg?w=50")
     b = team_logos.logo_cache_key("https://img-cdn.hltv.org/teamlogo/g2.svg?w=100")
@@ -62,7 +80,7 @@ def test_team_event_and_flag_retention(monkeypatch, tmp_path: Path):
     events_mod.ensure_event_logos([])
     events_mod.ensure_flags([])
     assert team.is_file()
-    assert not event.exists()
+    assert event.is_file()
     assert flag.is_file()
 
 

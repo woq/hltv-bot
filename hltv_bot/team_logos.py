@@ -13,8 +13,8 @@ from urllib.request import Request, urlopen
 log = logging.getLogger("hltv_bot.team_logos")
 
 CACHE_DIR = Path("data/team_logos")
-TEAM_LOGO_MAX_AGE_SEC = 90 * 24 * 3600
-EVENT_LOGO_MAX_AGE_SEC = 7 * 24 * 3600
+TEAM_LOGO_MAX_AGE_SEC = 30 * 24 * 3600
+EVENT_LOGO_MAX_AGE_SEC = 30 * 24 * 3600
 MAX_AGE_SEC = TEAM_LOGO_MAX_AGE_SEC
 _MAX_BYTES = 1_500_000
 
@@ -90,14 +90,15 @@ def find_cached_stem(directory: Path, stem: str) -> Path | None:
     return None
 
 
-def data_uri_for(path: Path) -> str:
-    """Read an image file as a data URI and touch it so prune keeps it."""
+def data_uri_for(path: Path, *, touch: bool = True) -> str:
+    """Read an image file as a data URI. Touch keeps URL-keyed files from prune."""
     mime = _MIME.get(path.suffix.lower(), "")
     if not mime:
         return ""
     try:
         data = path.read_bytes()
-        path.touch()
+        if touch:
+            path.touch()
     except OSError:
         return ""
     b64 = base64.b64encode(data).decode("ascii")
@@ -131,6 +132,62 @@ _CHROME_BATCH = 40
 def download_images(urls: list[str]) -> dict[str, bytes]:
     """Fetch every URL. Plain GET runs in parallel; non-images fall through to Chrome."""
     return _download_many(urls)
+
+
+def _age_ok(path: Path, max_age: float) -> bool:
+    try:
+        return time.time() - path.stat().st_mtime <= max_age
+    except OSError:
+        return False
+
+
+def ensure_id_logos(directory: Path, pairs: list[tuple[str, str]], max_age: float) -> None:
+    """Cache one image per stable id. Files younger than max_age are kept as-is."""
+    pending: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for stem, url in pairs:
+        stem = (stem or "").strip()
+        url = (url or "").strip()
+        if not stem or stem in seen:
+            continue
+        seen.add(stem)
+        path = find_cached_stem(directory, stem)
+        if path is not None and _age_ok(path, max_age):
+            continue
+        if not url:
+            continue
+        if url.startswith("//"):
+            url = "https:" + url
+        elif url.startswith("/"):
+            url = "https://www.hltv.org" + url
+        pending.append((stem, url))
+    if not pending:
+        return
+    fetched = download_images([url for _, url in pending])
+    for stem, url in pending:
+        data = fetched.get(url)
+        if data:
+            save_image(directory, stem, data)
+
+
+def id_logo_uri(directory: Path, stem: str, url: str, max_age: float) -> str:
+    """Return the cached image for `stem`, downloading `url` when missing or old."""
+    stem = (stem or "").strip()
+    if not stem:
+        return ""
+    ensure_id_logos(directory, [(stem, url)], max_age)
+    path = find_cached_stem(directory, stem)
+    if path is None:
+        return ""
+    return data_uri_for(path, touch=False)
+
+
+def team_logo_uri(team_id: str, url: str) -> str:
+    """Night (or only) logo for a team, cached by team id for 30 days."""
+    stem = "".join(ch for ch in str(team_id or "") if ch.isdigit())
+    if not stem:
+        return ""
+    return id_logo_uri(CACHE_DIR, stem, url, TEAM_LOGO_MAX_AGE_SEC)
 
 
 def ensure_team_logos(urls: list[str]) -> None:
