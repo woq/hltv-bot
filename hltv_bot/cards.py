@@ -6,15 +6,15 @@ import io
 from html import escape
 from pathlib import Path
 
-_BG = (18, 17, 14)
+_BG = (20, 19, 17)
 
 _CSS = """
 @page { size: PAGEWpx PAGEHpx; margin: 0; }
 * { box-sizing: border-box; }
 html, body {
   margin: 0; padding: 0;
-  background: #12110e;
-  color: #f3ecdf;
+  background: #141311;
+  color: #f6f3ee;
   font-family: "Rajdhani", "WenQuanYi Zen Hei", "Noto Sans CJK SC", "DejaVu Sans", sans-serif;
   text-rendering: geometricPrecision;
 }
@@ -22,17 +22,19 @@ html, body {
 .kicker {
   font-size: 13px;
   letter-spacing: 0.34em;
-  color: #a39886;
+  color: #e4ddd2;
+  font-weight: 600;
 }
-.kicker em { font-style: normal; color: #e6ff4d; letter-spacing: 0.18em; }
+.kicker em { font-style: normal; color: #e8ff5a; letter-spacing: 0.18em; }
 .trow { display: flex; align-items: center; margin-top: 14px; }
 .tlogo, .tlogo-ph { width: 28px; height: 28px; margin-right: 12px; object-fit: contain; flex: 0 0 28px; }
-.tlogo-ph, .elogo-ph { display: inline-block; background: #2a261f; }
+.tlogo-ph, .elogo-ph { display: inline-block; background: #3a3833; }
 .name {
   flex: 1;
   font-size: 28px;
   line-height: 1;
   font-weight: 700;
+  color: #f6f3ee;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -43,43 +45,45 @@ html, body {
   font-family: "Rajdhani", "Liberation Sans", "DejaVu Sans", sans-serif;
   font-size: 36px;
   line-height: 1;
-  color: #e6ff4d;
+  color: #e8ff5a;
 }
-.sc.live { color: #ff5a3c; }
-.sc.final { color: #f3ecdf; }
-.sc.soon { color: #5c564c; }
+.sc.live { color: #ff6a45; }
+.sc.final { color: #f6f3ee; }
+.sc.soon { color: #d2ccc2; }
 .elogo { height: 16px; width: auto; max-width: 48px; object-fit: contain; margin-right: 8px; vertical-align: middle; }
 .elogo-ph { display: none; }
 .eventline { display: flex; align-items: center; }
-.rule { height: 1px; background: #2c2822; margin: 22px 0 16px; }
-.event { font-size: 16px; color: #d9cbb6; }
+.rule { height: 1px; background: #4a463f; margin: 22px 0 16px; }
+.event { font-size: 16px; color: #e4ddd2; font-weight: 600; }
 .note {
   margin-top: 12px;
   font-size: 15px;
   letter-spacing: 0.08em;
-  color: #e6ff4d;
+  color: #e8ff5a;
+  font-weight: 600;
 }
-.g-title { font-size: 22px; font-weight: 700; letter-spacing: 0.04em; }
-.g-sub { margin-top: 6px; color: #a39886; font-size: 13px; }
+.g-title { font-size: 22px; font-weight: 700; letter-spacing: 0.04em; color: #f6f3ee; }
+.g-sub { margin-top: 6px; color: #e4ddd2; font-size: 14px; font-weight: 600; }
 .g-block { margin-top: 16px; }
-.g-k { color: #e6ff4d; font-size: 13px; letter-spacing: 0.16em; }
-.g-line { margin-top: 4px; font-size: 15px; line-height: 1.45; color: #f3ecdf; }
+.g-k { color: #e8ff5a; font-size: 13px; letter-spacing: 0.16em; font-weight: 700; }
+.g-line { margin-top: 4px; font-size: 16px; line-height: 1.45; color: #f6f3ee; font-weight: 600; }
 .when {
   margin-top: 8px;
   font-family: "Rajdhani", "Liberation Sans", "DejaVu Sans", sans-serif;
-  font-size: 15px;
-  letter-spacing: 0.06em;
-  color: #a39886;
+  font-size: 16px;
+  letter-spacing: 0.04em;
+  color: #e4ddd2;
+  font-weight: 600;
 }
-.streak { margin-top: 16px; font-size: 18px; color: #e6ff4d; }
-.place { margin-top: 10px; font-size: 16px; color: #d9cbb6; }
+.streak { margin-top: 16px; font-size: 18px; color: #e8ff5a; font-weight: 700; }
+.place { margin-top: 10px; font-size: 16px; color: #e4ddd2; font-weight: 600; }
 .flag { font-family: "Noto Color Emoji", "DejaVu Sans", sans-serif; }
 .remain { margin-top: 14px; font-size: 22px; }
-.sheet-title { font-size: 12px; letter-spacing: 0.22em; color: #a39886; }
+.sheet-title { font-size: 14px; letter-spacing: 0.16em; color: #e4ddd2; font-weight: 700; }
 .mcard {
   margin-top: 14px;
-  padding: 12px 12px 11px;
-  background: #221f1a;
+  padding: 12px 12px 12px;
+  background: #32302b;
   border-radius: 12px;
 }
 .mhead { display: flex; align-items: center; }
@@ -90,41 +94,41 @@ html, body {
   color: transparent;
   font-family: "Rajdhani", "Liberation Sans", "DejaVu Sans", sans-serif;
 }
-.mtag.on { color: #ff5a3c; }
+.mtag.on { color: #ff6a45; font-weight: 700; }
 .mtime {
   flex: 1;
-  font-size: 12px;
-  letter-spacing: 0.04em;
-  color: #a39886;
+  font-size: 14px;
+  letter-spacing: 0.02em;
+  color: #e4ddd2;
+  font-weight: 600;
   font-family: "Rajdhani", "Liberation Sans", "DejaVu Sans", sans-serif;
 }
-.mstars { color: #e6ff4d; font-size: 12px; letter-spacing: 0.12em; }
+.mstars { color: #e8ff5a; font-size: 14px; letter-spacing: 0.08em; }
 .mmap {
   margin-top: 8px;
-  font-size: 13px;
-  letter-spacing: 0.03em;
+  font-size: 15px;
+  letter-spacing: 0.02em;
 }
-.mmap-now { color: #e6ff4d; font-weight: 700; }
-.mmap-rest { color: #8d8478; }
-.mmap-rest::before { content: " · "; color: #5c564c; }
-.mmap-fmt { color: #5c564c; }
-.mmap-fmt::before { content: " · "; }
+.mmap-now { color: #e8ff5a; font-weight: 700; }
+.mmap-rest { color: #e4ddd2; font-weight: 600; }
+.mmap-fmt { color: #d2ccc2; font-weight: 600; }
+.mmap-sep { color: #9a948a; font-weight: 600; }
 table.sheet { width: 100%; border-collapse: collapse; }
 td.slot {
   width: 36px;
   padding: 12px 0 0;
   vertical-align: top;
-  border-top: 1px solid #2c2822;
+  border-top: 1px solid #4a463f;
 }
 td.slot div {
   width: 36px;
   font-size: 9px;
   letter-spacing: 0.04em;
-  color: #ff5a3c;
+  color: #ff6a45;
   font-family: "Rajdhani", "Liberation Sans", "DejaVu Sans", sans-serif;
 }
-td.slot.off div { color: #12110e; }
-td.body { padding: 8px 0 8px; border-top: 1px solid #2c2822; }
+td.slot.off div { color: #141311; }
+td.body { padding: 8px 0 8px; border-top: 1px solid #4a463f; }
 .mbody .trow { margin-top: 4px; }
 .mbody .name { font-size: 15px; }
 .mbody .sc { width: 28px; font-size: 16px; }
@@ -133,9 +137,10 @@ td.body { padding: 8px 0 8px; border-top: 1px solid #2c2822; }
 .sub {
   display: flex;
   align-items: center;
-  margin-top: 4px;
-  font-size: 11px;
-  color: #a39886;
+  margin-top: 6px;
+  font-size: 14px;
+  color: #e4ddd2;
+  font-weight: 600;
 }
 .event-card { position: relative; }
 .event-bg {
@@ -150,7 +155,7 @@ td.body { padding: 8px 0 8px; border-top: 1px solid #2c2822; }
 .event-shade {
   position: absolute;
   inset: 0;
-  background: linear-gradient(90deg, #12110e 42%, rgba(18,17,14,0.35) 100%);
+  background: linear-gradient(90deg, #141311 42%, rgba(20,19,17,0.4) 100%);
 }
 .event-copy { position: relative; }
 """
@@ -420,15 +425,17 @@ def _map_line(row: dict) -> str:
     fmt = (row.get("format") or "").strip().lower()
     if not current and not rest and not fmt:
         return ""
-    bits = ["<div class='mmap'>"]
+    parts: list[str] = []
     if current:
-        bits.append(f"<span class='mmap-now'>{_e(current)}</span>")
+        parts.append(f"<span class='mmap-now'>{_e(current)}</span>")
     for name in rest:
-        bits.append(f"<span class='mmap-rest'>{_e(name)}</span>")
+        parts.append(f"<span class='mmap-rest'>{_e(name)}</span>")
     if fmt:
-        bits.append(f"<span class='mmap-fmt'>{_e(fmt)}</span>")
-    bits.append("</div>")
-    return "".join(bits)
+        parts.append(f"<span class='mmap-fmt'>{_e(fmt)}</span>")
+    if not parts:
+        return ""
+    joined = "<span class='mmap-sep'> · </span>".join(parts)
+    return f"<div class='mmap'>{joined}</div>"
 
 
 def _matches_html(card: dict, height: int, width: int) -> str:
