@@ -84,6 +84,58 @@ _ACRONYMS = {
 }
 
 
+_OPEN_SIDE = {"", "?", "TBD", "TBA"}
+LIST_DAYS = 3
+
+
+def row_start(row: dict) -> datetime | None:
+    raw = str(row.get("unix") or "").strip()
+    if not raw.isdigit():
+        return None
+    n = int(raw)
+    if n > 10_000_000_000:
+        n //= 1000
+    try:
+        return datetime.fromtimestamp(n, CST)
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+def both_sides_open(row: dict) -> bool:
+    def blank(value: object) -> bool:
+        return str(value or "").strip().upper() in _OPEN_SIDE
+    return blank(row.get("team1")) and blank(row.get("team2"))
+
+
+def show_on_list(row: dict, now: datetime | None = None, *, days: int = LIST_DAYS) -> bool:
+    """Live rows stay. Upcoming rows are the next `days` calendar dates, UTC+8.
+
+    A match with both sides still TBD is omitted. Anything further out than
+    today plus two more days stays off the list.
+    """
+    if both_sides_open(row):
+        return False
+    if str(row.get("live") or "") == "1":
+        return True
+    now = now or datetime.now(CST)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=CST)
+    else:
+        now = now.astimezone(CST)
+    start = row_start(row)
+    if start is None:
+        return False
+    begin = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    return begin <= start < begin + timedelta(days=days)
+
+
+def prepare_match_list(rows: list[dict], now: datetime | None = None) -> list[dict]:
+    now = now or datetime.now(CST)
+    kept = [row for row in rows if show_on_list(row, now)]
+    kept.sort(key=lambda row: (0 if str(row.get("live") or "") == "1" else 1, row_start(row) or now))
+    return kept
+
+
 def format_start_time(unix_raw: str | int | None, *, live: bool = False) -> str:
     if unix_raw in (None, ""):
         return "LIVE" if live else ""

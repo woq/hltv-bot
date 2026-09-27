@@ -1,4 +1,6 @@
-from hltv_bot.matches import format_start_time, parse_match_list, parse_match_meta, pretty_name
+from datetime import datetime, timedelta
+
+from hltv_bot.matches import CST, format_start_time, parse_match_list, parse_match_meta, pretty_name, show_on_list
 
 
 def test_wrapper_list_reads_bo_and_current_map_score():
@@ -40,6 +42,23 @@ def test_wrapper_list_reads_bo_and_current_map_score():
     assert bo1["team2"] == "PAQT"
     assert bo1["score1"] == ""
     assert bo1["live"] == "0"
+
+
+def test_list_hides_open_sides_and_matches_beyond_three_days():
+    now = datetime(2026, 9, 27, 15, 0, tzinfo=CST)
+    today = str(int(now.timestamp() * 1000))
+    later = str(int((now + timedelta(days=2)).timestamp() * 1000))
+    far = str(int((now + timedelta(days=12)).timestamp() * 1000))
+    live = {"team1": "G2", "team2": "Spirit", "live": "1", "unix": far}
+    near = {"team1": "MOUZ", "team2": "NaVi", "live": "0", "unix": later}
+    distant = {"team1": "FaZe", "team2": "Vitality", "live": "0", "unix": far}
+    blank = {"team1": "TBD", "team2": "TBA", "live": "0", "unix": today}
+    one_open = {"team1": "G2", "team2": "TBD", "live": "0", "unix": today}
+    assert show_on_list(live, now) is True
+    assert show_on_list(near, now) is True
+    assert show_on_list(distant, now) is False
+    assert show_on_list(blank, now) is False
+    assert show_on_list(one_open, now) is True
 
 
 def test_live_log_start_is_not_the_list_live_flag():
@@ -305,8 +324,9 @@ def test_cmd_matches_text_mode(monkeypatch):
     sess = BrowserSession(impersonate="chrome131", headers={}, cookie="")
     bot = HltvTelegramBot(fake_tg, sess)
 
+    soon = str(int(datetime.now(CST).timestamp() * 1000))
     mock_rows = [
-        {"id": "2396932", "team1": "Spirit", "team2": "G2", "event": "IEM", "stars": "3", "url": "https://hltv.org/1"},
+        {"id": "2396932", "team1": "Spirit", "team2": "G2", "event": "IEM", "stars": "3", "url": "https://hltv.org/1", "unix": soon},
     ]
     monkeypatch.setattr("hltv_bot.bot.fetch_matches", lambda s: mock_rows)
     monkeypatch.setattr("hltv_bot.cards.render_card", lambda card: b"png")

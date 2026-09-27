@@ -4,6 +4,8 @@ import re
 from datetime import datetime, timedelta, timezone
 from html import escape
 
+from hltv_bot.matches import both_sides_open
+
 CST = timezone(timedelta(hours=8))
 
 _ROUND_BREAK = frozenset(
@@ -750,14 +752,7 @@ def format_match_list(
         except (TypeError, ValueError):
             return 0
 
-    rows = list(rows)
-    # Filter out matches where both teams are TBD
-    def _both_tbd(r: dict) -> bool:
-        _u1 = (r.get("team1") or "").strip().upper()
-        _u2 = (r.get("team2") or "").strip().upper()
-        return (not _u1 or _u1 in ("?", "TBD")) and (not _u2 or _u2 in ("?", "TBD"))
-
-    rows = [r for r in rows if not _both_tbd(r)]
+    rows = [r for r in rows if not both_sides_open(r)]
     if starred_only:
         rows = [r for r in rows if star_n(r) > 0]
     rows = rows[:limit]

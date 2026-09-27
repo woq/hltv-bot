@@ -40,9 +40,9 @@ def empty_state() -> dict:
 
 
 def _both_tbd(row: dict) -> bool:
-    a = (row.get("team1") or "").strip().upper()
-    b = (row.get("team2") or "").strip().upper()
-    return (not a or a in {"?", "TBD"}) and (not b or b in {"?", "TBD"})
+    from hltv_bot.matches import both_sides_open
+
+    return both_sides_open(row)
 
 
 def _stars(row: dict) -> int:

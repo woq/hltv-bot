@@ -26,7 +26,7 @@ from hltv_bot.events import (
 )
 from hltv_bot.format import format_match_list, h
 from hltv_bot.http import CloudflareError
-from hltv_bot.matches import fetch_matches
+from hltv_bot.matches import fetch_matches, prepare_match_list
 from hltv_bot.ratelimit import Cooldown
 from hltv_bot.reminders import CST, RemindConfig, choose_poll_wait, empty_state, plan_reminders
 from hltv_bot.session import BrowserSession, load_session
@@ -431,6 +431,7 @@ class HltvTelegramBot:
         except CloudflareError as e:
             self._reply(chat_id, f"Cloudflare 拦了列表页：{e}\n发 /cookie 更新 Cookie")
             return
+        rows = prepare_match_list(rows, datetime.now(CST))
         if tier != "Other":
             floor = tier_rank(tier)
             rows = [
