@@ -54,11 +54,16 @@ def notify_config(path: Path = DEFAULT_PATH) -> dict:
         "min_stars": _clamp_int(data.get("min_stars"), 1, 0, 5),
         "silent": bool(data.get("silent", True)),
         "watch": bool(data.get("watch", True)),
-        "ignored": _ignored_ids(data.get("ignored")),
+        "event_watch": bool(data.get("event_watch", True)),
+        "ignored": _id_list(data.get("ignored")),
+        "followed": _id_list(data.get("followed")),
+        "covered": _id_list(data.get("covered")),
+        "digest_morning": _clamp_int(data.get("digest_morning"), 10, 0, 23),
+        "digest_evening": _clamp_int(data.get("digest_evening"), 20, 0, 23),
     }
 
 
-def _ignored_ids(value: object) -> list[str]:
+def _id_list(value: object) -> list[str]:
     if not isinstance(value, list):
         return []
     out: list[str] = []

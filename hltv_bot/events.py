@@ -14,7 +14,7 @@ log = logging.getLogger("hltv_bot.events")
 
 EVENTS_URL = "https://www.hltv.org/events"
 _EVENTS_CACHE: dict = {"at": 0.0, "rows": []}
-EVENTS_CACHE_TTL = 24 * 3600.0
+EVENTS_CACHE_TTL = 6 * 3600.0
 CST = timezone(timedelta(hours=8))
 
 

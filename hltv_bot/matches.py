@@ -296,7 +296,99 @@ def _chunk_around(html: str, pos: int, span: int = 1800) -> str:
     return html[start:end]
 
 
+_WRAPPER_OPEN = re.compile(r'<div class="match-wrapper\b', re.I)
+_BO_META = re.compile(r'<div class="match-meta">\s*(bo\d)\s*</div>', re.I)
+_TEAM_LINE = re.compile(r'class="[^"]*match-teamname[^"]*"[^>]*>\s*([^<]+)', re.I)
+_CURRENT_MAP_SCORE = re.compile(r'data-livescore-current-map-score="(\d+)"', re.I)
+
+
+def _parse_wrappers(html: str, *, limit: int = 100, exclude_tbd: bool = False) -> list[dict[str, str]]:
+    """Current HLTV /matches rows. One ``match-wrapper`` is one match.
+
+    ``match-meta`` is ``bo1`` / ``bo3`` / ``bo5``. The number next to each team
+    is the current map's round score (``data-livescore-current-map-score``).
+    Maps won are filled by page script and are empty in this HTML.
+    """
+    starts = [m.start() for m in _WRAPPER_OPEN.finditer(html)]
+    rows: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for i, start in enumerate(starts):
+        end = starts[i + 1] if i + 1 < len(starts) else len(html)
+        chunk = html[start:end]
+        id_m = re.search(r'data-match-id="(\d+)"', chunk)
+        href_m = MATCH_HREF.search(chunk)
+        if not id_m or not href_m:
+            continue
+        mid, href, slug = id_m.group(1), href_m.group(1), href_m.group(3)
+        if mid in seen:
+            continue
+        seen.add(mid)
+        head = chunk[:500]
+        live = 'live="true"' in head or "live-match-container" in head
+        names = [_clean(x) for x in _TEAM_LINE.findall(chunk) if _clean(x)]
+        t1, t2, event = _teams_event_from_slug(slug)
+        if len(names) >= 2:
+            t1, t2 = names[0], names[1]
+        elif len(names) == 1:
+            t1 = names[0]
+        ev_attr = EVENT_ATTR.search(chunk)
+        if ev_attr:
+            event = _clean(ev_attr.group(1))
+        t1, t2, event = pretty_name(t1), pretty_name(t2), pretty_name(event)
+        bo = _BO_META.search(chunk)
+        fmt = bo.group(1).lower() if bo else ""
+        scores = _CURRENT_MAP_SCORE.findall(chunk)
+        if len(scores) < 2:
+            scores = list(_team_scores(chunk))
+        score1 = scores[0] if scores else ""
+        score2 = scores[1] if len(scores) > 1 else ""
+        stars_m = re.search(r'data-stars="(\d)"', head)
+        stars = int(stars_m.group(1)) if stars_m else _stars_in(chunk)
+        unix_m = DATA_UNIX.search(chunk)
+        unix = unix_m.group(1) if unix_m else ""
+        _u1, _u2 = t1.strip().upper(), t2.strip().upper()
+        if exclude_tbd and (not _u1 or _u1 in ("?", "TBD")) and (not _u2 or _u2 in ("?", "TBD")):
+            continue
+        logo1, logo2 = _team_logo_urls(chunk)
+        rows.append(
+            {
+                "id": mid,
+                "url": _abs(href),
+                "team1": t1,
+                "team2": t2,
+                "team1_logo": logo1,
+                "team2_logo": logo2,
+                "event": event,
+                "event_id": _event_id_from(chunk),
+                "event_logo": _event_logo_url(chunk),
+                "title": f"{t1} vs {t2}".strip(),
+                "live": "1" if live else "0",
+                "stars": str(max(0, min(5, stars))),
+                "format": fmt,
+                "score1": score1,
+                "score2": score2,
+                "time": format_start_time(unix, live=live),
+                "unix": str(unix or ""),
+            }
+        )
+    rows.sort(key=_match_sort_key)
+    if limit:
+        return rows[:limit]
+    return rows
+
+
+def _match_sort_key(r: dict) -> tuple:
+    live = 0 if r.get("live") == "1" else 1
+    t1 = (r.get("team1") or "").strip().upper()
+    t2 = (r.get("team2") or "").strip().upper()
+    has_tbd = 1 if (not t1 or not t2 or t1 in ("?", "TBD") or t2 in ("?", "TBD")) else 0
+    stars = int(r.get("stars") or 0)
+    return (live, has_tbd, -stars)
+
+
 def parse_match_list(html: str, *, limit: int = 100, exclude_tbd: bool = False) -> list[dict[str, str]]:
+    if 'data-match-id="' in html and "match-wrapper" in html:
+        return _parse_wrappers(html, limit=limit, exclude_tbd=exclude_tbd)
     seen: set[str] = set()
     rows: list[dict[str, str]] = []
     for m in MATCH_HREF.finditer(html):
@@ -390,16 +482,8 @@ def parse_match_list(html: str, *, limit: int = 100, exclude_tbd: bool = False) 
                 "unix": str(unix or ""),
             }
         )
-        if len(rows) >= limit:
+        if limit and len(rows) >= limit:
             break
-
-    def _match_sort_key(r: dict) -> tuple:
-        live = 0 if r.get("live") == "1" else 1
-        t1 = (r.get("team1") or "").strip().upper()
-        t2 = (r.get("team2") or "").strip().upper()
-        has_tbd = 1 if (not t1 or not t2 or t1 in ("?", "TBD") or t2 in ("?", "TBD")) else 0
-        stars = int(r.get("stars") or 0)
-        return (live, has_tbd, -stars)
 
     rows.sort(key=_match_sort_key)
     return rows
@@ -548,11 +632,11 @@ def parse_match_meta(html: str, url: str = "") -> dict[str, str | None]:
     }
 
 
-def fetch_matches(sess: BrowserSession, timeout: float = 20.0) -> list[dict[str, str]]:
+def fetch_matches(sess: BrowserSession, timeout: float = 20.0, *, fresh: bool = False) -> list[dict[str, str]]:
     import time as _time
 
     now = _time.monotonic()
-    if _MATCH_CACHE["rows"] and now - _MATCH_CACHE["at"] < _MATCH_CACHE_TTL:
+    if not fresh and _MATCH_CACHE["rows"] and now - _MATCH_CACHE["at"] < _MATCH_CACHE_TTL:
         log.debug("matches cache hit n=%s age=%.1fs", len(_MATCH_CACHE["rows"]), now - _MATCH_CACHE["at"])
         return list(_MATCH_CACHE["rows"])
     _st, body, _ = request(
@@ -567,7 +651,7 @@ def fetch_matches(sess: BrowserSession, timeout: float = 20.0) -> list[dict[str,
             "sec-fetch-site": "none",
         },
     )
-    rows = parse_match_list(body.decode("utf-8", "replace"))
+    rows = parse_match_list(body.decode("utf-8", "replace"), limit=0)
     live_n = sum(1 for r in rows if r.get("live") == "1")
     log.info("matches fetched n=%s live=%s bytes=%s", len(rows), live_n, len(body))
     _MATCH_CACHE["at"] = now

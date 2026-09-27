@@ -49,7 +49,9 @@ def test_delay_floors():
     assert MATCH_PAGE_MIN >= 3.0
     assert MATCH_PAGE_MAX <= 5.0
     assert MATCH_PAGE_MAX > MATCH_PAGE_MIN
-    assert "self._rr % 2 == 1" in _src("bot.py")
+    bot_src = _src("bot.py")
+    assert "fetch_matches(self.session, fresh=True)" in bot_src
+    assert "fetch_match_board" not in bot_src
     assert TG_RETRY_AFTER_CAP >= 15.0
     assert CMD_COOLDOWN["/matches"] >= 8.0
     assert CMD_COOLDOWN["/events"] >= 8.0
@@ -95,7 +97,9 @@ def test_bot_edit_cmd_getupdates_and_setcommands_gaps():
     assert "disable_notification" not in src
     assert "silent=silent" in src
     assert "random.uniform(MATCH_PAGE_MIN, MATCH_PAGE_MAX)" in src
-    assert "_events_loaded" in src
+    assert "choose_poll_wait" in src
+    assert "EVENTS_CACHE_TTL" in src
+    assert "_events_loaded" not in src
 
 
 def test_telegram_429_uses_retry_after_on_call_and_getupdates():

@@ -51,6 +51,17 @@ html, body {
 .eventline { display: flex; align-items: center; }
 .rule { height: 1px; background: #2c2822; margin: 22px 0 16px; }
 .event { font-size: 16px; color: #d9cbb6; }
+.note {
+  margin-top: 12px;
+  font-size: 15px;
+  letter-spacing: 0.08em;
+  color: #e6ff4d;
+}
+.g-title { font-size: 22px; font-weight: 700; letter-spacing: 0.04em; }
+.g-sub { margin-top: 6px; color: #a39886; font-size: 13px; }
+.g-block { margin-top: 16px; }
+.g-k { color: #e6ff4d; font-size: 13px; letter-spacing: 0.16em; }
+.g-line { margin-top: 4px; font-size: 15px; line-height: 1.45; color: #f3ecdf; }
 .when {
   margin-top: 8px;
   font-family: "Liberation Sans", "DejaVu Sans", sans-serif;
@@ -160,8 +171,10 @@ def render_card(card: dict) -> bytes:
         html = _events_html(card, height, _LIST_W)
     elif view == "event":
         html = _event_html(card, 420, _CARD_W)
+    elif view == "guide":
+        html = _guide_html(card, 760, _CARD_W)
     else:
-        height = 430 if card.get("streak") else 380
+        height = 420 if card.get("note") else 380
         html = _match_html(card, height, _CARD_W)
     return _png(html)
 
@@ -214,7 +227,7 @@ def _team_row(name: str, score: str, logo: str, accent: str) -> str:
 
 def _match_html(card: dict, height: int, width: int) -> str:
     kind = card.get("kind") or "score"
-    accent = {"live": "live", "final": "final", "soon": "soon"}.get(kind, "")
+    accent = {"preview": "live", "final": "final", "soon": "soon"}.get(kind, "")
     pair = card.get("pair") or ("", "")
     left = pair[0] if pair and pair[0] else ""
     right = pair[1] if pair and len(pair) > 1 else ""
@@ -227,12 +240,10 @@ def _match_html(card: dict, height: int, width: int) -> str:
         + _img(_logo_uri(card.get("event_logo") or ""), "elogo")
         + f"<div class='event'>{_e(card.get('event'))}</div></div>",
     ]
-    if card.get("map"):
-        bits.append(f"<div class='when'>{_e(card.get('map'))}</div>")
+    if card.get("note"):
+        bits.append(f"<div class='note'>{_e(card.get('note'))}</div>")
     if card.get("clock"):
         bits.append(f"<div class='when'>{_e(card.get('clock'))}   UTC+8</div>")
-    if card.get("streak"):
-        bits.append(f"<div class='streak'>⚡  {_e(card.get('streak'))}</div>")
     return _page("".join(bits), height, width)
 
 
@@ -259,9 +270,35 @@ def _event_html(card: dict, height: int, width: int) -> str:
     return _page("".join(bits), height, width)
 
 
+def _guide_html(card: dict, height: int, width: int) -> str:
+    morning = int(card.get("morning") or 10)
+    evening = int(card.get("evening") or 20)
+    lines = [
+        ("默认", "至少 1 星，并且赛事名是 Major / T1。"),
+        ("比分", "只在有直播时刷新赛程页。进入 Live 的 0:0 只预告一次。"),
+        ("BO", "BO1 就是这场比分。BO3 / BO5 标成当前图。"),
+        ("比赛日", f"UTC+8 {morning:02d}:00 到次日 {morning:02d}:00，含国外晚上打到凌晨的比赛。"),
+        ("赛程", f"每天 {morning:02d}:00 发整日，{evening:02d}:00 发还没开的，含次日凌晨。"),
+        ("补充", "/follow 单场。/cover 整赛事，每个比赛日都算。/ignore 摘掉一场。"),
+        ("开关", "/watch 管比分。/track 管每天两次的赛程。两套互不影响。"),
+    ]
+    bits = [
+        "<div class='g-title'>hltv-bot</div>",
+        "<div class='g-sub'>时间一律 UTC+8 · 提醒默认无声</div>",
+    ]
+    for title, body in lines:
+        bits.append(
+            "<div class='g-block'>"
+            f"<div class='g-k'>{_e(title)}</div>"
+            f"<div class='g-line'>{_e(body)}</div>"
+            "</div>"
+        )
+    return _page("".join(bits), height, width)
+
+
 def _matches_html(card: dict, height: int, width: int) -> str:
     rows = list(card.get("rows") or [])[:12]
-    bits = ["<div class='sheet-title'>比赛  ·  UTC+8</div>"]
+    bits = [f"<div class='sheet-title'>{_e(card.get('title') or '比赛  ·  UTC+8')}</div>"]
     for row in rows:
         live = row.get("live") == "1"
         a = (row.get("score1") or "").strip()
@@ -272,7 +309,8 @@ def _matches_html(card: dict, height: int, width: int) -> str:
         sc_accent = "live" if live else ("final" if (a or b) else "soon")
         mid = str(row.get("id") or "").strip()
         id_str = f"#{mid}" if mid else ""
-        sub_items = [x for x in [clock, stars, row.get("event"), id_str] if x]
+        note = _list_note(row, scored=bool(a or b))
+        sub_items = [x for x in [clock, stars, note, row.get("event"), id_str] if x]
         sub_str = "  ·  ".join(_e(x) for x in sub_items)
         bits.append(
             "<tr>"
@@ -313,6 +351,15 @@ def _events_html(card: dict, height: int, width: int) -> str:
     if not rows:
         bits.append("<div class='sub'>没有赛事</div>")
     return _page("".join(bits), height, width)
+
+
+def _list_note(row: dict, *, scored: bool) -> str:
+    fmt = (row.get("format") or "").strip().lower()
+    if fmt not in {"bo1", "bo3", "bo5"}:
+        return ""
+    if fmt == "bo1" or not scored:
+        return fmt
+    return f"当前图 · {fmt}"
 
 
 def _stars(row: dict) -> int:

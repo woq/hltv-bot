@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
-from hltv_bot.bot import DEFAULT_ADMIN_ID, HltvTelegramBot
+from hltv_bot.bot import BOT_COMMANDS, DEFAULT_ADMIN_ID, HltvTelegramBot, command_jobs, command_scope_clears
 from hltv_bot.reminders import CST, RemindConfig, _event_html, empty_state, plan_reminders, score_text
 from hltv_bot.session import BrowserSession
 
@@ -54,6 +54,7 @@ def test_first_poll_seeds_without_notices():
     assert state["matches_seeded"] is True
     assert state["events_seeded"] is True
     assert state["matches"]["1"]["opened"] is False
+    assert state["matches"]["1"]["score"] == "0-0"
     assert state["events"]["9"] == "days"
 
 
@@ -66,13 +67,22 @@ def test_match_soon_live_score_and_final():
     state, notes = plan_reminders(state, [], None, now=now, cfg=cfg)
     assert notes == []
     state, notes = plan_reminders(state, [_match(unix=str(soon))], None, now=now, cfg=cfg)
-    assert [n.key for n in notes] == ["m:1:soon"]
-    assert "即将开赛" in notes[0].html
-    assert "UTC+8" in notes[0].html
+    assert notes == []
 
     state, notes = plan_reminders(
         state,
-        [_match(unix=str(soon), live="1", score1="0", score2="0")],
+        [_match(unix=str(soon), live="1", score1="0", score2="0", format="bo3")],
+        None,
+        now=now,
+        cfg=cfg,
+    )
+    assert [n.key for n in notes] == ["m:1:preview"]
+    assert "预告" in notes[0].html
+    assert "0" in notes[0].html
+    assert notes[0].card["note"] == "当前图 · bo3"
+    state, notes = plan_reminders(
+        state,
+        [_match(unix=str(soon), live="1", score1="0", score2="0", format="bo3")],
         None,
         now=now,
         cfg=cfg,
@@ -80,23 +90,16 @@ def test_match_soon_live_score_and_final():
     assert notes == []
     state, notes = plan_reminders(
         state,
-        [_match(unix=str(soon), live="1", started="1", score1="0", score2="0")],
+        [_match(unix=str(soon), live="1", score1="1", score2="0", format="bo3")],
         None,
         now=now,
         cfg=cfg,
     )
-    assert [n.key for n in notes] == ["m:1:live"]
-    assert "已开赛" in notes[0].html
-
-    state, notes = plan_reminders(
-        state,
-        [_match(unix=str(soon), live="1", score1="1", score2="0")],
-        None,
-        now=now,
-        cfg=cfg,
-    )
-    assert notes[0].key == "m:1:score:1-0"
+    assert notes[0].key == "m:1:score:1-0|bo3"
     assert "比分" in notes[0].html
+    assert "当前图 · bo3" in notes[0].html
+    assert notes[0].card["note"] == "当前图 · bo3"
+    assert "已开赛" not in notes[0].html
 
     state, notes = plan_reminders(state, [], None, now=now, cfg=cfg)
     assert notes[0].key == "m:1:final"
@@ -125,33 +128,28 @@ def test_low_star_or_non_tier_match_is_ignored():
     assert notes == []
 
 
-def test_streak_mark_and_ignore_and_pause():
+def test_bo1_score_note_and_pause():
     now = datetime(2026, 9, 24, 18, 0, tzinfo=CST)
     cfg = RemindConfig()
-    row = _match(live="1", started="1", score1="0", score2="0")
-    state, notes = plan_reminders(empty_state(), [row], None, now=now, cfg=cfg)
+    state, notes = plan_reminders(empty_state(), [_match(live="1", score1="0", score2="0", format="bo1")], None, now=now, cfg=cfg)
     assert notes == []
-    marked = None
-    for n in range(1, 6):
-        state, notes = plan_reminders(
-            state,
-            [_match(live="1", started="1", score1=str(n), score2="0")],
-            None,
-            now=now,
-            cfg=cfg,
-        )
-        assert notes
-        marked = notes[0].html
-    assert marked is not None
-    assert "连赢" in marked and "5" in marked
-    assert "G2" in marked
+    state, notes = plan_reminders(
+        state,
+        [_match(live="1", score1="13", score2="9", format="bo1")],
+        None,
+        now=now,
+        cfg=cfg,
+    )
+    assert notes[0].card["note"] == "bo1"
+    assert "当前图" not in notes[0].html
+    assert "13" in notes[0].html
 
     paused = RemindConfig(watch=False)
-    state, notes = plan_reminders(state, [_match(live="1", started="1", score1="6", score2="0")], None, now=now, cfg=paused)
+    state, notes = plan_reminders(state, [_match(live="1", score1="13", score2="10", format="bo1")], None, now=now, cfg=paused)
     assert notes == []
 
     ignored = RemindConfig(ignored=frozenset({"1"}))
-    state, notes = plan_reminders(state, [_match(live="1", started="1", score1="7", score2="0")], None, now=now, cfg=ignored)
+    state, notes = plan_reminders(state, [_match(live="1", score1="13", score2="11", format="bo1")], None, now=now, cfg=ignored)
     assert notes == []
 
 
@@ -173,8 +171,8 @@ def test_event_stages_major_and_t1_only():
 
     later = now + timedelta(days=2, hours=12)
     state, notes = plan_reminders(state, None, [days], now=later, cfg=cfg)
-    assert [n.key for n in notes] == ["e:days:day"]
-    assert "还有" in notes[0].html
+    assert notes == []
+    assert state["events"]["days"] == "day"
     flagged = _event_html(
         {**days, "country_code": "DE", "location": "Cologne"},
         now,
@@ -185,9 +183,83 @@ def test_event_stages_major_and_t1_only():
 
     closing = now + timedelta(days=2, hours=20)
     state, notes = plan_reminders(state, None, [days], now=closing, cfg=cfg)
-    assert notes[0].key == "e:days:hours"
-    assert "最后提醒" in notes[0].html
-    state, notes = plan_reminders(state, None, [days], now=closing, cfg=cfg)
+    assert notes == []
+    assert state["events"]["days"] == "hours"
+
+
+def test_poll_is_fast_only_while_live():
+    from hltv_bot.reminders import LIVE_POLL, QUIET_POLL, SOON_POLL, choose_poll_wait
+
+    now = datetime(2026, 9, 24, 12, 0, tzinfo=CST)
+    later = int((now + timedelta(hours=5)).timestamp() * 1000)
+    soon = int((now + timedelta(minutes=20)).timestamp() * 1000)
+    far = int((now + timedelta(days=3)).timestamp() * 1000)
+    sent = {"2026-09-24": ["10"]}
+    assert choose_poll_wait([_match(unix=str(far))], RemindConfig(), now, sent) == QUIET_POLL
+    assert choose_poll_wait([_match(unix=str(later))], RemindConfig(), now, sent) == 5 * 3600 - 45 * 60
+    assert choose_poll_wait([_match(unix=str(far))], RemindConfig(), now, {}) == SOON_POLL
+    assert choose_poll_wait([_match(unix=str(soon))], RemindConfig(), now, {}) == SOON_POLL
+    assert choose_poll_wait([_match(live="1", score1="1", score2="0")], RemindConfig(), now, {}) == LIVE_POLL
+    assert choose_poll_wait([_match(unix=str(far))], RemindConfig(watch=False, event_watch=False), now, {}) == QUIET_POLL
+
+
+def test_digest_crosses_midnight_and_splits_evening():
+    morning = datetime(2026, 9, 24, 9, 0, tzinfo=CST)
+    night = int(datetime(2026, 9, 25, 2, 0, tzinfo=CST).timestamp() * 1000)
+    afternoon = int(datetime(2026, 9, 24, 15, 0, tzinfo=CST).timestamp() * 1000)
+    rows = [
+        _match(id="night", unix=str(night), event_id="77"),
+        _match(id="day", unix=str(afternoon), event_id="77"),
+    ]
+    state, notes = plan_reminders(empty_state(), rows, None, now=morning)
+    assert notes == []
+    at_ten = datetime(2026, 9, 24, 10, 5, tzinfo=CST)
+    state, notes = plan_reminders(state, rows, None, now=at_ten)
+    assert [n.key for n in notes] == ["d:2026-09-24:10"]
+    assert "02:00" in notes[0].html and "15:00" in notes[0].html
+    assert notes[0].card["title"].startswith("赛程")
+    state, notes = plan_reminders(state, rows, None, now=at_ten)
+    assert notes == []
+    at_eight = datetime(2026, 9, 24, 20, 5, tzinfo=CST)
+    state, notes = plan_reminders(state, rows, None, now=at_eight)
+    assert [n.key for n in notes] == ["d:2026-09-24:20"]
+    assert "02:00" in notes[0].html
+    assert "15:00" not in notes[0].html
+    state, notes = plan_reminders(state, rows, None, now=at_eight, cfg=RemindConfig(event_watch=False))
+    assert notes == []
+
+
+def test_follow_and_cover_bypass_tier_ignore_still_wins():
+    now = datetime(2026, 9, 24, 18, 0, tzinfo=CST)
+    low = _match(id="9", stars="0", event="CCT Season", event_id="55", live="1", score1="0", score2="0")
+    state, notes = plan_reminders(empty_state(), [low], None, now=now, cfg=RemindConfig(followed=frozenset({"9"})))
+    assert "9" in state["matches"]
+    state, notes = plan_reminders(state, [{**low, "score1": "2", "score2": "1"}], None, now=now, cfg=RemindConfig(followed=frozenset({"9"})))
+    assert notes and notes[0].key.startswith("m:9:score")
+    covered = RemindConfig(covered=frozenset({"55"}))
+    other = _match(id="8", stars="0", event="CCT Season", event_id="55", live="1", score1="1", score2="0")
+    state, notes = plan_reminders(empty_state(), [other], None, now=now, cfg=covered)
+    assert "8" in state["matches"]
+    state, notes = plan_reminders(
+        state,
+        [{**other, "score1": "3"}],
+        None,
+        now=now,
+        cfg=RemindConfig(covered=frozenset({"55"}), ignored=frozenset({"8"})),
+    )
+    assert notes == []
+
+
+def test_event_watch_off_records_stage_without_notice():
+    now = datetime(2026, 9, 24, 12, 0, tzinfo=CST)
+    days = _ev(id="days", name="BLAST Premier", start_ts=int((now + timedelta(days=3)).timestamp()))
+    state, notes = plan_reminders(empty_state(), None, [days], now=now)
+    assert notes == []
+    later = now + timedelta(days=2, hours=12)
+    state, notes = plan_reminders(state, None, [days], now=later, cfg=RemindConfig(event_watch=False))
+    assert notes == []
+    assert state["events"]["days"] == "day"
+    state, notes = plan_reminders(state, None, [days], now=later)
     assert notes == []
 
 
@@ -219,3 +291,33 @@ def test_ignore_stop_and_watch_commands(tmp_path, monkeypatch):
     bot.handle_text(1, "/unignore 2396932", user_id=DEFAULT_ADMIN_ID)
     assert "2396932" not in bot._cfg().ignored
     assert "2396932" in bot._state.get("quiet_ids")
+    bot.handle_text(1, "/untrack", user_id=DEFAULT_ADMIN_ID)
+    assert bot._cfg().event_watch is False
+    assert bot._cfg().watch is True
+    bot.handle_text(1, "/track", user_id=DEFAULT_ADMIN_ID)
+    assert bot._cfg().event_watch is True
+    bot.handle_text(1, "/follow 42", user_id=DEFAULT_ADMIN_ID)
+    bot.handle_text(1, "/cover 77", user_id=DEFAULT_ADMIN_ID)
+    bot.handle_text(1, "/digest 10 20", user_id=DEFAULT_ADMIN_ID)
+    assert bot._cfg().followed == frozenset({"42"})
+    assert bot._cfg().covered == frozenset({"77"})
+    assert (bot._cfg().digest_morning, bot._cfg().digest_evening) == (10, 20)
+    bot.handle_text(1, "/unfollow 42", user_id=DEFAULT_ADMIN_ID)
+    bot.handle_text(1, "/uncover 77", user_id=DEFAULT_ADMIN_ID)
+    assert bot._cfg().followed == frozenset()
+    assert bot._cfg().covered == frozenset()
+
+
+def test_command_menu_is_one_full_list():
+    names = [row["command"] for row in BOT_COMMANDS]
+    assert names[:3] == ["matches", "events", "hltv"]
+    for cmd in ("watch", "stop", "track", "untrack", "follow", "cover", "digest", "ignore", "allow", "cookie", "status"):
+        assert cmd in names
+    assert "debug" not in names
+    jobs = command_jobs({DEFAULT_ADMIN_ID}, {-100})
+    assert jobs == [(BOT_COMMANDS, None)]
+    clears = command_scope_clears({7, DEFAULT_ADMIN_ID}, {-200, -100})
+    assert clears[0] == {"type": "all_private_chats"}
+    assert {"type": "all_group_chats"} in clears
+    assert {"type": "chat", "chat_id": 7} in clears
+    assert {"type": "chat_member", "chat_id": -200, "user_id": 7} in clears

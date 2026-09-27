@@ -17,6 +17,7 @@ from pathlib import Path
 
 from hltv_bot.chats import add_group, group_ids, list_groups, remove_group
 from hltv_bot.events import (
+    EVENTS_CACHE_TTL,
     classify_event_tier,
     fetch_events,
     filter_and_sort_events,
@@ -25,9 +26,9 @@ from hltv_bot.events import (
 )
 from hltv_bot.format import format_match_list, h
 from hltv_bot.http import CloudflareError
-from hltv_bot.matches import fetch_match_board, fetch_matches
+from hltv_bot.matches import fetch_matches
 from hltv_bot.ratelimit import Cooldown
-from hltv_bot.reminders import CST, RemindConfig, empty_state, match_allowed, plan_reminders
+from hltv_bot.reminders import CST, RemindConfig, choose_poll_wait, empty_state, plan_reminders
 from hltv_bot.session import BrowserSession, load_session
 from hltv_bot.settings import notify_config, update_settings
 from hltv_bot.telegram_api import Telegram
@@ -39,8 +40,6 @@ MSG_TTL = 30.0
 GET_UPDATES_FAIL_SLEEP = 3.0
 TG_COMMANDS_GAP = 0.4
 # One /matches fetch covers every live BO1/BO3/BO5. That is the score clock.
-# A match page is opened only while the row is LIVE and its log has not said
-# start, and only on every other turn so the list stays the fast path.
 MATCH_PAGE_MIN = 3.0
 MATCH_PAGE_MAX = 5.0
 CF_ALERT_EVERY = 1800.0
@@ -61,19 +60,34 @@ HELP = """\
 
 • <code>/matches</code> — 比赛列表（<code>t2</code> / <code>t3</code> / <code>all</code> / <code>text</code>）
 • <code>/events</code> — Major / T1 赛事
-• <code>/groups</code> — 通知群
 
-默认推送至少 1 星、并且赛事是 Major/T1 的比赛。赛程页的 LIVE 只是直播位。真正开打要等比赛页 live log 里的 start。一方连赢 5 回合及以上会标出来。
+默认推送至少 1 星、并且赛事是 Major/T1 的比赛。比分只看赛程总页上的当前图回合分。进入 Live 时 0:0 只发一次，当作预告。BO1 就是这场比分，BO3/BO5 会标明当前图。
+
+一个比赛日是 UTC+8 早上 10:00 到次日 10:00，跨过凌晨，用来装国外晚上的比赛。赛事提醒每天两次：10:00 看这一整日，20:00 看这一日里还没开的，含次日凌晨。不按比赛自己的开赛钟点。
+
+<b>补充监控</b>
+• <code>/follow 比赛id</code> — 单场。赛事本身不够默认条件时用
+• <code>/unfollow 比赛id</code>
+• <code>/cover 赛事id</code> — 打开这一赛事每个比赛日的全部比赛
+• <code>/uncover 赛事id</code>
+• <code>/ignore 比赛id</code> — 从默认、单场、整赛事里摘掉一场
 
 <b>管理员</b>
+• <code>/groups</code> — 通知群
 • <code>/allow</code> — 把本群加入通知
 • <code>/deny</code> — 移出通知
-• <code>/ignore 比赛id</code> — 这场不再推
+• <code>/follow 比赛id</code> — 单场加入比分监控
+• <code>/unfollow 比赛id</code> — 取消单场
+• <code>/cover 赛事id</code> — 批量打开该赛事每个比赛日
+• <code>/uncover 赛事id</code> — 关闭该赛事
+• <code>/ignore 比赛id</code> — 这一场不推
 • <code>/unignore 比赛id</code> — 恢复这场
-• <code>/stop</code> — 暂停全部比分推送
-• <code>/watch</code> — 恢复比分推送
-• <code>/window 7 6</code> — 赛事提醒：开赛前 7 天，直到前 6 小时
-• <code>/stars 1</code> — 比赛提醒的最低星级
+• <code>/stop</code> — 暂停比赛比分
+• <code>/watch</code> — 恢复比赛比分
+• <code>/track</code> — 打开每日赛程提醒
+• <code>/untrack</code> — 关闭每日赛程提醒
+• <code>/digest 10 20</code> — 赛程提醒钟点，UTC+8
+• <code>/stars 1</code> — 默认比赛的最低星级
 • <code>/silent</code> — 无声开关，默认开
 • <code>/cookie</code> — 更新 Cookie
 • <code>/status</code>
@@ -85,12 +99,19 @@ ADMIN_CMDS = frozenset(
         "/deny",
         "/groups",
         "/window",
+        "/digest",
+        "/follow",
+        "/unfollow",
+        "/cover",
+        "/uncover",
         "/stars",
         "/silent",
         "/ignore",
         "/unignore",
         "/stop",
         "/watch",
+        "/track",
+        "/untrack",
         "/cookie",
         "/updatecookie",
         "/update_cookie",
@@ -99,25 +120,49 @@ ADMIN_CMDS = frozenset(
     }
 )
 
-USER_BOT_COMMANDS = [
+BOT_COMMANDS = [
     {"command": "matches", "description": "比赛列表"},
     {"command": "events", "description": "Major/T1 赛事"},
-    {"command": "groups", "description": "通知群"},
-    {"command": "help", "description": "帮助"},
-]
-ADMIN_BOT_COMMANDS = USER_BOT_COMMANDS + [
+    {"command": "hltv", "description": "用法"},
     {"command": "allow", "description": "加入通知群"},
     {"command": "deny", "description": "移出通知群"},
+    {"command": "groups", "description": "通知群"},
     {"command": "ignore", "description": "忽略一场比赛"},
     {"command": "unignore", "description": "恢复一场比赛"},
-    {"command": "stop", "description": "暂停全部比分推送"},
-    {"command": "watch", "description": "恢复比分推送"},
-    {"command": "window", "description": "赛事提醒窗口 天 小时"},
-    {"command": "stars", "description": "比赛提醒最低星级"},
+    {"command": "stop", "description": "暂停比赛比分"},
+    {"command": "watch", "description": "恢复比赛比分"},
+    {"command": "track", "description": "打开每日赛程提醒"},
+    {"command": "untrack", "description": "关闭每日赛程提醒"},
+    {"command": "follow", "description": "单场加入比分监控"},
+    {"command": "unfollow", "description": "取消单场监控"},
+    {"command": "cover", "description": "打开整赛事每个比赛日"},
+    {"command": "uncover", "description": "关闭整赛事监控"},
+    {"command": "digest", "description": "赛程提醒钟点 UTC+8"},
+    {"command": "stars", "description": "默认比赛的最低星级"},
     {"command": "silent", "description": "无声通知 开/关"},
     {"command": "cookie", "description": "更新 Cookie"},
     {"command": "status", "description": "状态"},
 ]
+
+
+def command_jobs(admin_ids: set[int], groups: set[int]) -> list[tuple[list[dict], dict | None]]:
+    """One full menu for every chat. Scope splits are cleared separately."""
+    del admin_ids, groups
+    return [(BOT_COMMANDS, None)]
+
+
+def command_scope_clears(admin_ids: set[int], groups: set[int]) -> list[dict]:
+    """Drop older per-audience menus so they cannot hide the full list."""
+    scopes: list[dict] = [
+        {"type": "all_private_chats"},
+        {"type": "all_group_chats"},
+        {"type": "all_chat_administrators"},
+    ]
+    for aid in sorted(admin_ids):
+        scopes.append({"type": "chat", "chat_id": int(aid)})
+        for gid in sorted(groups):
+            scopes.append({"type": "chat_member", "chat_id": int(gid), "user_id": int(aid)})
+    return scopes
 
 
 def _load_state(path: Path) -> dict:
@@ -189,12 +234,12 @@ class HltvTelegramBot:
         self._keeper_stop = threading.Event()
         self.watch = None
         self._event_rows: list | None = None
-        self._events_loaded = False
         self._events_retry_at = 0.0
         self._list_rows: list[dict] = []
         self._list_at = 0.0
-        self._page: dict[str, dict] = {}
-        self._rr = 0
+        self._list_next = 0.0
+        self._events_next = 0.0
+        self._wake = threading.Event()
 
     def can_delete_in_chat(self, chat_id: int) -> bool:
         cid = int(chat_id)
@@ -263,7 +308,7 @@ class HltvTelegramBot:
             if cmd in {"/debug", "/status", "/groups", "/cookie"}:
                 self._reply(chat_id, f"无权限\n你的 id: <code>{user_id}</code>")
             return
-        if cmd not in ADMIN_CMDS | {"/start", "/help"} and not listed and not self.is_admin(user_id):
+        if cmd not in ADMIN_CMDS | {"/start", "/help", "/hltv"} and not listed and not self.is_admin(user_id):
             return
         if cmd.startswith("/") and message_id is not None and self.can_delete_in_chat(chat_id):
             self._schedule_delete(chat_id, int(message_id))
@@ -272,10 +317,10 @@ class HltvTelegramBot:
             key = f"{user_id}:{cmd}"
             if not self._cool.allow(key, interval):
                 return
-        if cmd in ("/start", "/help"):
+        if cmd in ("/start", "/help", "/hltv"):
             self._await_cookie.discard(chat_id)
             if self.is_admin(user_id) or self.chat_allowed(chat_id, user_id=user_id):
-                self._reply(chat_id, HELP)
+                self._reply_guide(chat_id)
         elif cmd == "/allow":
             self._cmd_allow(chat_id, arg, chat_title=chat_title, chat_type=chat_type)
         elif cmd == "/deny":
@@ -290,6 +335,24 @@ class HltvTelegramBot:
             self._cmd_events(chat_id, arg)
         elif cmd == "/window":
             self._cmd_window(chat_id, arg)
+        elif cmd == "/digest":
+            self._cmd_digest(chat_id, arg)
+        elif cmd == "/follow":
+            self._cmd_id_list(chat_id, arg, key="followed", title="单场监控", usage="/follow 比赛id")
+            if arg.strip():
+                self._kick()
+        elif cmd == "/unfollow":
+            self._cmd_id_unlist(chat_id, arg, key="followed", usage="/unfollow 比赛id")
+            self._kick()
+        elif cmd == "/cover":
+            if arg.strip():
+                self._cmd_id_list(chat_id, arg, key="covered", title="赛事监控", usage="/cover 赛事id")
+                self._kick()
+            else:
+                self._cmd_cover_list(chat_id)
+        elif cmd == "/uncover":
+            self._cmd_id_unlist(chat_id, arg, key="covered", usage="/uncover 赛事id")
+            self._kick()
         elif cmd == "/stars":
             self._cmd_stars(chat_id, arg)
         elif cmd == "/silent":
@@ -302,6 +365,10 @@ class HltvTelegramBot:
             self._cmd_stop_watch(chat_id)
         elif cmd == "/watch":
             self._cmd_watch(chat_id, arg)
+        elif cmd == "/track":
+            self._cmd_track(chat_id)
+        elif cmd == "/untrack":
+            self._cmd_untrack(chat_id)
         elif cmd == "/status":
             self._await_cookie.discard(chat_id)
             self._cmd_status(chat_id)
@@ -328,7 +395,12 @@ class HltvTelegramBot:
             event_hours=int(raw["event_hours"]),
             min_stars=int(raw["min_stars"]),
             watch=bool(raw.get("watch", True)),
+            event_watch=bool(raw.get("event_watch", True)),
             ignored=frozenset(raw.get("ignored") or []),
+            followed=frozenset(raw.get("followed") or []),
+            covered=frozenset(raw.get("covered") or []),
+            digest_morning=int(raw.get("digest_morning") or 10),
+            digest_evening=int(raw.get("digest_evening") or 20),
         )
 
     def _silent(self) -> bool:
@@ -377,7 +449,7 @@ class HltvTelegramBot:
         caption = f"<b>比赛</b>  {len(shown)} 场 · UTC+8"
         if len(rows) > len(shown):
             caption += f"\n<i>共 {len(rows)} 场，图里是前 {len(shown)} 场</i>"
-        caption += "\n<i>发 /watch ID 实时盯盘 · /matches all 看全部</i>"
+        caption += "\n<i>/matches all 看全部</i>"
         self._reply_card(chat_id, {"view": "matches", "rows": shown}, caption, format_match_list(rows, starred_only=False))
 
     def _cmd_events(self, chat_id: int, arg: str) -> None:
@@ -418,17 +490,117 @@ class HltvTelegramBot:
         self._reply_card(chat_id, {"view": "events", "rows": card_rows}, caption, format_events_html(rows))
 
     def _cmd_window(self, chat_id: int, arg: str) -> None:
+        del arg
+        cfg = self._cfg()
+        self._reply(
+            chat_id,
+            "赛事提醒已改成每天两次，不按开赛倒计时。\n"
+            f"当前 <code>{cfg.digest_morning:02d}:00</code> 和 <code>{cfg.digest_evening:02d}:00</code> UTC+8\n"
+            "改钟点发 <code>/digest 10 20</code>",
+        )
+
+    def _cmd_digest(self, chat_id: int, arg: str) -> None:
         parts = arg.split()
+        cfg = self._cfg()
         if len(parts) != 2 or not parts[0].isdigit() or not parts[1].isdigit():
-            cfg = self._cfg()
-            self._reply(chat_id, f"用法 <code>/window 天 小时</code>\n当前 {cfg.event_days} 天 → {cfg.event_hours} 小时")
+            self._reply(
+                chat_id,
+                "用法 <code>/digest 10 20</code>\n"
+                f"当前 <code>{cfg.digest_morning:02d}:00</code> 和 <code>{cfg.digest_evening:02d}:00</code> UTC+8",
+            )
             return
-        days, hours = int(parts[0]), int(parts[1])
-        if not (1 <= days <= 60 and 1 <= hours < days * 24):
-            self._reply(chat_id, "天数 1–60，小时要小于天数×24")
+        morning, evening = int(parts[0]), int(parts[1])
+        if not (0 <= morning < evening <= 23):
+            self._reply(chat_id, "两个钟点要在 0–23，早上早于晚上")
             return
-        self._write_settings({"event_days": days, "event_hours": hours})
-        self._reply(chat_id, f"赛事提醒：开赛前 <b>{days}</b> 天，直到前 <b>{hours}</b> 小时")
+        self._write_settings({"digest_morning": morning, "digest_evening": evening})
+        self._kick()
+        self._reply(chat_id, f"赛程提醒 <b>{morning:02d}:00</b> 和 <b>{evening:02d}:00</b> UTC+8")
+
+    def _reply_guide(self, chat_id: int) -> None:
+        cfg = self._cfg()
+        self._reply_card(
+            chat_id,
+            {"view": "guide", "morning": cfg.digest_morning, "evening": cfg.digest_evening},
+            HELP,
+            HELP,
+        )
+
+    def _kick(self) -> None:
+        self._list_next = 0.0
+        self._wake.set()
+
+    def _cmd_cover_list(self, chat_id: int) -> None:
+        try:
+            rows = fetch_events(self.session)
+        except CloudflareError as e:
+            self._reply(chat_id, f"Cloudflare 拦了赛事页：{e}\n发 /cookie 更新 Cookie")
+            return
+        except Exception as e:
+            self._reply(chat_id, f"赛事列表失败：{h(e)}")
+            return
+        now = datetime.now(CST)
+        today = now.timestamp()
+        picked = []
+        for ev in rows:
+            end_ts = int(ev.get("end_ts") or ev.get("start_ts") or 0)
+            if end_ts and end_ts < today - 86400 and not ev.get("live"):
+                continue
+            picked.append(ev)
+        picked.sort(key=lambda ev: (0 if ev.get("live") else 1, int(ev.get("start_ts") or 0)))
+        covered = set(self._cfg().covered)
+        shown = picked[:12]
+        lines = ["<b>赛事</b>  发 <code>/cover 赛事id</code> 批量打开"]
+        if covered:
+            lines.append("已打开 " + " ".join(f"<code>{h(eid)}</code>" for eid in sorted(covered)))
+        for ev in shown:
+            mark = "●" if str(ev.get("id") or "") in covered else "·"
+            lines.append(f"{mark} <code>{h(ev.get('id') or '')}</code> {h(ev.get('name') or '')}")
+        if len(picked) > len(shown):
+            lines.append(f"<i>共 {len(picked)} 个，这里是前 {len(shown)} 个</i>")
+        text = "\n".join(lines)
+        card_rows = []
+        for ev in shown[:8]:
+            card_rows.append(
+                {
+                    "id": str(ev.get("id") or ""),
+                    "name": ev.get("name") or "",
+                    "tier": "已打开" if str(ev.get("id") or "") in covered else "",
+                    "flag": "",
+                    "location": (ev.get("location") or "").strip(),
+                    "when": "",
+                    "prize": "",
+                    "logo_url": ev.get("logo_url") or "",
+                }
+            )
+        self._reply_card(chat_id, {"view": "events", "rows": card_rows}, text, text)
+
+    def _cmd_id_list(self, chat_id: int, arg: str, *, key: str, title: str, usage: str) -> None:
+        ids = [p for p in arg.split() if p.isdigit()]
+        current = list(self._saved().get(key) or [])
+        if not ids:
+            if not current:
+                self._reply(chat_id, f"没有{title}。\n用法 <code>{h(usage)}</code>")
+                return
+            lines = [f"<b>{h(title)}</b>"]
+            lines.extend(f"• <code>{h(mid)}</code>" for mid in current)
+            self._reply(chat_id, "\n".join(lines))
+            return
+        for mid in ids:
+            if mid not in current:
+                current.append(mid)
+        self._write_settings({key: current})
+        self._reply(chat_id, f"已加入{title} " + " ".join(f"<code>{h(mid)}</code>" for mid in ids))
+
+    def _cmd_id_unlist(self, chat_id: int, arg: str, *, key: str, usage: str) -> None:
+        ids = [p for p in arg.split() if p.isdigit()]
+        if not ids:
+            self._reply(chat_id, f"用法 <code>{h(usage)}</code>")
+            return
+        current = [mid for mid in (self._saved().get(key) or []) if mid not in ids]
+        self._write_settings({key: current})
+        self._quiet(ids)
+        self._reply(chat_id, "已取消 " + " ".join(f"<code>{h(mid)}</code>" for mid in ids))
 
     def _cmd_stars(self, chat_id: int, arg: str) -> None:
         raw = arg.strip()
@@ -466,6 +638,7 @@ class HltvTelegramBot:
             if mid not in current:
                 current.append(mid)
         self._write_settings({"ignored": current})
+        self._kick()
         self._reply(chat_id, "已忽略 " + " ".join(f"<code>{h(mid)}</code>" for mid in ids))
 
     def _cmd_unignore(self, chat_id: int, arg: str) -> None:
@@ -476,11 +649,13 @@ class HltvTelegramBot:
         current = [mid for mid in (self._saved().get("ignored") or []) if mid not in ids]
         self._write_settings({"ignored": current})
         self._quiet(ids)
+        self._kick()
         self._reply(chat_id, "已恢复 " + " ".join(f"<code>{h(mid)}</code>" for mid in ids) + "\n下一次比分变化才会推")
 
     def _cmd_stop_watch(self, chat_id: int) -> None:
         self._write_settings({"watch": False})
-        self._reply(chat_id, "已暂停全部比分推送。赛事提醒还在。\n恢复发 <code>/watch</code>")
+        self._kick()
+        self._reply(chat_id, "已暂停比赛比分。\n恢复发 <code>/watch</code>\n赛事提醒用 <code>/track</code> <code>/untrack</code>")
 
     def _cmd_watch(self, chat_id: int, arg: str) -> None:
         raw = arg.strip().lower()
@@ -489,11 +664,22 @@ class HltvTelegramBot:
             return
         self._write_settings({"watch": True})
         self._quiet(all_matches=True)
+        self._kick()
         ignored = self._saved().get("ignored") or []
         extra = ""
         if ignored:
             extra = "\n仍忽略 " + " ".join(f"<code>{h(mid)}</code>" for mid in ignored)
-        self._reply(chat_id, "比分推送已开。Major/T1 且至少 1 星的比赛都会拉。" + extra + "\n不补发暂停期间的旧比分。")
+        self._reply(chat_id, "比赛比分已开。Major/T1 且至少 1 星的比赛都会拉。" + extra + "\n不补发暂停期间的旧比分。")
+
+    def _cmd_track(self, chat_id: int) -> None:
+        self._write_settings({"event_watch": True})
+        self._kick()
+        self._reply(chat_id, "每日赛程提醒已开。错过的那一次不补发。")
+
+    def _cmd_untrack(self, chat_id: int) -> None:
+        self._write_settings({"event_watch": False})
+        self._kick()
+        self._reply(chat_id, "每日赛程提醒已关。比赛比分不受影响。\n恢复发 <code>/track</code>")
 
     def _cmd_allow(self, chat_id: int, arg: str, *, chat_title: str, chat_type: str) -> None:
         target = arg.strip()
@@ -514,8 +700,8 @@ class HltvTelegramBot:
         gid = int(target) if target.lstrip("-").isdigit() else int(chat_id)
         if remove_group(gid):
             self._reply(chat_id, f"已移除 <code>{gid}</code>")
-        else:
-            self._reply(chat_id, f"名单里没有 <code>{gid}</code>")
+            return
+        self._reply(chat_id, f"名单里没有 <code>{gid}</code>")
 
     def _cmd_groups(self, chat_id: int) -> None:
         rows = list_groups()
@@ -540,9 +726,10 @@ class HltvTelegramBot:
             "时区 <code>UTC+8</code>",
             f"通知群 <b>{len(group_ids())}</b>",
             f"无声 <b>{'yes' if self._silent() else 'no'}</b>",
-            f"赛事窗口 前 <b>{cfg.event_days}</b> 天 → 前 <b>{cfg.event_hours}</b> 小时",
             f"比赛星级 ≥ <b>{cfg.min_stars}</b> 且 Major/T1",
-            f"比分推送 <b>{'on' if cfg.watch else 'off'}</b>",
+            f"比赛比分 <b>{'on' if cfg.watch else 'off'}</b>",
+            f"赛程提醒 <b>{'on' if cfg.event_watch else 'off'}</b>  <code>{cfg.digest_morning:02d}:00</code> <code>{cfg.digest_evening:02d}:00</code>",
+            f"单场 <b>{len(cfg.followed)}</b>  赛事 <b>{len(cfg.covered)}</b>",
             f"忽略 <b>{len(cfg.ignored)}</b>",
             f"cf_clearance <b>{'yes' if self.session.has_clearance() else 'no'}</b>",
             "抓取 <code>curl</code>",
@@ -692,56 +879,29 @@ class HltvTelegramBot:
         self._cf_alerted_at = now
         self._notify_admins(f"<b>HLTV Cookie 失效</b>\n{h(where)}\n发 /cookie 更新")
 
-    def _events_once(self) -> list | None:
-        if self._events_loaded:
-            return self._event_rows
-        if time.monotonic() < self._events_retry_at:
-            return None
+    def _maybe_events(self) -> None:
+        now = time.monotonic()
+        if self._event_rows is not None and now < self._events_next:
+            return
+        if now < self._events_retry_at:
+            return
         try:
             self._event_rows = fetch_events(self.session)
         except CloudflareError as e:
             self._note_cf("events", e)
-            self._events_retry_at = time.monotonic() + 300
-            return None
+            self._events_retry_at = now + 300
+            return
         except Exception as e:
             self.last_error = f"events: {e}"
             log.exception("fetch events")
-            self._events_retry_at = time.monotonic() + 300
-            return None
-        self._events_loaded = True
-        log.info("events loaded once n=%s", len(self._event_rows or []))
-        return self._event_rows
-
-    def _pending_start(self) -> list[dict]:
-        """LIVE rows that still need the match page to see log start."""
-        cfg = self._cfg()
-        if not cfg.watch:
-            return []
-        out: list[dict] = []
-        for row in self._list_rows:
-            if row.get("live") != "1":
-                continue
-            mid = str(row.get("id") or "")
-            if not mid or mid in cfg.ignored or not match_allowed(row, cfg):
-                continue
-            if self._page.get(mid, {}).get("started") == "1":
-                continue
-            out.append(row)
-        return out
-
-    def _merge_rows(self) -> list[dict]:
-        merged: list[dict] = []
-        for row in self._list_rows:
-            item = dict(row)
-            extra = self._page.get(str(item.get("id") or ""))
-            if extra:
-                item.update(extra)
-            merged.append(item)
-        return merged
+            self._events_retry_at = now + 300
+            return
+        self._events_next = now + EVENTS_CACHE_TTL
+        log.info("events refreshed n=%s", len(self._event_rows or []))
 
     def _refresh_list(self) -> None:
         try:
-            self._list_rows = fetch_matches(self.session)
+            self._list_rows = fetch_matches(self.session, fresh=True)
         except CloudflareError as e:
             self._note_cf("matches", e)
             return
@@ -750,84 +910,66 @@ class HltvTelegramBot:
             log.exception("fetch matches")
             return
         self._list_at = time.monotonic()
-        alive = {str(r.get("id") or "") for r in self._list_rows}
-        self._page = {k: v for k, v in self._page.items() if k in alive}
 
-    def _refresh_page(self, row: dict) -> None:
-        mid = str(row.get("id") or "")
-        try:
-            board = fetch_match_board(self.session, str(row.get("url") or mid))
-        except Exception as e:
-            log.warning("match page %s: %s", mid, e)
+    def _plan(self) -> None:
+        if self._list_at <= 0:
             return
-        # The page is only for the start log. Series and map numbers stay on the list,
-        # so a BO3's 1-0 is not replaced by one map's 8-6.
-        if board.get("started") or self._page.get(mid, {}).get("started") == "1":
-            self._page[mid] = {"started": "1"}
-        else:
-            self._page[mid] = {}
-
-    def tick_reminders(self) -> int:
-        events = self._events_once()
-        pending = self._pending_start()
-        # Odd turns, and only while someone is waiting for log start: one match page.
-        # Every other turn, and the whole series after start: the matches list.
-        if pending and self._list_at and self._rr % 2 == 1:
-            row = pending[(self._rr // 2) % len(pending)]
-            self._refresh_page(row)
-        else:
-            self._refresh_list()
-        self._rr += 1
-        rows = self._merge_rows() if self._list_at else None
-        if rows is None and events is None:
-            return 0
         with self._state_lock:
             state, notes = plan_reminders(
                 self._state,
-                rows,
-                events,
+                self._list_rows,
+                self._event_rows,
                 now=datetime.now(CST),
                 cfg=self._cfg(),
             )
             self._state = state
             _save_state(state, self.state_path)
         self.last_poll_at = time.time()
-        if rows is not None and events is not None:
-            self.last_error = ""
+        self.last_error = ""
         for note in notes:
             log.info("remind %s", note.key)
             self._broadcast(note)
-        return len(notes)
+
+    def tick_reminders(self) -> float:
+        """Fetch only what is due. Return seconds until the next matches fetch."""
+        self._maybe_events()
+        now_m = time.monotonic()
+        if self._list_at <= 0 or now_m >= self._list_next:
+            self._refresh_list()
+            if self._list_at <= 0:
+                self._list_next = now_m + 300
+                return 300
+            self._plan()
+        with self._state_lock:
+            digests = dict(self._state.get("digests") or {})
+        wait = choose_poll_wait(self._list_rows, self._cfg(), datetime.now(CST), digests)
+        if wait <= 0:
+            wait = random.uniform(MATCH_PAGE_MIN, MATCH_PAGE_MAX)
+        self._list_next = time.monotonic() + wait
+        return wait
 
     def _poll_loop(self) -> None:
         while not self._stop.is_set():
-            began = time.monotonic()
             try:
-                self.tick_reminders()
+                wait = self.tick_reminders()
             except Exception:
                 log.exception("remind tick")
-            target = random.uniform(MATCH_PAGE_MIN, MATCH_PAGE_MAX)
-            wait = max(0.0, target - (time.monotonic() - began))
+                wait = 300
             log.info("next poll in %.0fs", wait)
-            self._stop.wait(wait)
+            self._wake.wait(wait)
+            self._wake.clear()
 
     def register_commands(self) -> None:
-        jobs: list[tuple[list[dict], dict | None]] = [
-            (USER_BOT_COMMANDS, None),
-            (USER_BOT_COMMANDS, {"type": "all_group_chats"}),
-            (ADMIN_BOT_COMMANDS, {"type": "all_private_chats"}),
-        ]
-        for aid in sorted(self.admin_ids):
-            jobs.append((ADMIN_BOT_COMMANDS, {"type": "chat", "chat_id": aid}))
-        for i, (cmds, scope) in enumerate(jobs):
+        for scope in command_scope_clears(self.admin_ids, group_ids()):
+            try:
+                self.tg.delete_my_commands(scope)
+            except Exception:
+                log.exception("deleteMyCommands scope=%s", scope.get("type"))
+            time.sleep(TG_COMMANDS_GAP)
+        for i, (cmds, scope) in enumerate(command_jobs(self.admin_ids, group_ids())):
             if i:
                 time.sleep(TG_COMMANDS_GAP)
-            try:
-                self.tg.set_my_commands(cmds, scope)
-            except Exception:
-                if scope and scope.get("type") == "chat":
-                    continue
-                raise
+            self.tg.set_my_commands(cmds, scope)
 
     def run(self) -> None:
         log.info("bot start admins=%s groups=%s http=curl", sorted(self.admin_ids), sorted(group_ids()))

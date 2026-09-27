@@ -1,6 +1,47 @@
 from hltv_bot.matches import format_start_time, parse_match_list, parse_match_meta, pretty_name
 
 
+def test_wrapper_list_reads_bo_and_current_map_score():
+    html = """
+    <div class="match-wrapper live-match-container" data-match-id="2398241" data-stars="1" live="true">
+      <a href="/matches/2398241/k27-vs-sinners-1win-private-club-season-1">
+        <div data-event-headline="1win Private Club Season 1"></div>
+        <div class="match-meta match-meta-live">Live</div>
+        <div class="match-meta">bo3</div>
+        <div class="match-teamname">K27</div>
+        <div class="match-teamname">SINNERS</div>
+        <span data-livescore-current-map-score="3"></span>
+        <span data-livescore-current-map-score="5"></span>
+      </a>
+    </div>
+    <div class="match-wrapper" data-match-id="2398758" data-stars="0" live="false">
+      <a href="/matches/2398758/depo-vs-paqt-1xbet-frag-season-18">
+        <div data-event-headline="1xBet FRAG Season 18"></div>
+        <div class="match-time" data-unix="1790665200000">09:00</div>
+        <div class="match-meta">bo1</div>
+        <div class="match-teamname">DEPO</div>
+        <div class="match-teamname">PAQT</div>
+      </a>
+    </div>
+    """
+    rows = parse_match_list(html, limit=0)
+    live = rows[0]
+    assert live["id"] == "2398241"
+    assert live["team1"] == "K27"
+    assert live["team2"] == "SINNERS"
+    assert live["format"] == "bo3"
+    assert live["score1"] == "3"
+    assert live["score2"] == "5"
+    assert live["live"] == "1"
+    assert live["event"] == "1win Private Club Season 1"
+    bo1 = next(r for r in rows if r["id"] == "2398758")
+    assert bo1["format"] == "bo1"
+    assert bo1["team1"] == "DEPO"
+    assert bo1["team2"] == "PAQT"
+    assert bo1["score1"] == ""
+    assert bo1["live"] == "0"
+
+
 def test_live_log_start_is_not_the_list_live_flag():
     from hltv_bot.matches import live_log_started
 
@@ -268,6 +309,7 @@ def test_cmd_matches_text_mode(monkeypatch):
         {"id": "2396932", "team1": "Spirit", "team2": "G2", "event": "IEM", "stars": "3", "url": "https://hltv.org/1"},
     ]
     monkeypatch.setattr("hltv_bot.bot.fetch_matches", lambda s: mock_rows)
+    monkeypatch.setattr("hltv_bot.cards.render_card", lambda card: b"png")
 
     # 1. Text mode
     bot._cmd_matches(123, "text")
@@ -279,7 +321,8 @@ def test_cmd_matches_text_mode(monkeypatch):
     bot._cmd_matches(123, "")
     assert len(fake_tg.photos) == 1
     assert "比赛" in fake_tg.photos[0]
-    assert "实时盯盘" in fake_tg.photos[0]
+    assert "/matches all" in fake_tg.photos[0]
+    assert "实时盯盘" not in fake_tg.photos[0]
 
 
 

@@ -288,6 +288,12 @@ class Telegram:
             payload["scope"] = scope
         self._call("setMyCommands", payload)
 
+    def delete_my_commands(self, scope: dict | None = None) -> None:
+        payload: dict = {}
+        if scope:
+            payload["scope"] = scope
+        self._call("deleteMyCommands", payload)
+
     def bot_can_delete_messages(self, chat_id: int | str, bot_user_id: int | None = None) -> bool:
         """Check if bot has administrator permission to delete messages in a group."""
         try:

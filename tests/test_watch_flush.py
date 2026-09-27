@@ -13,6 +13,10 @@ class Tg:
         self.sent.append((chat_id, text, silent))
         return {"message_id": 7}
 
+    def send_photo(self, chat_id, photo, caption="", filename="hltv.png", silent=False):
+        self.sent.append((chat_id, caption, silent))
+        return {"message_id": 7}
+
     def delete_message(self, chat_id, message_id):
         self.deleted.append(message_id)
 
@@ -34,7 +38,7 @@ def test_command_reply_is_scheduled_for_delete(monkeypatch):
         return T()
 
     monkeypatch.setattr("hltv_bot.bot.threading.Timer", fake_timer)
-    bot.handle_text(1, "/help", user_id=1, message_id=3)
+    bot.handle_text(1, "/hltv", user_id=1, message_id=3)
     assert scheduled["delay"] == MSG_TTL
     assert tg.sent
     assert tg.sent[0][2] is False
