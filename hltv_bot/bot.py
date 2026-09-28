@@ -56,7 +56,7 @@ DEFAULT_CMD_COOLDOWN = 1.2
 
 HELP = """\
 <b>hltv-bot</b>
-时间 <code>UTC+8</code>。提醒默认无声，发到通知群。
+时间 <code>UTC+8</code>。提醒默认无声，发到通知群，同时私聊管理员。
 
 • <code>/matches</code> — 比赛列表（<code>t2</code> / <code>t3</code> / <code>all</code> / <code>text</code>）
 • <code>/events</code> — Major / T1 赛事
@@ -739,7 +739,7 @@ class HltvTelegramBot:
         lines = [
             "<b>Status</b>",
             "时区 <code>UTC+8</code>",
-            f"通知群 <b>{len(group_ids())}</b>",
+            f"通知群 <b>{len(group_ids())}</b>  管理员私聊 <b>{len(self.admin_ids)}</b>",
             f"无声 <b>{'yes' if self._silent() else 'no'}</b>",
             f"比赛星级 ≥ <b>{cfg.min_stars}</b> 且 Major/T1",
             f"比赛比分 <b>{'on' if cfg.watch else 'off'}</b>",
@@ -863,10 +863,12 @@ class HltvTelegramBot:
 
     def _broadcast(self, note) -> None:
         silent = self._silent()
-        ids = sorted(group_ids())
+        ids = set(group_ids())
+        ids.update(int(aid) for aid in self.admin_ids)
+        ordered = sorted(ids)
         caption = note.html if hasattr(note, "html") else str(note)
-        if not ids:
-            log.info("remind skipped, no groups: %s", caption.replace("\n", " ")[:120])
+        if not ordered:
+            log.info("remind skipped, no recipients: %s", caption.replace("\n", " ")[:120])
             return
         png = None
         card = getattr(note, "card", None)
@@ -877,7 +879,7 @@ class HltvTelegramBot:
                 png = render_card(card)
             except Exception:
                 log.exception("card render")
-        for gid in ids:
+        for gid in ordered:
             try:
                 if png:
                     self.tg.send_photo(gid, png, caption=caption, filename="hltv.png", silent=silent)

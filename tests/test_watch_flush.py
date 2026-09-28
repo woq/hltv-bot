@@ -71,4 +71,11 @@ def test_events_list_and_daily_digest_are_not_deleted(monkeypatch):
     monkeypatch.setattr("hltv_bot.bot.group_ids", lambda: [5])
     bot._broadcast(Notice("d:2026-09-27:10", "<b>赛程</b>", {"view": "matches", "rows": []}))
     assert timers == []
-    assert any(item[0] == 5 for item in tg.sent)
+    sent_ids = [item[0] for item in tg.sent]
+    assert 5 in sent_ids
+    assert 1 in sent_ids
+
+    tg.sent.clear()
+    monkeypatch.setattr("hltv_bot.bot.group_ids", lambda: [])
+    bot._broadcast(Notice("d:2026-09-27:20", "<b>赛程</b>", None))
+    assert [item[0] for item in tg.sent] == [1]
