@@ -27,6 +27,8 @@ def test_score_card_renders_bo1_and_current_map():
     }
     html = _match_html(series, 420, 520)
     assert "当前图 · bo3" in html
+    assert "tier-t1" in html
+    assert "event-copy" in html
     assert "K27" in html and "SINNERS" in html
     assert ">3<" in html and ">5<" in html
     png = render_card(series)
@@ -104,7 +106,9 @@ def test_events_card_html_and_render():
     html = _events_html(card, 200, 416)
     assert "PGL Major Singapore 2026" in html
     assert "$1,250,000" in html
-    assert "Major" in html
+    assert "tier-major" in html
+    assert "event-row" in html
+    assert "Singapore" in html
 
     png = render_card(card)
     assert png.startswith(b"\x89PNG")

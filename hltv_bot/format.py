@@ -4,6 +4,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from html import escape
 
+from hltv_bot.events import classify_tier, tier_label
 from hltv_bot.matches import both_sides_open, map_order
 
 CST = timezone(timedelta(hours=8))
@@ -782,7 +783,10 @@ def format_match_list(
     blocks: list[str] = []
     for event, matches in sorted(grouped.items(), key=event_key):
         matches = sorted(matches, key=match_key)
-        lines = [f"<b>{h(event)}</b>"]
+        lines = [
+            f"<b>{h(tier_label(classify_tier(event)))}</b>",
+            f"<b>{h(event)}</b>",
+        ]
         for r in matches:
             n = star_n(r)
             live = r.get("live") == "1"
@@ -902,6 +906,7 @@ def format_match_list_rich(
                 f"<td align=\"right\"><code>{time_cell}</code></td>"
                 "</tr>"
             )
+        parts.append(f"<h4>{h(tier_label(classify_tier(event)))}</h4>")
         parts.append(f"<h4>{h(event)}</h4>")
         parts.append(
             '<table bordered striped compact>'

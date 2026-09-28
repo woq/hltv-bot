@@ -142,22 +142,90 @@ td.body { padding: 8px 0 8px; border-top: 1px solid #4a463f; }
   color: #e4ddd2;
   font-weight: 600;
 }
-.event-card { position: relative; }
+.event-card { position: relative; overflow: hidden; }
 .event-bg {
   position: absolute;
-  right: 0; top: 0; bottom: 0;
-  width: 58%;
   background-repeat: no-repeat;
-  background-position: right center;
+  background-position: center;
   background-size: contain;
-  opacity: 0.55;
 }
-.event-shade {
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(90deg, #141311 42%, rgba(20,19,17,0.4) 100%);
-}
+.event-shade { position: absolute; inset: 0; }
 .event-copy { position: relative; }
+.event-solo { min-height: 188px; }
+.event-solo .event-bg { width: 176px; height: 176px; right: 4px; top: 18px; }
+.event-solo .event-shade {
+  background: linear-gradient(90deg, #141311 0%, #141311 48%, rgba(20,19,17,0) 64%);
+}
+.event-solo .event-copy { padding-right: 156px; min-height: 176px; }
+.event-solo .name { margin-top: 14px; font-size: 26px; line-height: 1.12; white-space: normal; }
+.event-row { min-height: 112px; margin-top: 14px; padding-top: 10px; border-top: 1px solid #4a463f; }
+.event-row .event-bg { width: 92px; height: 92px; right: 0; top: 14px; }
+.event-row .event-shade {
+  background: linear-gradient(90deg, #141311 0%, #141311 52%, rgba(20,19,17,0) 74%);
+}
+.event-row .event-copy { padding-right: 100px; }
+.event-row .name { margin-top: 4px; font-size: 18px; line-height: 1.15; white-space: normal; }
+.event-chip { min-height: 76px; margin-top: 10px; }
+.event-chip .event-bg { width: 72px; height: 72px; right: 0; top: 2px; }
+.event-chip .event-shade {
+  background: linear-gradient(90deg, #141311 0%, #141311 56%, rgba(20,19,17,0) 78%);
+}
+.mcard .event-chip .event-shade {
+  background: linear-gradient(90deg, #32302b 0%, #32302b 56%, rgba(50,48,43,0) 78%);
+}
+.event-chip .event-copy { padding-right: 80px; }
+.event-chip .name { margin-top: 2px; font-size: 16px; line-height: 1.15; white-space: normal; }
+.event-chip .tier { margin-top: 0; }
+.event-copy.tier-major .name,
+.event-copy.tier-major .place,
+.event-copy.tier-major .when,
+.event-copy.tier-major .prize,
+.event-copy.tier-major .sub,
+.event-copy.tier-major .remain { color: #ffc14a; }
+.event-copy.tier-t1 .name,
+.event-copy.tier-t1 .place,
+.event-copy.tier-t1 .when,
+.event-copy.tier-t1 .prize,
+.event-copy.tier-t1 .sub,
+.event-copy.tier-t1 .remain { color: #e8ff5a; }
+.event-copy.tier-t2 .name,
+.event-copy.tier-t2 .place,
+.event-copy.tier-t2 .when,
+.event-copy.tier-t2 .prize,
+.event-copy.tier-t2 .sub,
+.event-copy.tier-t2 .remain { color: #7eb8ff; }
+.event-copy.tier-t3 .name,
+.event-copy.tier-t3 .place,
+.event-copy.tier-t3 .when,
+.event-copy.tier-t3 .prize,
+.event-copy.tier-t3 .sub,
+.event-copy.tier-t3 .remain { color: #e0a36a; }
+.event-copy.tier-other .name,
+.event-copy.tier-other .place,
+.event-copy.tier-other .when,
+.event-copy.tier-other .prize,
+.event-copy.tier-other .sub,
+.event-copy.tier-other .remain { color: #d2ccc2; }
+.tier {
+  display: inline-block;
+  margin-top: 10px;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+}
+.tier.tier-major {
+  color: #ffc14a;
+  letter-spacing: 0.14em;
+  font-size: 15px;
+  border-bottom: 2px solid #ffc14a;
+  padding-bottom: 1px;
+}
+.tier-t1 { color: #e8ff5a; }
+.tier-t2 { color: #7eb8ff; }
+.tier-t3 { color: #e0a36a; }
+.tier-other { color: #9a948a; }
+.remain.final { margin-top: 16px; font-size: 14px; letter-spacing: 0.16em; color: #ff6a45; }
+.prize { margin-top: 4px; font-size: 14px; color: #e4ddd2; font-weight: 600; }
 """
 
 
@@ -228,17 +296,17 @@ def _event_logo_uri(event_id: str, url: str, size: str = "s") -> str:
 def render_card(card: dict) -> bytes:
     view = card.get("view") or "match"
     if view == "matches":
-        height = 48 + 168 * max(1, min(len(card.get("rows") or []), 12))
+        height = 56 + 220 * max(1, min(len(card.get("rows") or []), 12))
         html = _matches_html(card, height, _LIST_W)
     elif view == "events":
-        height = 118 + 88 * max(1, min(len(card.get("rows") or []), 8))
+        height = 64 + 132 * max(1, min(len(card.get("rows") or []), 8))
         html = _events_html(card, height, _LIST_W)
     elif view == "event":
         html = _event_html(card, 420, _CARD_W)
     elif view == "guide":
         html = _guide_html(card, 760, _CARD_W)
     else:
-        height = 420 if card.get("note") else 380
+        height = 520 if card.get("note") else 460
         html = _match_html(card, height, _CARD_W)
     return _png(html)
 
@@ -356,9 +424,13 @@ def _match_html(card: dict, height: int, width: int) -> str:
         _team_row(card.get("team1") or "?", left, card.get("logo1") or "", accent, team_id=str(card.get("team1_id") or "")),
         _team_row(card.get("team2") or "?", right, card.get("logo2") or "", accent, team_id=str(card.get("team2_id") or "")),
         "<div class='rule'></div>",
-        "<div class='eventline'>"
-        + _img(_event_logo_uri(str(card.get("event_id") or ""), str(card.get("event_logo") or ""), "s"), "elogo")
-        + f"<div class='event'>{_e(card.get('event'))}</div></div>",
+        _event_block(
+            str(card.get("event") or ""),
+            str(card.get("tier") or ""),
+            str(card.get("event_id") or ""),
+            str(card.get("event_logo") or ""),
+            size="chip",
+        ),
     ]
     if card.get("note"):
         bits.append(f"<div class='note'>{_e(card.get('note'))}</div>")
@@ -367,19 +439,60 @@ def _match_html(card: dict, height: int, width: int) -> str:
     return _page("".join(bits), height, width)
 
 
-def _event_html(card: dict, height: int, width: int) -> str:
-    logo = _event_logo_uri(
-        str(card.get("id") or ""),
-        str(card.get("logo_small_url") or card.get("logo_url") or ""),
-        "s",
+def _tier_key(tier: str, name: str = "") -> str:
+    if tier in {"Major", "T1", "T2", "T3", "Other"}:
+        return tier
+    from hltv_bot.events import classify_tier
+
+    return classify_tier(name or "")
+
+
+def _tier_class(tier: str) -> str:
+    return {
+        "Major": "tier-major",
+        "T1": "tier-t1",
+        "T2": "tier-t2",
+        "T3": "tier-t3",
+    }.get(tier or "", "tier-other")
+
+
+def _tier_mark(tier: str) -> str:
+    from hltv_bot.events import tier_label
+
+    return f"<div class='tier {_tier_class(tier)}'>{_e(tier_label(tier))}</div>"
+
+
+def _event_block(name: str, tier: str, event_id: str, logo_url: str, *, size: str = "chip", extra: str = "") -> str:
+    key = _tier_key(tier, name)
+    return (
+        f"<div class='event-card event-{size}'>"
+        + _event_bg(event_id, logo_url)
+        + f"<div class='event-copy {_tier_class(key)}'>"
+        + _tier_mark(key)
+        + f"<div class='name'>{_e(name)}</div>"
+        + extra
+        + "</div></div>"
     )
+
+
+def _event_bg(event_id: str, url: str) -> str:
+    logo = _event_logo_uri(event_id, url, "l")
+    if not logo.startswith("data:image"):
+        return ""
+    return (
+        f"<div class='event-bg' style=\"background-image:url('{logo}')\"></div>"
+        "<div class='event-shade'></div>"
+    )
+
+
+def _event_html(card: dict, height: int, width: int) -> str:
     bits = [
-        "<div class='event-card'>",
-        "<div class='event-copy'>",
-        "<div class='eventline'>"
-        + _img(logo, "elogo")
-        + f"<div class='kicker'>赛事  ·  {_e(card.get('tier'))}</div></div>",
-        f"<div class='name' style='margin-top:22px'>{_e(card.get('name'))}</div>",
+        "<div class='event-card event-solo'>",
+        _event_bg(str(card.get("id") or ""), str(card.get("logo_url") or card.get("logo_small_url") or "")),
+        f"<div class='event-copy {_tier_class(_tier_key(str(card.get('tier') or ''), str(card.get('name') or '')))}'>",
+        "<div class='kicker'>赛事</div>",
+        _tier_mark(_tier_key(str(card.get("tier") or ""), str(card.get("name") or ""))),
+        f"<div class='name'>{_e(card.get('name'))}</div>",
     ]
     place = " ".join(x for x in (card.get("flag") or "", card.get("location") or "") if x)
     if place:
@@ -387,6 +500,8 @@ def _event_html(card: dict, height: int, width: int) -> str:
     bits.append("<div class='rule'></div>")
     if card.get("clock"):
         bits.append(f"<div class='when'>{_e(card.get('clock'))}   UTC+8</div>")
+    if card.get("final"):
+        bits.append("<div class='remain final'>最后提醒</div>")
     bits.append(f"<div class='remain'>{_e(card.get('remain'))}</div>")
     bits.append("</div></div>")
     return _page("".join(bits), height, width)
@@ -402,7 +517,8 @@ def _guide_html(card: dict, height: int, width: int) -> str:
         ("比赛日", f"UTC+8 {morning:02d}:00 到次日 {morning:02d}:00，含国外晚上打到凌晨的比赛。"),
         ("赛程", f"每天 {morning:02d}:00 发整日，{evening:02d}:00 发还没开的，含次日凌晨。"),
         ("补充", "/follow 单场。/cover 整赛事，每个比赛日都算。/ignore 摘掉一场。"),
-        ("开关", "/watch 管比分。/track 管每天两次的赛程。两套互不影响。"),
+        ("开关", "/watch 管比分。/track 管每天两次的赛程，以及赛事倒计时。"),
+        ("赛事", "Major / Tier 1：进入窗口、剩 1 天、最后几小时。/window 7 6 可改。"),
     ]
     bits = [
         "<div class='g-title'>hltv-bot</div>",
@@ -451,8 +567,6 @@ def _matches_html(card: dict, height: int, width: int) -> str:
         stars = "★" * _stars(row)
         sc_accent = "live" if live else ("final" if (a or b) else "soon")
         mid = str(row.get("id") or "").strip()
-        event = (row.get("event") or "").strip()
-        foot = "  ·  ".join(x for x in (event, f"#{mid}" if mid else "") if x)
         bits.append(
             "<div class='mcard mbody'>"
             "<div class='mhead'>"
@@ -476,9 +590,13 @@ def _matches_html(card: dict, height: int, width: int) -> str:
                 team_id=str(row.get("team2_id") or ""),
                 limit=LIST_NAME_UNITS,
             )
-            + "<div class='sub'>"
-            + _img(_event_logo_uri(str(row.get("event_id") or ""), str(row.get("event_logo") or ""), "s"), "elogo")
-            + f"{_e(foot)}</div>"
+            + _event_block(
+                str(row.get("event") or ""),
+                str(row.get("tier") or ""),
+                str(row.get("event_id") or ""),
+                str(row.get("event_logo") or ""),
+                extra=f"<div class='sub'>#{_e(mid)}</div>" if mid else "",
+            )
             + _map_line(row)
             + "</div>"
         )
@@ -489,23 +607,24 @@ def _matches_html(card: dict, height: int, width: int) -> str:
 
 def _events_html(card: dict, height: int, width: int) -> str:
     rows = list(card.get("rows") or [])[:8]
-    bits = ["<div class='sheet-title'>赛事  ·  Major / T1</div>"]
+    bits = ["<div class='sheet-title'>赛事</div>"]
     for ev in rows:
-        logo = _event_logo_uri(str(ev.get("id") or ""), str(ev.get("logo_url") or ""), "l")
-        bg = ""
-        if logo.startswith("data:image"):
-            bg = f"<div class='event-bg' style=\"background-image:url('{logo}')\"></div><div class='event-shade'></div>"
-        place = " ".join(x for x in (ev.get("flag") or "", ev.get("location") or "") if x)
-        sub_items = [ev.get("tier"), place, ev.get("when"), ev.get("prize")]
-        sub_str = "  ·  ".join(_e(x) for x in sub_items if x)
         bits.append(
-            "<div class='event-card' style='margin-top:10px;padding-top:8px;border-top:1px solid #2c2822'>"
-            + bg
-            + "<div class='event-copy'>"
-            + f"<div class='name' style='font-size:16px'>{_e(ev.get('name'))}</div>"
-            + f"<div class='sub'>{sub_str}</div>"
-            + "</div></div>"
+            "<div class='event-card event-row'>"
+            + _event_bg(str(ev.get("id") or ""), str(ev.get("logo_url") or ""))
+            + f"<div class='event-copy {_tier_class(_tier_key(str(ev.get('tier') or ''), str(ev.get('name') or '')))}'>"
+            + _tier_mark(_tier_key(str(ev.get("tier") or ""), str(ev.get("name") or "")))
+            + f"<div class='name'>{_e(ev.get('name'))}</div>"
         )
+        place = " ".join(x for x in (ev.get("flag") or "", ev.get("location") or "") if x)
+        if place:
+            bits.append(f"<div class='place'><span class='flag'>{ev.get('flag') or ''}</span> {_e(ev.get('location'))}</div>")
+        if ev.get("when"):
+            bits.append(f"<div class='when'>{_e(ev.get('when'))}</div>")
+        prize = (ev.get("prize") or "").strip()
+        if prize and prize not in {"_", "TBA", "Other"}:
+            bits.append(f"<div class='prize'>{_e(prize)}</div>")
+        bits.append("</div></div>")
     if not rows:
         bits.append("<div class='sub'>没有赛事</div>")
     return _page("".join(bits), height, width)
