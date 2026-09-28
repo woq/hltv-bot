@@ -171,7 +171,8 @@ def test_event_stages_major_and_t1_only():
 
     later = now + timedelta(days=2, hours=12)
     state, notes = plan_reminders(state, None, [days], now=later, cfg=cfg)
-    assert notes == []
+    assert [n.key for n in notes] == ["e:days:day"]
+    assert notes[0].card["view"] == "event"
     assert state["events"]["days"] == "day"
     flagged = _event_html(
         {**days, "country_code": "DE", "location": "Cologne"},
@@ -183,7 +184,8 @@ def test_event_stages_major_and_t1_only():
 
     closing = now + timedelta(days=2, hours=20)
     state, notes = plan_reminders(state, None, [days], now=closing, cfg=cfg)
-    assert notes == []
+    assert [n.key for n in notes] == ["e:days:hours"]
+    assert "最后提醒" in notes[0].html
     assert state["events"]["days"] == "hours"
 
 
@@ -207,6 +209,9 @@ def test_poll_is_fast_only_while_live():
     assert choose_poll_wait([_match(unix=far_unix)], RemindConfig(), before_evening, sent) == 20 * 60
     before_morning = datetime(2026, 9, 24, 9, 40, tzinfo=CST)
     assert choose_poll_wait([_match(unix=far_unix)], RemindConfig(), before_morning, {"2026-09-23": ["20"]}) == 20 * 60
+    # Next event stage is the 24-hour mark, one hour from a start 25 hours out.
+    soon_ev = _ev(start_ts=int((now + timedelta(hours=25)).timestamp()))
+    assert choose_poll_wait([_match(unix=far_unix)], RemindConfig(), now, sent, [soon_ev]) == 3600
 
 
 def test_digest_crosses_midnight_and_splits_evening():
@@ -316,9 +321,11 @@ def test_ignore_stop_and_watch_commands(tmp_path, monkeypatch):
     bot.handle_text(1, "/follow 42", user_id=DEFAULT_ADMIN_ID)
     bot.handle_text(1, "/cover 77", user_id=DEFAULT_ADMIN_ID)
     bot.handle_text(1, "/digest 10 20", user_id=DEFAULT_ADMIN_ID)
+    bot.handle_text(1, "/window 7 6", user_id=DEFAULT_ADMIN_ID)
     assert bot._cfg().followed == frozenset({"42"})
     assert bot._cfg().covered == frozenset({"77"})
     assert (bot._cfg().digest_morning, bot._cfg().digest_evening) == (10, 20)
+    assert (bot._cfg().event_days, bot._cfg().event_hours) == (7, 6)
     bot.handle_text(1, "/unfollow 42", user_id=DEFAULT_ADMIN_ID)
     bot.handle_text(1, "/uncover 77", user_id=DEFAULT_ADMIN_ID)
     assert bot._cfg().followed == frozenset()

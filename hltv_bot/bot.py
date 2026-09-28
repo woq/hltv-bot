@@ -19,9 +19,11 @@ from hltv_bot.chats import add_group, group_ids, list_groups, remove_group
 from hltv_bot.events import (
     EVENTS_CACHE_TTL,
     classify_event_tier,
+    classify_tier,
     fetch_events,
     filter_and_sort_events,
     format_events_html,
+    tier_label,
     tier_rank,
 )
 from hltv_bot.format import format_match_list, h
@@ -63,7 +65,9 @@ HELP = """\
 
 默认推送至少 1 星、并且赛事是 Major/T1 的比赛。比分只看赛程总页上的当前图回合分。进入 Live 时 0:0 只发一次，当作预告。BO1 就是这场比分，BO3/BO5 会标明当前图。
 
-一个比赛日是 UTC+8 早上 10:00 到次日 10:00，跨过凌晨，用来装国外晚上的比赛。赛事提醒每天两次：10:00 看这一整日，20:00 看这一日里还没开的，含次日凌晨。不按比赛自己的开赛钟点。
+一个比赛日是 UTC+8 早上 10:00 到次日 10:00，跨过凌晨，用来装国外晚上的比赛。赛程每天两次：10:00 看这一整日，20:00 看这一日里还没开的，含次日凌晨。不按比赛自己的开赛钟点。
+
+赛事另按开赛倒计时，只推 Major / T1：进入窗口、剩 1 天、最后 N 小时。默认前 7 天到前 6 小时，<code>/window 7 6</code> 可改。
 
 <b>补充监控</b>
 • <code>/follow 比赛id</code> — 单场。赛事本身不够默认条件时用
@@ -84,8 +88,8 @@ HELP = """\
 • <code>/unignore 比赛id</code> — 恢复这场
 • <code>/stop</code> — 暂停比赛比分
 • <code>/watch</code> — 恢复比赛比分
-• <code>/track</code> — 打开每日赛程提醒
-• <code>/untrack</code> — 关闭每日赛程提醒
+• <code>/track</code> — 打开赛程和赛事提醒
+• <code>/untrack</code> — 关闭赛程和赛事提醒
 • <code>/digest 10 20</code> — 赛程提醒钟点，UTC+8
 • <code>/stars 1</code> — 默认比赛的最低星级
 • <code>/silent</code> — 无声开关，默认开
@@ -131,8 +135,8 @@ BOT_COMMANDS = [
     {"command": "unignore", "description": "恢复一场比赛"},
     {"command": "stop", "description": "暂停比赛比分"},
     {"command": "watch", "description": "恢复比赛比分"},
-    {"command": "track", "description": "打开每日赛程提醒"},
-    {"command": "untrack", "description": "关闭每日赛程提醒"},
+    {"command": "track", "description": "打开赛程和赛事提醒"},
+    {"command": "untrack", "description": "关闭赛程和赛事提醒"},
     {"command": "follow", "description": "单场加入比分监控"},
     {"command": "unfollow", "description": "取消单场监控"},
     {"command": "cover", "description": "打开整赛事每个比赛日"},
@@ -500,19 +504,25 @@ class HltvTelegramBot:
                     "prize": (ev.get("prize") or "").strip(),
                 }
             )
-        caption = f"<b>赛事</b>  {len(shown)} 场"
-        caption += "\n<i>/events all 查看全部赛事</i>"
+        caption = f"<b>赛事</b>\n{len(shown)} 场\n<i>/events all 查看全部赛事</i>"
         self._reply_card(chat_id, {"view": "events", "rows": card_rows}, caption, format_events_html(rows), keep=True)
 
     def _cmd_window(self, chat_id: int, arg: str) -> None:
-        del arg
+        parts = arg.split()
         cfg = self._cfg()
-        self._reply(
-            chat_id,
-            "赛事提醒已改成每天两次，不按开赛倒计时。\n"
-            f"当前 <code>{cfg.digest_morning:02d}:00</code> 和 <code>{cfg.digest_evening:02d}:00</code> UTC+8\n"
-            "改钟点发 <code>/digest 10 20</code>",
-        )
+        if len(parts) != 2 or not parts[0].isdigit() or not parts[1].isdigit():
+            self._reply(
+                chat_id,
+                "用法 <code>/window 天 小时</code>\n"
+                f"当前开赛前 <b>{cfg.event_days}</b> 天，直到前 <b>{cfg.event_hours}</b> 小时",
+            )
+            return
+        days, hours = int(parts[0]), int(parts[1])
+        if not (1 <= days <= 60 and 1 <= hours < days * 24):
+            self._reply(chat_id, "天数 1–60，小时要小于天数×24")
+            return
+        self._write_settings({"event_days": days, "event_hours": hours})
+        self._reply(chat_id, f"赛事提醒：开赛前 <b>{days}</b> 天，直到前 <b>{hours}</b> 小时")
 
     def _cmd_digest(self, chat_id: int, arg: str) -> None:
         parts = arg.split()
@@ -565,12 +575,15 @@ class HltvTelegramBot:
         picked.sort(key=lambda ev: (0 if ev.get("live") else 1, int(ev.get("start_ts") or 0)))
         covered = set(self._cfg().covered)
         shown = picked[:12]
-        lines = ["<b>赛事</b>  发 <code>/cover 赛事id</code> 批量打开"]
+        lines = ["<b>赛事</b>", "发 <code>/cover 赛事id</code> 批量打开"]
         if covered:
             lines.append("已打开 " + " ".join(f"<code>{h(eid)}</code>" for eid in sorted(covered)))
         for ev in shown:
-            mark = "●" if str(ev.get("id") or "") in covered else "·"
-            lines.append(f"{mark} <code>{h(ev.get('id') or '')}</code> {h(ev.get('name') or '')}")
+            name = ev.get("name") or ""
+            opened = str(ev.get("id") or "") in covered
+            lines.append(f"<b>{h(tier_label(classify_tier(name)))}</b>")
+            lines.append(f"<b>{h(name)}</b>")
+            lines.append(f"<code>{h(ev.get('id') or '')}</code>" + ("  已打开" if opened else ""))
         if len(picked) > len(shown):
             lines.append(f"<i>共 {len(picked)} 个，这里是前 {len(shown)} 个</i>")
         text = "\n".join(lines)
@@ -580,7 +593,8 @@ class HltvTelegramBot:
                 {
                     "id": str(ev.get("id") or ""),
                     "name": ev.get("name") or "",
-                    "tier": "已打开" if str(ev.get("id") or "") in covered else "",
+                    "tier": classify_tier(ev.get("name") or ""),
+                    "when": "已打开" if str(ev.get("id") or "") in covered else "",
                     "flag": "",
                     "location": (ev.get("location") or "").strip(),
                     "when": "",
@@ -689,12 +703,12 @@ class HltvTelegramBot:
     def _cmd_track(self, chat_id: int) -> None:
         self._write_settings({"event_watch": True})
         self._kick()
-        self._reply(chat_id, "每日赛程提醒已开。错过的那一次不补发。")
+        self._reply(chat_id, "赛程和赛事倒计时已开。错过的那一次不补发。")
 
     def _cmd_untrack(self, chat_id: int) -> None:
         self._write_settings({"event_watch": False})
         self._kick()
-        self._reply(chat_id, "每日赛程提醒已关。比赛比分不受影响。\n恢复发 <code>/track</code>")
+        self._reply(chat_id, "赛程和赛事倒计时已关。比赛比分不受影响。\n恢复发 <code>/track</code>")
 
     def _cmd_allow(self, chat_id: int, arg: str, *, chat_title: str, chat_type: str) -> None:
         target = arg.strip()
@@ -744,6 +758,7 @@ class HltvTelegramBot:
             f"比赛星级 ≥ <b>{cfg.min_stars}</b> 且 Major/T1",
             f"比赛比分 <b>{'on' if cfg.watch else 'off'}</b>",
             f"赛程提醒 <b>{'on' if cfg.event_watch else 'off'}</b>  <code>{cfg.digest_morning:02d}:00</code> <code>{cfg.digest_evening:02d}:00</code>",
+            f"赛事倒计时 <b>{'on' if cfg.event_watch else 'off'}</b>  前 <code>{cfg.event_days}</code> 天 / <code>{cfg.event_hours}</code> 小时",
             f"单场 <b>{len(cfg.followed)}</b>  赛事 <b>{len(cfg.covered)}</b>",
             f"忽略 <b>{len(cfg.ignored)}</b>",
             f"cf_clearance <b>{'yes' if self.session.has_clearance() else 'no'}</b>",
@@ -959,7 +974,13 @@ class HltvTelegramBot:
             self._plan()
         with self._state_lock:
             digests = dict(self._state.get("digests") or {})
-        wait = choose_poll_wait(self._list_rows, self._cfg(), datetime.now(CST), digests)
+        wait = choose_poll_wait(
+            self._list_rows,
+            self._cfg(),
+            datetime.now(CST),
+            digests,
+            self._event_rows,
+        )
         if wait <= 0:
             wait = random.uniform(MATCH_PAGE_MIN, MATCH_PAGE_MAX)
         self._list_next = time.monotonic() + wait

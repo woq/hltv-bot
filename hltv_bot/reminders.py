@@ -6,7 +6,7 @@ import copy
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from hltv_bot.events import classify_tier, country_code_to_emoji
+from hltv_bot.events import classify_tier, country_code_to_emoji, remain_text, tier_label
 from hltv_bot.format import h
 
 CST = timezone(timedelta(hours=8))
@@ -167,7 +167,8 @@ def _match_caption(kind: str, row: dict, when: datetime | None, score: str = "")
     lines = [head]
     event = (row.get("event") or "").strip()
     if event:
-        lines.append(f"<i>{h(event)}</i>")
+        lines.append(f"<b>{h(tier_label(classify_tier(event)))}</b>")
+        lines.append(f"<b>{h(event)}</b>")
     note = score_note(row, scored=bool(pair))
     if note:
         lines.append(h(note))
@@ -232,14 +233,6 @@ def event_stage(ev: dict, now: datetime, cfg: RemindConfig) -> str:
     return "days"
 
 
-def _remain_text(hours: float) -> str:
-    if hours >= 48:
-        return f"还有 {int(hours // 24)} 天"
-    if hours >= 1:
-        return f"还有 {int(hours)} 小时"
-    return f"还有 {max(1, int(hours * 60))} 分钟"
-
-
 def _event_html(ev: dict, now: datetime, stage: str) -> str:
     hours = _hours_left(ev, now) or 0
     start_ts = int(ev.get("start_ts") or 0)
@@ -250,13 +243,18 @@ def _event_html(ev: dict, now: datetime, stage: str) -> str:
     loc = (ev.get("location") or "").strip()
     flag = country_code_to_emoji(str(ev.get("country_code") or ""))
     place = " ".join(bit for bit in (flag, h(loc) if loc else "") if bit)
-    tail = "<b>最后提醒</b>" if stage == "hours" else _remain_text(hours)
-    lines = [f"<b>赛事</b>  {h(tier)}  <b>{h(ev.get('name') or '')}</b>"]
+    lines = [
+        "<b>赛事</b>",
+        f"<b>{h(tier_label(tier))}</b>",
+        f"<b>{h(ev.get('name') or '')}</b>",
+    ]
     if place:
         lines.append(place)
     if clock:
         lines.append(f"<code>{h(clock)}</code> UTC+8")
-    lines.append(tail)
+    if stage == "hours":
+        lines.append("<b>最后提醒</b>")
+    lines.append(h(remain_text(hours)))
     link = _link(str(ev.get("url") or ""))
     if link:
         lines.append(link)
@@ -279,7 +277,8 @@ def _event_card(ev: dict, now: datetime, stage: str) -> dict:
         "flag": country_code_to_emoji(str(ev.get("country_code") or "")),
         "location": (ev.get("location") or "").strip(),
         "clock": clock,
-        "remain": "最后提醒" if stage == "hours" else _remain_text(hours),
+        "remain": remain_text(hours),
+        "final": stage == "hours",
     }
 
 
@@ -376,10 +375,10 @@ def format_digest_html(rows: list[dict], *, hour: str, begin: datetime, end: dat
     shown = 0
     for event, items in grouped.items():
         eid = str(items[0].get("event_id") or "")
-        head = f"<b>{h(event)}</b>"
+        lines.append(f"<b>{h(tier_label(classify_tier(event)))}</b>")
+        lines.append(f"<b>{h(event)}</b>")
         if eid:
-            head += f"  <code>{h(eid)}</code>"
-        lines.append(head)
+            lines.append(f"<code>{h(eid)}</code>")
         for row in items:
             if shown >= 24:
                 break
@@ -410,7 +409,41 @@ START_LEAD = 45 * 60
 DIGEST_LEAD = 20 * 60
 
 
-def choose_poll_wait(rows: list[dict], cfg: RemindConfig, now: datetime, digests: dict | None) -> float:
+def _event_boundary_wait(events: list[dict] | None, cfg: RemindConfig, now: datetime) -> float | None:
+    """Seconds until the next Major/T1 stage: enter window, 1 day, then N hours."""
+    if not cfg.event_watch or not events:
+        return None
+    marks = [float(cfg.event_days * 24)]
+    if cfg.event_days * 24 > 24:
+        marks.append(24.0)
+    if cfg.event_hours > 0:
+        marks.append(float(cfg.event_hours))
+    marks = sorted(set(marks), reverse=True)
+    best: float | None = None
+    for ev in events:
+        if ev.get("live"):
+            continue
+        if classify_tier(str(ev.get("name") or "")) not in {"Major", "T1"}:
+            continue
+        hours = _hours_left(ev, now)
+        if hours is None or hours <= 0:
+            continue
+        for mark in marks:
+            if hours > mark:
+                secs = (hours - mark) * 3600.0
+                if best is None or secs < best:
+                    best = secs
+                break
+    return best
+
+
+def choose_poll_wait(
+    rows: list[dict],
+    cfg: RemindConfig,
+    now: datetime,
+    digests: dict | None,
+    events: list[dict] | None = None,
+) -> float:
     """Seconds until the next matches-list fetch.
 
     0 means a match is live: the caller uses the 3–5s clock.
@@ -462,6 +495,9 @@ def choose_poll_wait(rows: list[dict], cfg: RemindConfig, now: datetime, digests
                 wakes.append(until)
             elif until > DIGEST_LEAD:
                 wakes.append(until - DIGEST_LEAD)
+        boundary = _event_boundary_wait(events, cfg, now)
+        if boundary is not None and boundary > 0:
+            wakes.append(boundary)
     if soon:
         return SOON_POLL
     wait = min(wakes)
@@ -690,6 +726,14 @@ def plan_reminders(
             if not stage:
                 continue
             stages[eid] = stage
+            if base.get("events_seeded") and cfg.event_watch and prev_ev.get(eid) != stage:
+                notes.append(
+                    Notice(
+                        f"e:{eid}:{stage}",
+                        _event_html(ev, now, stage),
+                        _event_card(ev, now, stage),
+                    )
+                )
         base["events"] = stages
         base["events_seeded"] = True
 

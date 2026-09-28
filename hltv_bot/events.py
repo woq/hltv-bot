@@ -379,7 +379,43 @@ def classify_event_tier(event_name: str, stars: int = 0) -> str:
 
 
 def tier_rank(tier: str) -> int:
-    return {"T1": 1, "T2": 2, "T3": 3, "Other": 4}.get(tier, 5)
+    return {"Major": 0, "T1": 1, "T2": 2, "T3": 3, "Other": 4}.get(tier, 5)
+
+
+def tier_label(tier: str) -> str:
+    return {
+        "Major": "Major",
+        "T1": "Tier 1",
+        "T2": "Tier 2",
+        "T3": "Tier 3",
+        "Other": "Other",
+    }.get(tier or "", tier or "Other")
+
+
+def remain_text(hours: float) -> str:
+    """Countdown copy. Over a day: 天 小时 分. A day or less: 小时 分."""
+    if hours <= 0:
+        return "还有 1 分"
+    seconds = int(round(hours * 3600))
+    if hours > 24:
+        days, rem = divmod(seconds, 86400)
+        hrs, rem = divmod(rem, 3600)
+        mins = rem // 60
+        parts: list[str] = []
+        if days:
+            parts.append(f"{days} 天")
+        if hrs:
+            parts.append(f"{hrs} 小时")
+        if mins or not parts:
+            parts.append(f"{mins} 分")
+        return "还有 " + " ".join(parts)
+    hrs, rem = divmod(seconds, 3600)
+    mins = rem // 60
+    if hrs and mins:
+        return f"还有 {hrs} 小时 {mins} 分"
+    if hrs:
+        return f"还有 {hrs} 小时"
+    return f"还有 {max(mins, 1)} 分"
 
 
 def classify_tier(name: str) -> str:
@@ -437,31 +473,33 @@ def filter_and_sort_events(
     return filtered
 
 
-def format_events_html(events: Sequence[dict], *, limit: int = 15) -> str:
+def format_events_html(events: Sequence[dict], *, limit: int = 15, now: datetime | None = None) -> str:
     """Format events list into Telegram HTML message."""
     if not events:
         return "暂无近期 Major / T1 赛事信息。"
 
-    lines = ["<b>近期赛事</b>", "<i>Major / T1</i>", ""]
+    now = now or datetime.now(CST)
+    lines = ["<b>近期赛事</b>", ""]
     for ev in events[:limit]:
         tier = ev.get("tier") or "T2"
-        badge = "Major" if tier == "Major" else tier
         name = escape(ev.get("name") or "Unknown Event")
-        date_range = format_event_date_range(ev.get("start_ts") or 0, ev.get("end_ts") or 0, pending="待定")
-        days_left = ev.get("days_left", 9999)
+        date_range = format_event_date_range(
+            ev.get("start_ts") or 0, ev.get("end_ts") or 0, pending="待定", now=now
+        )
+        start_ts = int(ev.get("start_ts") or 0)
         if ev.get("live"):
             status_str = "进行中"
-        elif days_left > 0:
-            status_str = f"还有 {days_left} 天开赛"
-        elif days_left == 0:
-            status_str = "今天开赛"
+        elif start_ts > 0:
+            left = (datetime.fromtimestamp(start_ts, CST) - now).total_seconds() / 3600.0
+            status_str = remain_text(left) if left > 0 else "进行中"
         else:
-            status_str = f"进行中 · 第 {-days_left + 1} 天"
+            days_left = int(ev.get("days_left") or 0)
+            status_str = remain_text(days_left * 24) if days_left > 0 else "今天开赛"
         loc = (ev.get("location") or "").strip()
         flag = country_code_to_emoji(str(ev.get("country_code") or ""))
         place = " ".join(bit for bit in (flag, loc) if bit)
         prize = ev.get("prize")
-        quote = [f"<b>{name}</b>", badge]
+        quote = ["<b>赛事</b>", f"<b>{escape(tier_label(tier))}</b>", f"<b>{name}</b>"]
         if place:
             quote.append(place)
         quote.append(date_range)

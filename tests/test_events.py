@@ -160,7 +160,7 @@ def test_ensure_event_logos_and_flags(monkeypatch, tmp_path):
     monkeypatch.setattr("hltv_bot.team_logos.download_images", fake_download)
     events_mod.ensure_event_logos([("8057", "https://img-cdn.hltv.org/eventlogo/sl.png"), ("8057", "https://img-cdn.hltv.org/eventlogo/sl.png")])
     events_mod.ensure_flags(["pl", "PL"])
-    assert (logos / "8057.png").is_file()
+    assert (logos / "8057-l.png").is_file()
     assert (flags / "PL.gif").is_file()
     assert events_mod.get_cached_logo_data_uri("8057").startswith("data:image/png;base64,")
     assert "flag-img" in events_mod.get_flag_img_html("PL")
@@ -191,13 +191,26 @@ def test_format_events_html():
             "days_left": 15,
         },
     ]
-    html = format_events_html(events)
+    start = datetime.fromtimestamp(1791021600, CST)
+    html = format_events_html(events, now=start - timedelta(days=15, hours=3, minutes=20))
     assert "<b>近期赛事</b>" in html
+    assert "<b>Major</b>" in html
+    assert "<b>Tier 1</b>" in html
     assert "<b>PGL Major Singapore 2026</b>" in html
     assert "<b>ESL Pro League Season 24</b>" in html
-    assert "<b>还有 15 天开赛</b>" in html
+    assert "还有 15 天 3 小时 20 分" in html
     assert "Katowice, Poland" in html
     assert "$1,000,000" in html
+
+
+def test_remain_text_splits_at_one_day():
+    from hltv_bot.events import remain_text
+
+    assert remain_text(26.5) == "还有 1 天 2 小时 30 分"
+    assert remain_text(48) == "还有 2 天"
+    assert remain_text(24) == "还有 24 小时"
+    assert remain_text(5.5) == "还有 5 小时 30 分"
+    assert remain_text(0.4) == "还有 24 分"
 
 
 def test_country_code_to_emoji_and_format_location():
