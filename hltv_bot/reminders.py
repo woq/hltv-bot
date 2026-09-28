@@ -454,12 +454,20 @@ def choose_poll_wait(rows: list[dict], cfg: RemindConfig, now: datetime, digests
                 soon = True
         nxt = _upcoming_digest(now, cfg.digest_morning, cfg.digest_evening)
         if nxt is not None:
-            lead = (nxt - now).total_seconds() - DIGEST_LEAD
-            if lead > 0:
-                wakes.append(lead)
+            until = (nxt - now).total_seconds()
+            # Inside the lead, sleep until the bell. A 60s floor here used to
+            # land in the gap after the lead and then take the 6-hour nap,
+            # so 10:00 and 20:00 never ran.
+            if 0 < until <= DIGEST_LEAD:
+                wakes.append(until)
+            elif until > DIGEST_LEAD:
+                wakes.append(until - DIGEST_LEAD)
     if soon:
         return SOON_POLL
-    return max(60.0, min(wakes))
+    wait = min(wakes)
+    if wait < 60.0:
+        return max(1.0, wait)
+    return min(wait, QUIET_POLL)
 
 
 def _upcoming_digest(now: datetime, morning: int, evening: int) -> datetime | None:
@@ -492,6 +500,10 @@ def _apply_digest(
     done = {str(x) for x in (sent.get(key) or [])}
     if hour in done:
         return
+    # The first poll only records match scores. Leave this slot open so a
+    # restart inside the window can still send it on the next pass.
+    if seed:
+        return
     done.add(hour)
     sent[key] = sorted(done)
     # Keep a few slates so the file does not grow without bound.
@@ -499,7 +511,7 @@ def _apply_digest(
         for old in sorted(sent)[:-14]:
             sent.pop(old, None)
     base["digests"] = sent
-    if seed or not cfg.event_watch:
+    if not cfg.event_watch:
         return
     rows = _digest_rows(matches, cfg, begin, end)
     if not rows:

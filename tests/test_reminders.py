@@ -201,6 +201,12 @@ def test_poll_is_fast_only_while_live():
     assert choose_poll_wait([_match(unix=str(soon))], RemindConfig(), now, {}) == SOON_POLL
     assert choose_poll_wait([_match(live="1", score1="1", score2="0")], RemindConfig(), now, {}) == LIVE_POLL
     assert choose_poll_wait([_match(unix=str(far))], RemindConfig(watch=False, event_watch=False), now, {}) == QUIET_POLL
+    # 20 minutes before the bell used to fall through to the 6-hour nap.
+    far_unix = str(far)
+    before_evening = datetime(2026, 9, 24, 19, 40, tzinfo=CST)
+    assert choose_poll_wait([_match(unix=far_unix)], RemindConfig(), before_evening, sent) == 20 * 60
+    before_morning = datetime(2026, 9, 24, 9, 40, tzinfo=CST)
+    assert choose_poll_wait([_match(unix=far_unix)], RemindConfig(), before_morning, {"2026-09-23": ["20"]}) == 20 * 60
 
 
 def test_digest_crosses_midnight_and_splits_evening():
@@ -227,6 +233,17 @@ def test_digest_crosses_midnight_and_splits_evening():
     assert "15:00" not in notes[0].html
     state, notes = plan_reminders(state, rows, None, now=at_eight, cfg=RemindConfig(event_watch=False))
     assert notes == []
+
+
+def test_restart_inside_digest_window_still_sends():
+    at_ten = datetime(2026, 9, 24, 10, 5, tzinfo=CST)
+    afternoon = int(datetime(2026, 9, 24, 15, 0, tzinfo=CST).timestamp() * 1000)
+    rows = [_match(id="day", unix=str(afternoon), event_id="77")]
+    state, notes = plan_reminders(empty_state(), rows, None, now=at_ten)
+    assert notes == []
+    assert "10" not in {str(x) for x in (state.get("digests") or {}).get("2026-09-24", [])}
+    state, notes = plan_reminders(state, rows, None, now=at_ten)
+    assert [n.key for n in notes] == ["d:2026-09-24:10"]
 
 
 def test_follow_and_cover_bypass_tier_ignore_still_wins():
