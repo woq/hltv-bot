@@ -47,6 +47,36 @@ def test_wrapper_list_reads_bo_and_current_map_score():
     assert bo1["live"] == "0"
 
 
+def test_list_row_names_the_map_from_series_wins():
+    html = """
+    <div class="match-wrapper live-match-container" data-match-id="9" live="true" team1="1" team2="2">
+      <a href="/matches/9/a-vs-b-cup">
+        <div class="match-meta">bo3</div>
+        <div class="match-teamname">A</div>
+        <div class="match-teamname">B</div>
+        <span class="current-map-score" data-livescore-current-map-score="13" data-livescore-team="1">13</span>
+        <span class="map-score">(<span data-livescore-maps-won-for="" data-livescore-team="1">1</span>)</span>
+        <span class="current-map-score" data-livescore-current-map-score="11" data-livescore-team="2">11</span>
+        <span class="map-score">(<span data-livescore-maps-won-for="" data-livescore-team="2">0</span>)</span>
+        <div data-maps="Ancient,Nuke,Inferno"></div>
+      </a>
+    </div>
+    """
+    row = parse_match_list(html, limit=0)[0]
+    assert row["score1"] == "13"
+    assert row["won1"] == "1"
+    assert row["won2"] == "0"
+    assert row["map_index"] == "0"
+    assert row["maps"] == "Ancient · Nuke · Inferno"
+
+    html = html.replace('data-livescore-current-map-score="13"', 'data-livescore-current-map-score="2"', 1)
+    html = html.replace(">13<", ">2<")
+    html = html.replace('data-livescore-current-map-score="11"', 'data-livescore-current-map-score="1"')
+    live = parse_match_list(html, limit=0)[0]
+    assert live["map_index"] == "1"
+    assert live["score1"] == "2"
+
+
 def test_series_maps_lead_with_the_current_one():
     from hltv_bot.matches import map_order
 

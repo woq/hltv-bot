@@ -58,9 +58,22 @@ def notify_config(path: Path = DEFAULT_PATH) -> dict:
         "ignored": _id_list(data.get("ignored")),
         "followed": _id_list(data.get("followed")),
         "covered": _id_list(data.get("covered")),
+        "score_multi": _chat_list(data.get("score_multi")),
+        "score_single": _chat_list(data.get("score_single")),
         "digest_morning": _clamp_int(data.get("digest_morning"), 10, 0, 23),
         "digest_evening": _clamp_int(data.get("digest_evening"), 20, 0, 23),
     }
+
+
+def _chat_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    out: list[str] = []
+    for item in value:
+        text = str(item).strip()
+        if text.lstrip("-").isdigit() and text not in out:
+            out.append(text)
+    return out
 
 
 def _id_list(value: object) -> list[str]:

@@ -108,6 +108,37 @@ def test_match_soon_live_score_and_final():
     assert "1" not in state["matches"]
 
 
+def test_same_map_score_only_moves_forward():
+    now = datetime(2026, 9, 24, 18, 0, tzinfo=CST)
+    row = _match(
+        live="1",
+        score1="12",
+        score2="9",
+        format="bo3",
+        maps="Ancient · Nuke · Inferno",
+        map_index="0",
+        won1="0",
+        won2="0",
+    )
+    state, notes = plan_reminders(empty_state(), [row], None, now=now)
+    assert notes == []
+    state, notes = plan_reminders(state, [{**row, "score1": "11", "score2": "7"}], None, now=now)
+    assert notes == []
+    assert state["matches"]["1"]["score"] == "12-9"
+    state, notes = plan_reminders(state, [{**row, "score1": "12", "score2": "10"}], None, now=now)
+    assert notes[0].card["note"] == "Ancient · 系列 0:0 · bo3"
+    done = {**row, "score1": "13", "score2": "11", "won1": "1", "won2": "0"}
+    state, notes = plan_reminders(state, [done], None, now=now)
+    assert notes and "系列 1:0" in notes[0].card["note"]
+    fresh = {**done, "score1": "0", "score2": "0", "map_index": "1"}
+    state, notes = plan_reminders(state, [fresh], None, now=now)
+    assert notes == []
+    assert state["matches"]["1"]["score"] == "0-0"
+    state, notes = plan_reminders(state, [{**fresh, "score1": "1", "score2": "0"}], None, now=now)
+    assert notes
+    assert notes[0].card["note"].startswith("Nuke")
+
+
 def test_low_star_or_non_tier_match_is_ignored():
     now = datetime(2026, 9, 24, 18, 0, tzinfo=CST)
     state, _ = plan_reminders(empty_state(), [_match(stars="0", live="1")], None, now=now)
@@ -307,8 +338,10 @@ def test_ignore_stop_and_watch_commands(tmp_path, monkeypatch):
     assert "2396932" in bot._cfg().ignored
     bot.handle_text(1, "/stop", user_id=DEFAULT_ADMIN_ID)
     assert bot._cfg().watch is False
+    assert bot._cfg().score_multi == frozenset()
     bot.handle_text(1, "/watch", user_id=DEFAULT_ADMIN_ID)
     assert bot._cfg().watch is True
+    assert bot._cfg().score_multi == frozenset({"1"})
     assert bot._state.get("quiet_all") is True
     bot.handle_text(1, "/unignore 2396932", user_id=DEFAULT_ADMIN_ID)
     assert "2396932" not in bot._cfg().ignored
@@ -323,6 +356,7 @@ def test_ignore_stop_and_watch_commands(tmp_path, monkeypatch):
     bot.handle_text(1, "/digest 10 20", user_id=DEFAULT_ADMIN_ID)
     bot.handle_text(1, "/window 7 6", user_id=DEFAULT_ADMIN_ID)
     assert bot._cfg().followed == frozenset({"42"})
+    assert bot._cfg().score_single == frozenset({"1"})
     assert bot._cfg().covered == frozenset({"77"})
     assert (bot._cfg().digest_morning, bot._cfg().digest_evening) == (10, 20)
     assert (bot._cfg().event_days, bot._cfg().event_hours) == (7, 6)

@@ -18,6 +18,8 @@ class Notice:
     key: str
     html: str
     card: dict | None = None
+    match_id: str = ""
+    lane: str = ""
 
 
 @dataclass(frozen=True)
@@ -31,6 +33,8 @@ class RemindConfig:
     ignored: frozenset[str] = frozenset()
     followed: frozenset[str] = frozenset()
     covered: frozenset[str] = frozenset()
+    score_multi: frozenset[str] = frozenset()
+    score_single: frozenset[str] = frozenset()
     digest_morning: int = 10
     digest_evening: int = 20
 
@@ -98,14 +102,99 @@ def _real_score(score: str) -> bool:
     return pair is not None and pair != (0, 0)
 
 
+def _multi_match(row: dict, cfg: RemindConfig) -> bool:
+    """Default stars plus Major/T1, or an event opened with /cover."""
+    eid = str(row.get("event_id") or "")
+    if eid and eid in cfg.covered:
+        return True
+    if _stars(row) < cfg.min_stars:
+        return False
+    return classify_tier(str(row.get("event") or "")) in {"Major", "T1"}
+
+
+def score_lane(row: dict, cfg: RemindConfig) -> str:
+    """single is /follow. multi is the default list and /cover."""
+    mid = str(row.get("id") or "")
+    single = bool(mid and mid in cfg.followed)
+    multi = _multi_match(row, cfg)
+    if single and multi:
+        return "both"
+    if single:
+        return "single"
+    if multi:
+        return "multi"
+    return ""
+
+
+def lane_open(row: dict, cfg: RemindConfig) -> bool:
+    """Empty per-chat sets keep the old engine tests. A set means only those chats."""
+    if not cfg.score_multi and not cfg.score_single:
+        return bool(cfg.watch)
+    lane = score_lane(row, cfg)
+    if lane == "both":
+        return bool(cfg.score_multi or cfg.score_single)
+    if lane == "multi":
+        return bool(cfg.score_multi)
+    if lane == "single":
+        return bool(cfg.score_single)
+    return False
+
+
+def _won_pair(row: dict) -> tuple[int, int] | None:
+    left, right = str(row.get("won1") or ""), str(row.get("won2") or "")
+    if left.isdigit() and right.isdigit():
+        return int(left), int(right)
+    return None
+
+
+def accept_round_score(old: dict, row: dict) -> bool:
+    """On one map each side can only stay or go up.
+
+    A new map is a series-win change, or a finished map resetting to a low score.
+    """
+    from hltv_bot.matches import map_is_over
+
+    new = _pair(score_text(row))
+    if new is None:
+        return False
+    old_score = _pair(str(old.get("score") or ""))
+    if old_score is None:
+        return True
+    old_won = _won_pair(old)
+    new_won = _won_pair(row)
+    if old_won is not None and new_won is not None and new_won != old_won:
+        return True
+    if map_is_over(*old_score) and max(new) <= 5 and (new[0] < old_score[0] or new[1] < old_score[1]):
+        return True
+    return new[0] >= old_score[0] and new[1] >= old_score[1]
+
+
 def score_note(row: dict, *, scored: bool) -> str:
-    """bo1 is the match. bo3/bo5 numbers on the list are the current map."""
+    """bo1 is the match. bo3/bo5 names the map on screen and the series."""
+    from hltv_bot.matches import map_order
+
     fmt = (row.get("format") or "").strip().lower()
     if fmt not in {"bo1", "bo3", "bo5"}:
         return ""
-    if fmt == "bo1" or not scored:
+    current, _rest = map_order(row)
+    series = _won_pair(row)
+    series_bit = f"系列 {series[0]}:{series[1]}" if series else ""
+    if fmt == "bo1":
+        if current and scored:
+            return f"{current} · {fmt}"
         return fmt
-    return f"当前图 · {fmt}"
+    if not scored:
+        return fmt
+    bits: list[str] = []
+    if current:
+        bits.append(current)
+    else:
+        idx = str(row.get("map_index") or "")
+        bits.append(f"图{int(idx) + 1}" if idx.isdigit() else "当前图")
+    if series_bit:
+        bits.append(series_bit)
+    bits.append(fmt)
+    return " · ".join(bits)
 
 
 def start_at(row: dict) -> datetime | None:
@@ -207,6 +296,17 @@ def _match_html(kind: str, row: dict, when: datetime | None, score: str = "") ->
     return _match_caption(kind, row, when, score)
 
 
+def _score_notice(kind: str, row: dict, when: datetime | None, score: str, cfg: RemindConfig) -> Notice:
+    mid = str(row.get("id") or "")
+    if kind == "preview":
+        key = f"m:{mid}:preview"
+    elif kind == "final":
+        key = f"m:{mid}:final"
+    else:
+        key = f"m:{mid}:score:{feed_sig(row)}"
+    return Notice(key, _match_html(kind, row, when, score), _match_card(kind, row, when, score), mid, score_lane(row, cfg))
+
+
 def _hours_left(ev: dict, now: datetime) -> float | None:
     start_ts = int(ev.get("start_ts") or 0)
     if start_ts <= 0:
@@ -290,6 +390,9 @@ def _zero_row(row: dict) -> dict:
 
 
 def _snapshot_match(row: dict, *, opened: bool, soon: bool, score: str, live: bool, previewed: bool) -> dict:
+    held = _pair(score)
+    score1 = str(held[0]) if held else (row.get("score1") or "")
+    score2 = str(held[1]) if held else (row.get("score2") or "")
     return {
         "opened": opened,
         "soon": soon,
@@ -305,12 +408,17 @@ def _snapshot_match(row: dict, *, opened: bool, soon: bool, score: str, live: bo
         "event_id": row.get("event_id") or "",
         "event_logo": row.get("event_logo") or "",
         "event": row.get("event") or "",
+        "stars": row.get("stars") or "",
         "url": row.get("url") or "",
         "time": row.get("time") or "",
         "unix": row.get("unix") or "",
-        "score1": row.get("score1") or "",
-        "score2": row.get("score2") or "",
+        "score1": score1,
+        "score2": score2,
         "format": row.get("format") or "",
+        "maps": row.get("maps") or "",
+        "map_index": row.get("map_index") or "",
+        "won1": row.get("won1") or "",
+        "won2": row.get("won2") or "",
         "sig": feed_sig(row),
     }
 
@@ -459,7 +567,9 @@ def choose_poll_wait(
     watched = [
         row
         for row in rows
-        if match_allowed(row, cfg) and str(row.get("id") or "") not in cfg.ignored
+        if match_allowed(row, cfg)
+        and str(row.get("id") or "") not in cfg.ignored
+        and lane_open(row, cfg)
     ]
     if cfg.watch and any(row.get("live") == "1" for row in watched):
         return LIVE_POLL
@@ -635,40 +745,26 @@ def plan_reminders(
                 previewed = bool(old.get("previewed"))
                 speak = _speak(cfg, mid, base)
                 became_live = known and live and "live" in old and not old.get("live")
+                audible = speak and lane_open(row, cfg)
                 if became_live and not previewed:
                     if _real_score(score):
-                        if speak:
-                            notes.append(
-                                Notice(
-                                    f"m:{mid}:score:{feed_sig(row)}",
-                                    _match_html("score", row, start, score),
-                                    _match_card("score", row, start, score),
-                                )
-                            )
+                        if audible:
+                            notes.append(_score_notice("score", row, start, score, cfg))
                         opened = True
                     else:
                         shown = _zero_row(row)
-                        if speak:
-                            notes.append(
-                                Notice(
-                                    f"m:{mid}:preview",
-                                    _match_html("preview", shown, start, "0-0"),
-                                    _match_card("preview", shown, start, "0-0"),
-                                )
-                            )
+                        if audible:
+                            notes.append(_score_notice("preview", shown, start, "0-0", cfg))
                         opened = True
                         score = "0-0"
                     previewed = True
-                elif known and score != old_score and _real_score(score):
-                    if speak:
-                        notes.append(
-                            Notice(
-                                f"m:{mid}:score:{feed_sig(row)}",
-                                _match_html("score", row, start, score),
-                                _match_card("score", row, start, score),
-                            )
-                        )
-                    opened = True
+                elif known and score != old_score:
+                    if old_score and not accept_round_score(old, row):
+                        score = old_score
+                    elif _real_score(score):
+                        if audible:
+                            notes.append(_score_notice("score", row, start, score, cfg))
+                        opened = True
                 if live:
                     soon_sent = True
                     previewed = True
@@ -685,6 +781,7 @@ def plan_reminders(
                 if mid in seen or not old.get("opened"):
                     continue
                 row = {
+                    "id": mid,
                     "team1": old.get("team1"),
                     "team2": old.get("team2"),
                     "team1_id": old.get("team1_id"),
@@ -694,21 +791,20 @@ def plan_reminders(
                     "event_id": old.get("event_id"),
                     "event_logo": old.get("event_logo"),
                     "event": old.get("event"),
+                    "stars": old.get("stars"),
                     "url": old.get("url"),
                     "time": old.get("time"),
                     "unix": old.get("unix"),
                     "score1": old.get("score1"),
                     "score2": old.get("score2"),
                     "format": old.get("format"),
+                    "maps": old.get("maps"),
+                    "map_index": old.get("map_index"),
+                    "won1": old.get("won1"),
+                    "won2": old.get("won2"),
                 }
-                if _speak(cfg, mid, base):
-                    notes.append(
-                        Notice(
-                            f"m:{mid}:final",
-                            _match_html("final", row, start_at(row), str(old.get("score") or "")),
-                            _match_card("final", row, start_at(row), str(old.get("score") or "")),
-                        )
-                    )
+                if _speak(cfg, mid, base) and lane_open(row, cfg):
+                    notes.append(_score_notice("final", row, start_at(row), str(old.get("score") or ""), cfg))
                 quiet.discard(mid)
             base["matches"] = nxt
             base["quiet_ids"] = sorted(quiet)

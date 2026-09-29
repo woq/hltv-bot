@@ -63,7 +63,7 @@ HELP = """\
 • <code>/matches</code> — 比赛列表（<code>t2</code> / <code>t3</code> / <code>all</code> / <code>text</code>）
 • <code>/events</code> — Major / T1 赛事
 
-默认推送至少 1 星、并且赛事是 Major/T1 的比赛。比分只看赛程总页上的当前图回合分。进入 Live 时 0:0 只发一次，当作预告。BO1 就是这场比分，BO3/BO5 会标明当前图。
+比分只看赛程总页。进入 Live 时 0:0 只发一次，当作预告。同一张图里两边的回合分只会变大。BO3 / BO5 写出当前地图和系列分。新的一条比分会删掉这场上一条。
 
 一个比赛日是 UTC+8 早上 10:00 到次日 10:00，跨过凌晨，用来装国外晚上的比赛。赛程每天两次：10:00 看这一整日，20:00 看这一日里还没开的，含次日凌晨。不按比赛自己的开赛钟点。
 
@@ -86,8 +86,9 @@ HELP = """\
 • <code>/uncover 赛事id</code> — 关闭该赛事
 • <code>/ignore 比赛id</code> — 这一场不推
 • <code>/unignore 比赛id</code> — 恢复这场
-• <code>/stop</code> — 暂停比赛比分
-• <code>/watch</code> — 恢复比赛比分
+• <code>/watch</code> — 本群打开多场比分（Major/T1 和 /cover）
+• <code>/stop</code> — 本群关闭比分
+• <code>/follow on</code> — 本群打开单场比分
 • <code>/track</code> — 打开赛程和赛事提醒
 • <code>/untrack</code> — 关闭赛程和赛事提醒
 • <code>/digest 10 20</code> — 赛程提醒钟点，UTC+8
@@ -133,8 +134,8 @@ BOT_COMMANDS = [
     {"command": "groups", "description": "通知群"},
     {"command": "ignore", "description": "忽略一场比赛"},
     {"command": "unignore", "description": "恢复一场比赛"},
-    {"command": "stop", "description": "暂停比赛比分"},
-    {"command": "watch", "description": "恢复比赛比分"},
+    {"command": "stop", "description": "本群关闭比分"},
+    {"command": "watch", "description": "本群打开多场比分"},
     {"command": "track", "description": "打开赛程和赛事提醒"},
     {"command": "untrack", "description": "关闭赛程和赛事提醒"},
     {"command": "follow", "description": "单场加入比分监控"},
@@ -347,9 +348,7 @@ class HltvTelegramBot:
         elif cmd == "/digest":
             self._cmd_digest(chat_id, arg)
         elif cmd == "/follow":
-            self._cmd_id_list(chat_id, arg, key="followed", title="单场监控", usage="/follow 比赛id")
-            if arg.strip():
-                self._kick()
+            self._cmd_follow(chat_id, arg)
         elif cmd == "/unfollow":
             self._cmd_id_unlist(chat_id, arg, key="followed", usage="/unfollow 比赛id")
             self._kick()
@@ -403,11 +402,13 @@ class HltvTelegramBot:
             event_days=int(raw["event_days"]),
             event_hours=int(raw["event_hours"]),
             min_stars=int(raw["min_stars"]),
-            watch=bool(raw.get("watch", True)),
+            watch=bool(raw.get("score_multi") or raw.get("score_single")),
             event_watch=bool(raw.get("event_watch", True)),
             ignored=frozenset(raw.get("ignored") or []),
             followed=frozenset(raw.get("followed") or []),
             covered=frozenset(raw.get("covered") or []),
+            score_multi=frozenset(raw.get("score_multi") or []),
+            score_single=frozenset(raw.get("score_single") or []),
             digest_morning=int(raw.get("digest_morning") or 10),
             digest_evening=int(raw.get("digest_evening") or 20),
         )
@@ -604,7 +605,53 @@ class HltvTelegramBot:
             )
         self._reply_card(chat_id, {"view": "events", "rows": card_rows}, text, text)
 
-    def _cmd_id_list(self, chat_id: int, arg: str, *, key: str, title: str, usage: str) -> None:
+    def _score_chats(self, key: str) -> list[str]:
+        return [str(item) for item in (self._saved().get(key) or [])]
+
+    def _write_score_chats(self, chat_id: int, *, multi: bool | None = None, single: bool | None = None) -> None:
+        cid = str(int(chat_id))
+
+        def apply(ids: list[str], flag: bool | None) -> list[str]:
+            if flag is None:
+                return ids
+            if flag and cid not in ids:
+                ids.append(cid)
+            if not flag:
+                ids = [item for item in ids if item != cid]
+            return ids
+
+        self._write_settings(
+            {
+                "score_multi": apply(self._score_chats("score_multi"), multi),
+                "score_single": apply(self._score_chats("score_single"), single),
+            }
+        )
+
+    def _cmd_follow(self, chat_id: int, arg: str) -> None:
+        raw = arg.strip().lower()
+        if raw in {"on", "开", "开启"}:
+            self._write_score_chats(chat_id, single=True)
+            self._kick()
+            self._reply(chat_id, "本群已打开单场比分。只推到这个群，跟过的比赛有变化才发。")
+            return
+        if raw in {"off", "关", "关闭"}:
+            self._write_score_chats(chat_id, single=False)
+            self._kick()
+            self._reply(chat_id, "本群已关闭单场比分。多场用 <code>/watch</code>。")
+            return
+        self._cmd_id_list(
+            chat_id,
+            arg,
+            key="followed",
+            title="单场监控",
+            usage="/follow 比赛id",
+            tail="比分只推到本群。其它群要自己发 <code>/follow on</code>。",
+        )
+        if any(part.isdigit() for part in arg.split()):
+            self._write_score_chats(chat_id, single=True)
+            self._kick()
+
+    def _cmd_id_list(self, chat_id: int, arg: str, *, key: str, title: str, usage: str, tail: str = "") -> None:
         ids = [p for p in arg.split() if p.isdigit()]
         current = list(self._saved().get(key) or [])
         if not ids:
@@ -619,7 +666,10 @@ class HltvTelegramBot:
             if mid not in current:
                 current.append(mid)
         self._write_settings({key: current})
-        self._reply(chat_id, f"已加入{title} " + " ".join(f"<code>{h(mid)}</code>" for mid in ids))
+        text = f"已加入{title} " + " ".join(f"<code>{h(mid)}</code>" for mid in ids)
+        if tail:
+            text += "\n" + tail
+        self._reply(chat_id, text)
 
     def _cmd_id_unlist(self, chat_id: int, arg: str, *, key: str, usage: str) -> None:
         ids = [p for p in arg.split() if p.isdigit()]
@@ -682,23 +732,33 @@ class HltvTelegramBot:
         self._reply(chat_id, "已恢复 " + " ".join(f"<code>{h(mid)}</code>" for mid in ids) + "\n下一次比分变化才会推")
 
     def _cmd_stop_watch(self, chat_id: int) -> None:
-        self._write_settings({"watch": False})
+        self._write_score_chats(chat_id, multi=False, single=False)
         self._kick()
-        self._reply(chat_id, "已暂停比赛比分。\n恢复发 <code>/watch</code>\n赛事提醒用 <code>/track</code> <code>/untrack</code>")
+        self._reply(
+            chat_id,
+            "本群比分已关。\n多场 <code>/watch</code>\n单场 <code>/follow on</code>\n赛事提醒用 <code>/track</code>",
+        )
 
     def _cmd_watch(self, chat_id: int, arg: str) -> None:
         raw = arg.strip().lower()
         if raw in {"0", "off", "false", "no", "关", "关闭"}:
-            self._cmd_stop_watch(chat_id)
+            self._write_score_chats(chat_id, multi=False)
+            self._kick()
+            self._reply(chat_id, "本群多场比分已关。单场还开着的话，用 <code>/follow off</code>。")
             return
-        self._write_settings({"watch": True})
+        self._write_score_chats(chat_id, multi=True)
         self._quiet(all_matches=True)
         self._kick()
         ignored = self._saved().get("ignored") or []
         extra = ""
         if ignored:
             extra = "\n仍忽略 " + " ".join(f"<code>{h(mid)}</code>" for mid in ignored)
-        self._reply(chat_id, "比赛比分已开。Major/T1 且至少 1 星的比赛都会拉。" + extra + "\n不补发暂停期间的旧比分。")
+        self._reply(
+            chat_id,
+            "本群已打开多场比分。Major/T1，以及 <code>/cover</code> 的赛事，只推到这个群。"
+            + extra
+            + "\n不补发当前比分。",
+        )
 
     def _cmd_track(self, chat_id: int) -> None:
         self._write_settings({"event_watch": True})
@@ -756,7 +816,7 @@ class HltvTelegramBot:
             f"通知群 <b>{len(group_ids())}</b>  管理员私聊 <b>{len(self.admin_ids)}</b>",
             f"无声 <b>{'yes' if self._silent() else 'no'}</b>",
             f"比赛星级 ≥ <b>{cfg.min_stars}</b> 且 Major/T1",
-            f"比赛比分 <b>{'on' if cfg.watch else 'off'}</b>",
+            f"多场比分群 <b>{len(cfg.score_multi)}</b>  单场比分群 <b>{len(cfg.score_single)}</b>",
             f"赛程提醒 <b>{'on' if cfg.event_watch else 'off'}</b>  <code>{cfg.digest_morning:02d}:00</code> <code>{cfg.digest_evening:02d}:00</code>",
             f"赛事倒计时 <b>{'on' if cfg.event_watch else 'off'}</b>  前 <code>{cfg.event_days}</code> 天 / <code>{cfg.event_hours}</code> 小时",
             f"单场 <b>{len(cfg.followed)}</b>  赛事 <b>{len(cfg.covered)}</b>",
@@ -876,7 +936,66 @@ class HltvTelegramBot:
             except Exception:
                 log.exception("notify admin photo %s", aid)
 
+    def _score_recipients(self, lane: str) -> list[int]:
+        cfg = self._cfg()
+        ids: set[int] = set()
+        if lane in {"single", "both"}:
+            ids.update(int(item) for item in cfg.score_single)
+        if lane in {"multi", "both"}:
+            ids.update(int(item) for item in cfg.score_multi)
+        return sorted(ids)
+
+    def _broadcast_score(self, note) -> None:
+        """One live card per match. The new photo replaces the previous one."""
+        ids = self._score_recipients(getattr(note, "lane", "") or "")
+        caption = note.html if hasattr(note, "html") else str(note)
+        if not ids:
+            log.info("score skipped, no opted-in chat: %s", caption.replace("\n", " ")[:120])
+            return
+        silent = self._silent()
+        png = None
+        card = getattr(note, "card", None)
+        if card:
+            try:
+                from hltv_bot.cards import render_card
+
+                png = render_card(card)
+            except Exception:
+                log.exception("card render")
+        mid = str(getattr(note, "match_id", "") or "")
+        with self._state_lock:
+            book = dict(self._state.get("score_msgs") or {})
+            slot = dict(book.get(mid) or {})
+        for gid in ids:
+            previous = slot.get(str(gid))
+            try:
+                if png:
+                    msg = self.tg.send_photo(gid, png, caption=caption, filename="hltv.png", silent=silent)
+                else:
+                    msg = self.tg.send_message(gid, caption, silent=silent)
+            except Exception:
+                log.exception("score chat=%s", gid)
+                continue
+            message_id = msg.get("message_id") if isinstance(msg, dict) else None
+            if message_id is None:
+                continue
+            slot[str(gid)] = int(message_id)
+            if previous and int(previous) != int(message_id):
+                try:
+                    self.tg.delete_message(gid, int(previous))
+                except Exception:
+                    log.debug("score delete chat=%s msg=%s failed", gid, previous)
+        if mid:
+            with self._state_lock:
+                book = dict(self._state.get("score_msgs") or {})
+                book[mid] = slot
+                self._state["score_msgs"] = book
+                _save_state(self._state, self.state_path)
+
     def _broadcast(self, note) -> None:
+        if str(getattr(note, "match_id", "") or ""):
+            self._broadcast_score(note)
+            return
         silent = self._silent()
         ids = set(group_ids())
         ids.update(int(aid) for aid in self.admin_ids)

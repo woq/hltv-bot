@@ -44,6 +44,43 @@ def test_command_reply_is_scheduled_for_delete(monkeypatch):
     assert tg.sent[0][2] is False
 
 
+def test_score_push_stays_in_the_chat_that_enabled_it_and_replaces_the_previous(tmp_path, monkeypatch):
+    from hltv_bot.reminders import Notice
+
+    tg = Tg()
+    seq = {"n": 20}
+
+    def send_photo(chat_id, photo, caption="", filename="hltv.png", silent=False):
+        seq["n"] += 1
+        tg.sent.append((chat_id, caption, silent))
+        return {"message_id": seq["n"]}
+
+    tg.send_photo = send_photo
+    monkeypatch.setattr("hltv_bot.bot.threading.Timer", lambda *a, **k: type("T", (), {"start": lambda self: None})())
+    monkeypatch.setattr("hltv_bot.bot.group_ids", lambda: [-200, -100])
+    monkeypatch.setattr("hltv_bot.cards.render_card", lambda card: b"png")
+    bot = HltvTelegramBot(
+        tg,
+        BrowserSession("chrome131", {}, "cf_clearance=x"),
+        admin_ids={1},
+        state_path=tmp_path / "state.json",
+        settings_path=tmp_path / "settings.json",
+    )
+    bot.handle_text(-100, "/watch", user_id=1)
+    tg.sent.clear()
+    tg.deleted.clear()
+    first = Notice("m:9:score:12-9|bo3", "<b>比分</b>", {"view": "match"}, "9", "multi")
+    bot._broadcast(first)
+    assert [item[0] for item in tg.sent] == [-100]
+    second = Notice("m:9:score:12-10|bo3", "<b>比分</b>", {"view": "match"}, "9", "multi")
+    bot._broadcast(second)
+    assert tg.deleted == [21]
+    single = Notice("m:9:score:12-11|bo3", "<b>比分</b>", {"view": "match"}, "9", "single")
+    tg.sent.clear()
+    bot._broadcast(single)
+    assert tg.sent == []
+
+
 def test_events_list_and_daily_digest_are_not_deleted(monkeypatch):
     from hltv_bot.reminders import Notice
 

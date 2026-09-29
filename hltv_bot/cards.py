@@ -512,12 +512,12 @@ def _guide_html(card: dict, height: int, width: int) -> str:
     evening = int(card.get("evening") or 20)
     lines = [
         ("默认", "至少 1 星，并且赛事名是 Major / T1。"),
-        ("比分", "只在有直播时刷新赛程页。进入 Live 的 0:0 只预告一次。"),
-        ("BO", "BO1 就是这场比分。BO3 / BO5 标成当前图。"),
+        ("比分", "只在有直播时刷新赛程页。进入 Live 的 0:0 只预告一次。同一张图只涨分。"),
+        ("BO", "BO1 就是这场比分。BO3 / BO5 写出地图名和系列分。"),
         ("比赛日", f"UTC+8 {morning:02d}:00 到次日 {morning:02d}:00，含国外晚上打到凌晨的比赛。"),
         ("赛程", f"每天 {morning:02d}:00 发整日，{evening:02d}:00 发还没开的，含次日凌晨。"),
         ("补充", "/follow 单场。/cover 整赛事，每个比赛日都算。/ignore 摘掉一场。"),
-        ("开关", "/watch 管比分。/track 管每天两次的赛程，以及赛事倒计时。"),
+        ("开关", "/watch 本群多场。/follow 本群单场。/stop 关掉本群比分。/track 管赛程和倒计时。"),
         ("赛事", "Major / Tier 1：进入窗口、剩 1 天、最后几小时。/window 7 6 可改。"),
     ]
     bits = [

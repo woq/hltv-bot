@@ -129,6 +129,16 @@ def show_on_list(row: dict, now: datetime | None = None, *, days: int = LIST_DAY
     return begin <= start < begin + timedelta(days=days)
 
 
+def map_is_over(left: int, right: int) -> bool:
+    """CS2 map is done: first to 13, or overtime first to 16, 19, 22, … by two."""
+    hi, lo = max(left, right), min(left, right)
+    if hi < 13 or hi - lo < 2:
+        return False
+    if lo <= 11:
+        return True
+    return hi >= 16 and (hi - 16) % 3 == 0
+
+
 def map_order(row: dict) -> tuple[str, list[str]]:
     """Current map first, then the others in series order.
 
@@ -438,6 +448,31 @@ _BO_META = re.compile(r'<div class="match-meta">\s*(bo\d)\s*</div>', re.I)
 _TEAM_LINE = re.compile(r'class="[^"]*match-teamname[^"]*"[^>]*>\s*([^<]+)', re.I)
 _CURRENT_MAP_SCORE = re.compile(r'data-livescore-current-map-score="(\d+)"', re.I)
 _MAP_POOL = re.compile(r'data-maps="([^"]*)"', re.I)
+_WON_TEXT = re.compile(r'data-livescore-maps-won-for="[^"]*"[^>]*>\s*(\d+)', re.I)
+
+
+def _series_index(map_names: list[str], won: list[int], score1: str, score2: str, *, live: bool, fmt: str) -> str:
+    """Which pool entry is on screen.
+
+    Maps-won text already counts a map once it has ended, while the round
+    score can still be that map's final. The next map is the one after the
+    wins, until the round score itself is a finished map.
+    """
+    if len(won) >= 2 and map_names:
+        played = won[0] + won[1]
+        try:
+            finished = map_is_over(int(score1), int(score2))
+        except (TypeError, ValueError):
+            finished = False
+        idx = played - 1 if finished and played > 0 else played
+        if idx < 0:
+            idx = 0
+        if idx >= len(map_names):
+            idx = len(map_names) - 1
+        return str(idx)
+    if live and fmt in {"bo3", "bo5"} and map_names:
+        return "0"
+    return ""
 
 
 def _parse_wrappers(html: str, *, limit: int = 100, exclude_tbd: bool = False) -> list[dict[str, str]]:
@@ -482,19 +517,15 @@ def _parse_wrappers(html: str, *, limit: int = 100, exclude_tbd: bool = False) -
         pool = _MAP_POOL.search(chunk)
         map_names = [pretty_name(part.strip()) for part in (pool.group(1).split(",") if pool else []) if part.strip()]
         maps = " · ".join(map_names)
-        won = [part for part in re.findall(r'data-livescore-maps-won-for="([^"]*)"', chunk) if part.isdigit()]
-        map_index = ""
-        if len(won) >= 2 and map_names:
-            played = int(won[0]) + int(won[1])
-            if played < len(map_names):
-                map_index = str(played)
-        elif live and fmt in {"bo3", "bo5"} and map_names:
-            map_index = "0"
+        won_nums = [int(part) for part in _WON_TEXT.findall(chunk)]
         scores = _CURRENT_MAP_SCORE.findall(chunk)
         if len(scores) < 2:
             scores = list(_team_scores(chunk))
         score1 = scores[0] if scores else ""
         score2 = scores[1] if len(scores) > 1 else ""
+        map_index = _series_index(map_names, won_nums, score1, score2, live=live, fmt=fmt)
+        won1 = str(won_nums[0]) if won_nums else ""
+        won2 = str(won_nums[1]) if len(won_nums) > 1 else ""
         stars_m = re.search(r'data-stars="(\d)"', head)
         stars = int(stars_m.group(1)) if stars_m else _stars_in(chunk)
         unix_m = DATA_UNIX.search(chunk)
@@ -522,6 +553,8 @@ def _parse_wrappers(html: str, *, limit: int = 100, exclude_tbd: bool = False) -
                 "format": fmt,
                 "maps": maps,
                 "map_index": map_index,
+                "won1": won1,
+                "won2": won2,
                 "score1": score1,
                 "score2": score2,
                 "time": format_start_time(unix, live=live),
