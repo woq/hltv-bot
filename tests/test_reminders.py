@@ -79,7 +79,9 @@ def test_match_soon_live_score_and_final():
     assert [n.key for n in notes] == ["m:1:preview"]
     assert "预告" in notes[0].html
     assert "0" in notes[0].html
-    assert notes[0].card["note"] == "当前图 · bo3"
+    assert notes[0].card["note"] == ""
+    assert "当前图" not in notes[0].html
+    assert "系列" not in notes[0].html
     state, notes = plan_reminders(
         state,
         [_match(unix=str(soon), live="1", score1="0", score2="0", format="bo3")],
@@ -97,13 +99,13 @@ def test_match_soon_live_score_and_final():
     )
     assert notes[0].key == "m:1:score:1-0|bo3"
     assert "比分" in notes[0].html
-    assert "当前图 · bo3" in notes[0].html
-    assert notes[0].card["note"] == "当前图 · bo3"
+    assert "当前图" not in notes[0].html
+    assert "系列" not in notes[0].html
     assert "已开赛" not in notes[0].html
 
     state, notes = plan_reminders(state, [], None, now=now, cfg=cfg)
-    assert notes[0].key == "m:1:final"
-    assert "结束" in notes[0].html
+    assert notes[0].key == "m:1:match"
+    assert notes[0].card["label"] == "Match winner"
     assert "<code>1</code>" in notes[0].html and "<code>0</code>" in notes[0].html
     assert "1" not in state["matches"]
 
@@ -126,17 +128,38 @@ def test_same_map_score_only_moves_forward():
     assert notes == []
     assert state["matches"]["1"]["score"] == "12-9"
     state, notes = plan_reminders(state, [{**row, "score1": "12", "score2": "10"}], None, now=now)
-    assert notes[0].card["note"] == "Ancient · 系列 0:0 · bo3"
+    assert [item["name"] for item in notes[0].card["map_rows"]] == ["Ancient", "Nuke", "Inferno"]
+    assert notes[0].card["map_rows"][0]["current"] is True
+    assert "系列" not in notes[0].html
     done = {**row, "score1": "13", "score2": "11", "won1": "1", "won2": "0"}
     state, notes = plan_reminders(state, [done], None, now=now)
-    assert notes and "系列 1:0" in notes[0].card["note"]
+    assert notes[0].card["label"] == "Map winner"
+    assert notes[0].card["winner"] == 1
+    assert notes[0].card["pair"] == ("13", "11")
+    assert notes[0].card["map_rows"][0]["winner"] == 1
+    assert "系列" not in notes[0].html
+    state, notes = plan_reminders(state, [done], None, now=now)
+    assert notes == []
     fresh = {**done, "score1": "0", "score2": "0", "map_index": "1"}
     state, notes = plan_reminders(state, [fresh], None, now=now)
     assert notes == []
     assert state["matches"]["1"]["score"] == "0-0"
     state, notes = plan_reminders(state, [{**fresh, "score1": "1", "score2": "0"}], None, now=now)
-    assert notes
-    assert notes[0].card["note"].startswith("Nuke")
+    assert notes[0].card["label"] == "比分"
+    assert notes[0].card["map_rows"][0]["winner"] == 1
+    assert notes[0].card["map_rows"][1]["name"] == "Nuke"
+    assert notes[0].card["map_rows"][1]["current"] is True
+    assert "系列" not in notes[0].html
+    end = {**fresh, "score1": "13", "score2": "5", "won1": "2", "won2": "0", "map_index": "1"}
+    state, notes = plan_reminders(state, [end], None, now=now)
+    assert notes[0].key == "m:1:match"
+    assert notes[0].card["label"] == "Match winner"
+    assert notes[0].card["pair"] == ("2", "0")
+    assert notes[0].card["map_score"] == "本图 13–5"
+    assert notes[0].card["map_rows"][1]["winner"] == 1
+    assert "系列" not in notes[0].html
+    state, notes = plan_reminders(state, [], None, now=now)
+    assert notes == []
 
 
 def test_low_star_or_non_tier_match_is_ignored():
@@ -171,7 +194,9 @@ def test_bo1_score_note_and_pause():
         now=now,
         cfg=cfg,
     )
-    assert notes[0].card["note"] == "bo1"
+    assert notes[0].card["label"] == "Match winner"
+    assert notes[0].card["pair"] == ("13", "9")
+    assert notes[0].key == "m:1:match"
     assert "当前图" not in notes[0].html
     assert "13" in notes[0].html
 
@@ -351,6 +376,12 @@ def test_ignore_stop_and_watch_commands(tmp_path, monkeypatch):
     assert bot._cfg().watch is True
     bot.handle_text(1, "/track", user_id=DEFAULT_ADMIN_ID)
     assert bot._cfg().event_watch is True
+    bot.handle_text(2, "/follow", user_id=DEFAULT_ADMIN_ID)
+    assert "2" in bot._cfg().score_single
+    bot._cool._last.clear()
+    bot.handle_text(2, "/follow off", user_id=DEFAULT_ADMIN_ID)
+    assert "2" not in bot._cfg().score_single
+    bot._cool._last.clear()
     bot.handle_text(1, "/follow 42", user_id=DEFAULT_ADMIN_ID)
     bot.handle_text(1, "/cover 77", user_id=DEFAULT_ADMIN_ID)
     bot.handle_text(1, "/digest 10 20", user_id=DEFAULT_ADMIN_ID)

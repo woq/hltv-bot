@@ -27,6 +27,7 @@ def test_score_card_renders_bo1_and_current_map():
     }
     html = _match_html(series, 420, 520)
     assert "当前图 · bo3" in html
+    assert "class='stamp'" in html and "UTC+8" in html
     assert "tier-t1" in html
     assert "event-copy" in html
     assert "K27" in html and "SINNERS" in html
@@ -39,6 +40,48 @@ def test_score_card_renders_bo1_and_current_map():
     assert "bo1" in html
     assert "当前图" not in html
     assert render_card(bo1).startswith(b"\x89PNG")
+
+
+def test_winner_card_puts_name_then_score_and_map_logos():
+    from hltv_bot.cards import _match_html
+
+    card = {
+        "view": "match",
+        "kind": "map",
+        "label": "Map winner",
+        "winner": 1,
+        "team1": "Lynn Vision",
+        "team2": "NEXVOID",
+        "pair": ("13", "11"),
+        "event": "ESL Challenger League",
+        "map_rows": [
+            {"name": "Ancient", "winner": 1, "current": True, "team_id": "8840", "logo": ""},
+            {"name": "Nuke", "winner": 0, "current": False},
+            {"name": "Inferno", "winner": 0, "current": False},
+        ],
+    }
+    html = _match_html(card, 560, 520)
+    body = html.split("</style>", 1)[-1]
+    assert body.index("Map winner") < body.index("Lynn Vision") < body.index("class='hero-score'")
+    assert html.index("Ancient") < html.index("Nuke") < html.index("Inferno")
+    assert "mplogo" in html
+    assert "系列" not in html
+    assert "赛程页不标这一半" not in html
+
+    live = {
+        "view": "match",
+        "kind": "score",
+        "label": "比分",
+        "team1": "Lynn Vision",
+        "team2": "NEXVOID",
+        "pair": ("6", "5"),
+        "event": "ESL Challenger League",
+        "map_rows": card["map_rows"],
+    }
+    live_html = _match_html(live, 520, 520)
+    assert "name ct" in live_html and "name t" in live_html
+    assert "赛程页不标这一半" in live_html
+    assert ">CT<" in live_html and ">T<" in live_html
 
 
 def test_matches_card_html_and_render():

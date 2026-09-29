@@ -18,7 +18,17 @@ html, body {
   font-family: "Rajdhani", "WenQuanYi Zen Hei", "Noto Sans CJK SC", "DejaVu Sans", sans-serif;
   text-rendering: geometricPrecision;
 }
-.card { width: PAGEWpx; padding: 28px 26px 22px; }
+.card { position: relative; width: PAGEWpx; padding: 28px 26px 42px; }
+.stamp {
+  position: absolute;
+  right: 22px;
+  bottom: 14px;
+  font-family: "Rajdhani", "Liberation Sans", "DejaVu Sans", sans-serif;
+  font-size: 14px;
+  letter-spacing: 0.04em;
+  color: #d2ccc2;
+  font-weight: 600;
+}
 .kicker {
   font-size: 13px;
   letter-spacing: 0.34em;
@@ -39,6 +49,46 @@ html, body {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.name.ct { color: #8eb7ff; }
+.name.t { color: #f0b15a; }
+.side {
+  margin-left: 8px;
+  font-size: 13px;
+  letter-spacing: 0.16em;
+  font-weight: 700;
+}
+.side.ct { color: #8eb7ff; }
+.side.t { color: #f0b15a; }
+.hero { margin-top: 18px; display: flex; align-items: center; }
+.hero .name { font-size: 34px; }
+.hero-score {
+  margin-top: 10px;
+  font-family: "Rajdhani", "Liberation Sans", "DejaVu Sans", sans-serif;
+  font-size: 42px;
+  line-height: 1;
+  letter-spacing: 0.06em;
+  font-weight: 700;
+}
+.hero-score .ct { color: #8eb7ff; }
+.hero-score .t { color: #f0b15a; }
+.hero-score .dash { color: #9a948a; padding: 0 10px; }
+.opp { margin-top: 8px; font-size: 16px; color: #e4ddd2; font-weight: 600; }
+.mapline { margin-top: 14px; }
+.mp {
+  display: inline-flex;
+  align-items: center;
+  margin-right: 14px;
+  font-size: 15px;
+  font-weight: 600;
+  color: #9a948a;
+}
+.mp.won { color: #f6f3ee; }
+.mp.now { color: #e8ff5a; }
+.mplogo, .mplogo-ph { width: 16px; height: 16px; margin-left: 6px; object-fit: contain; }
+.mplogo-ph { display: none; }
+.side-note { margin-top: 10px; font-size: 13px; letter-spacing: 0.04em; color: #d2ccc2; font-weight: 600; }
+.side-note .ct { color: #8eb7ff; font-weight: 700; }
+.side-note .t { color: #f0b15a; font-weight: 700; }
 .sc {
   width: 52px;
   text-align: right;
@@ -306,7 +356,7 @@ def render_card(card: dict) -> bytes:
     elif view == "guide":
         html = _guide_html(card, 760, _CARD_W)
     else:
-        height = 520 if card.get("note") else 460
+        height = 560 if card.get("kind") in {"map", "match"} else (500 if card.get("map_rows") else 460)
         html = _match_html(card, height, _CARD_W)
     return _png(html)
 
@@ -352,12 +402,16 @@ def _font_css() -> str:
 
 
 def _page(body: str, height: int, width: int) -> str:
+    from datetime import datetime, timedelta, timezone
+
     css = _font_css() + _CSS.replace("PAGEW", str(width)).replace("PAGEH", str(height))
+    stamp = datetime.now(timezone(timedelta(hours=8))).strftime("%m-%d %H:%M:%S")
     return (
         "<!doctype html><html><head><meta charset='utf-8'><style>"
         + css
         + "</style></head><body><div class='card'>"
         + body
+        + f"<div class='stamp'>{_e(stamp)} UTC+8</div>"
         + "</div></body></html>"
     )
 
@@ -400,17 +454,88 @@ def _team_row(
     *,
     team_id: str = "",
     limit: int = CARD_NAME_UNITS,
+    side: str = "",
+    tone: str = "",
 ) -> str:
     from hltv_bot.matches import short_team
 
     mark = _e(score) if score else "–"
+    color = tone if tone in {"ct", "t"} else ""
+    word = side if side in {"ct", "t"} else ""
+    shown = "CT" if word == "ct" else "T" if word == "t" else ""
+    label = f"<span class='side {word}'>{shown}</span>" if shown else ""
     return (
         "<div class='trow'>"
         + _img(_team_logo_uri(team_id, logo), "tlogo")
-        + f"<div class='name'>{_e(short_team(name, limit))}</div>"
+        + f"<div class='name {color}'>{_e(short_team(name, limit))}{label}</div>"
         + f"<div class='sc {accent}'>{mark}</div>"
         + "</div>"
     )
+
+
+def _map_strip(rows: list) -> str:
+    if not rows:
+        return ""
+    bits = []
+    for item in rows:
+        name = _e(item.get("name") or "")
+        cls = "mp"
+        if item.get("winner"):
+            cls += " won"
+        if item.get("current"):
+            cls += " now"
+        logo = ""
+        if item.get("winner"):
+            logo = _img(_team_logo_uri(str(item.get("team_id") or ""), str(item.get("logo") or "")), "mplogo")
+        bits.append(f"<span class='{cls}'>{name}{logo}</span>")
+    return f"<div class='mapline'>{''.join(bits)}</div>"
+
+
+def _winner_block(card: dict) -> str:
+    pair = card.get("pair") or ("", "")
+    left = str(pair[0] if pair else "")
+    right = str(pair[1] if len(pair) > 1 else "")
+    bits = [f"<div class='kicker'>{_e(card.get('label'))}</div>"]
+    winner = card.get("winner")
+    if winner in {1, 2}:
+        name = card.get("team1") if winner == 1 else card.get("team2")
+        logo = card.get("logo1") if winner == 1 else card.get("logo2")
+        team_id = card.get("team1_id") if winner == 1 else card.get("team2_id")
+        other = card.get("team2") if winner == 1 else card.get("team1")
+        bits.append(
+            "<div class='hero'>"
+            + _img(_team_logo_uri(str(team_id or ""), str(logo or "")), "tlogo")
+            + f"<div class='name'>{_e(name or '?')}</div></div>"
+        )
+    else:
+        other = ""
+        bits.append(f"<div class='opp'>{_e(card.get('team1') or '?')}</div>")
+        bits.append(f"<div class='opp'>{_e(card.get('team2') or '?')}</div>")
+    bits.append(
+        "<div class='hero-score'>"
+        + f"<span class='ct'>{_e(left)}</span><span class='dash'>–</span><span class='t'>{_e(right)}</span>"
+        + "</div>"
+    )
+    if other:
+        bits.append(f"<div class='opp'>对 {_e(other)}</div>")
+    extra = (card.get("map_score") or "").strip()
+    if extra:
+        bits.append(f"<div class='opp'>{_e(extra)}</div>")
+    bits.append(_map_strip(list(card.get("map_rows") or [])))
+    return "".join(bits)
+
+
+def _slot_side(card: dict, key: str, fallback: str) -> tuple[str, str]:
+    raw = str(card.get(key) or "")
+    if raw in {"ct", "t"}:
+        return raw, raw
+    return fallback, ""
+
+
+def _side_note(card: dict) -> str:
+    if str(card.get("side1") or "") in {"ct", "t"} or str(card.get("side2") or "") in {"ct", "t"}:
+        return ""
+    return "<div class='side-note'><span class='ct'>CT</span> 蓝 · <span class='t'>T</span> 橙 · 赛程页不标这一半</div>"
 
 
 def _match_html(card: dict, height: int, width: int) -> str:
@@ -419,10 +544,36 @@ def _match_html(card: dict, height: int, width: int) -> str:
     pair = card.get("pair") or ("", "")
     left = pair[0] if pair and pair[0] else ""
     right = pair[1] if pair and len(pair) > 1 else ""
+    if kind in {"map", "match"}:
+        head = _winner_block(card)
+    else:
+        tone1, word1 = _slot_side(card, "side1", "ct")
+        tone2, word2 = _slot_side(card, "side2", "t")
+        head = (
+            f"<div class='kicker'>{_e(card.get('label'))}</div>"
+            + _team_row(
+                card.get("team1") or "?",
+                left,
+                card.get("logo1") or "",
+                accent,
+                team_id=str(card.get("team1_id") or ""),
+                side=word1,
+                tone=tone1,
+            )
+            + _team_row(
+                card.get("team2") or "?",
+                right,
+                card.get("logo2") or "",
+                accent,
+                team_id=str(card.get("team2_id") or ""),
+                side=word2,
+                tone=tone2,
+            )
+            + _map_strip(list(card.get("map_rows") or []))
+            + _side_note(card)
+        )
     bits = [
-        f"<div class='kicker'>{_e(card.get('label'))}</div>",
-        _team_row(card.get("team1") or "?", left, card.get("logo1") or "", accent, team_id=str(card.get("team1_id") or "")),
-        _team_row(card.get("team2") or "?", right, card.get("logo2") or "", accent, team_id=str(card.get("team2_id") or "")),
+        head,
         "<div class='rule'></div>",
         _event_block(
             str(card.get("event") or ""),
@@ -434,8 +585,6 @@ def _match_html(card: dict, height: int, width: int) -> str:
     ]
     if card.get("note"):
         bits.append(f"<div class='note'>{_e(card.get('note'))}</div>")
-    if card.get("clock"):
-        bits.append(f"<div class='when'>{_e(card.get('clock'))}   UTC+8</div>")
     return _page("".join(bits), height, width)
 
 
@@ -512,13 +661,13 @@ def _guide_html(card: dict, height: int, width: int) -> str:
     evening = int(card.get("evening") or 20)
     lines = [
         ("默认", "至少 1 星，并且赛事名是 Major / T1。"),
-        ("比分", "只在有直播时刷新赛程页。进入 Live 的 0:0 只预告一次。同一张图只涨分。"),
-        ("BO", "BO1 就是这场比分。BO3 / BO5 写出地图名和系列分。"),
+        ("比分", "0:0 只预告一次。同一张图只涨分。图结束是 Map winner，比赛结束是 Match winner。"),
+        ("BO", "地图按顺序排开。赢下的图后面是那支队的图标。"),
         ("比赛日", f"UTC+8 {morning:02d}:00 到次日 {morning:02d}:00，含国外晚上打到凌晨的比赛。"),
         ("赛程", f"每天 {morning:02d}:00 发整日，{evening:02d}:00 发还没开的，含次日凌晨。"),
         ("补充", "/follow 单场。/cover 整赛事，每个比赛日都算。/ignore 摘掉一场。"),
-        ("开关", "/watch 本群多场。/follow 本群单场。/stop 关掉本群比分。/track 管赛程和倒计时。"),
-        ("赛事", "Major / Tier 1：进入窗口、剩 1 天、最后几小时。/window 7 6 可改。"),
+        ("开关", "/watch 加入多场。/follow 加入单场。不带参数就是加入本群。/stop 关闭。"),
+        ("赛事", "Major / Tier 1：进入窗口、剩 1 天、最后几小时。/track 打开。/window 7 6 可改。"),
     ]
     bits = [
         "<div class='g-title'>hltv-bot</div>",

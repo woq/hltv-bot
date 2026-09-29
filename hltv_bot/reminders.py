@@ -169,32 +169,151 @@ def accept_round_score(old: dict, row: dict) -> bool:
     return new[0] >= old_score[0] and new[1] >= old_score[1]
 
 
-def score_note(row: dict, *, scored: bool) -> str:
-    """bo1 is the match. bo3/bo5 names the map on screen and the series."""
-    from hltv_bot.matches import map_order
+def _fmt(row: dict) -> str:
+    return (row.get("format") or "").strip().lower()
 
-    fmt = (row.get("format") or "").strip().lower()
-    if fmt not in {"bo1", "bo3", "bo5"}:
-        return ""
-    current, _rest = map_order(row)
-    series = _won_pair(row)
-    series_bit = f"系列 {series[0]}:{series[1]}" if series else ""
+
+def _map_names(row: dict) -> list[str]:
+    import re
+
+    return [part.strip() for part in re.split(r"\s*·\s*", row.get("maps") or "") if part.strip()]
+
+
+def _parse_winners(raw: str, n: int) -> list[int]:
+    wins: list[int] = []
+    for part in str(raw or "").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        wins.append(int(part) if part in {"0", "1", "2"} else 0)
+    if n and len(wins) < n:
+        wins.extend([0] * (n - len(wins)))
+    return wins[:n] if n else wins
+
+
+def _winners_text(wins: list[int]) -> str:
+    return ",".join(str(item) for item in wins)
+
+
+def _baseline_winners(old: dict, n: int) -> list[int]:
+    if "map_winners" in old:
+        return _parse_winners(str(old.get("map_winners") or ""), n)
+    wins = [0] * n
+    base = _won_pair(old)
+    if base and n:
+        if base[0] and not base[1]:
+            for i in range(min(base[0], n)):
+                wins[i] = 1
+        elif base[1] and not base[0]:
+            for i in range(min(base[1], n)):
+                wins[i] = 2
+    return wins
+
+
+def merge_map_winners(old: dict, row: dict, rounds: tuple[int, int] | None) -> list[int]:
+    """Remember who won each map. The list only has the series tally, not the order."""
+    from hltv_bot.matches import map_is_over
+
+    names = _map_names(row) or _map_names(old)
+    n = len(names)
+    wins = _baseline_winners(old, n)
+    old_won = _won_pair(old) or (0, 0)
+    new_won = _won_pair(row)
+    if new_won is not None and n and not any(wins) and (new_won[0] == 0) != (new_won[1] == 0):
+        old_won = (0, 0)
+    if new_won is not None and n:
+        d1, d2 = new_won[0] - old_won[0], new_won[1] - old_won[1]
+
+        def place(side: int, count: int) -> None:
+            left = count
+            for i in range(n):
+                if left <= 0:
+                    return
+                if wins[i] == 0:
+                    wins[i] = side
+                    left -= 1
+
+        if d1 > 0 and d2 == 0:
+            place(1, d1)
+        elif d2 > 0 and d1 == 0:
+            place(2, d2)
+    if rounds and n and map_is_over(*rounds):
+        idx_raw = str(row.get("map_index") or "")
+        if idx_raw.isdigit():
+            idx = int(idx_raw)
+            if 0 <= idx < n and wins[idx] == 0 and rounds[0] != rounds[1]:
+                wins[idx] = 1 if rounds[0] > rounds[1] else 2
+    return wins
+
+
+def _series_tally(row: dict, winners: list[int]) -> tuple[int, int]:
+    won = _won_pair(row)
+    counted = (sum(1 for item in winners if item == 1), sum(1 for item in winners if item == 2))
+    if won is None:
+        return counted
+    if counted[0] + counted[1] > won[0] + won[1]:
+        return counted
+    return won
+
+
+def _series_target(fmt: str) -> int:
+    return {"bo1": 1, "bo3": 2, "bo5": 3}.get(fmt, 0)
+
+
+def _clinched(row: dict, winners: list[int], rounds: tuple[int, int] | None) -> bool:
+    from hltv_bot.matches import map_is_over
+
+    fmt = _fmt(row)
+    target = _series_target(fmt)
+    if target <= 0:
+        return False
     if fmt == "bo1":
-        if current and scored:
-            return f"{current} · {fmt}"
-        return fmt
-    if not scored:
-        return fmt
-    bits: list[str] = []
-    if current:
-        bits.append(current)
-    else:
-        idx = str(row.get("map_index") or "")
-        bits.append(f"图{int(idx) + 1}" if idx.isdigit() else "当前图")
-    if series_bit:
-        bits.append(series_bit)
-    bits.append(fmt)
-    return " · ".join(bits)
+        return rounds is not None and map_is_over(*rounds)
+    return max(_series_tally(row, winners)) >= target
+
+
+def _fresh_wins(old: dict, winners: list[int]) -> list[int]:
+    prev = _baseline_winners(old, len(winners))
+    found: list[int] = []
+    for i, side in enumerate(winners):
+        before = prev[i] if i < len(prev) else 0
+        if before == 0 and side in {1, 2}:
+            found.append(i)
+    return found
+
+
+def _map_rows(row: dict, winners: list[int]) -> list[dict]:
+    names = _map_names(row)
+    idx = str(row.get("map_index") or "")
+    current = int(idx) if idx.isdigit() else -1
+    rows: list[dict] = []
+    for i, name in enumerate(names):
+        side = winners[i] if i < len(winners) else 0
+        team = team_id = logo = ""
+        if side == 1:
+            team, team_id, logo = row.get("team1") or "", row.get("team1_id") or "", row.get("team1_logo") or ""
+        elif side == 2:
+            team, team_id, logo = row.get("team2") or "", row.get("team2_id") or "", row.get("team2_logo") or ""
+        rows.append(
+            {
+                "name": name,
+                "winner": side,
+                "current": i == current,
+                "team": team,
+                "team_id": team_id,
+                "logo": logo,
+            }
+        )
+    return rows
+
+
+def _map_caption(rows: list[dict]) -> str:
+    bits = []
+    for item in rows:
+        name = str(item.get("name") or "")
+        team = str(item.get("team") or "")
+        bits.append(f"{name} {team}".strip() if team else name)
+    return " · ".join(bit for bit in bits if bit)
 
 
 def start_at(row: dict) -> datetime | None:
@@ -228,7 +347,8 @@ _KIND = {
     "soon": "即将开赛",
     "preview": "预告",
     "score": "比分",
-    "final": "结束",
+    "map": "Map winner",
+    "match": "Match winner",
 }
 
 
@@ -243,36 +363,33 @@ def _score_pair(score: str) -> tuple[str, str] | None:
     return left or "0", right or "0"
 
 
-def _match_caption(kind: str, row: dict, when: datetime | None, score: str = "") -> str:
-    label = _KIND.get(kind, kind)
-    t1 = h(row.get("team1") or "?")
-    t2 = h(row.get("team2") or "?")
-    show = score if kind in {"preview", "score", "final"} else ""
-    pair = _score_pair(show)
-    if pair:
-        head = f"<b>{label}</b>  {t1} <code>{h(pair[0])}</code>–<code>{h(pair[1])}</code> {t2}"
-    else:
-        head = f"<b>{label}</b>  {t1} vs {t2}"
-    lines = [head]
-    event = (row.get("event") or "").strip()
-    if event:
-        lines.append(f"<b>{h(tier_label(classify_tier(event)))}</b>")
-        lines.append(f"<b>{h(event)}</b>")
-    note = score_note(row, scored=bool(pair))
-    if note:
-        lines.append(h(note))
-    clock = _clock(when, str(row.get("time") or ""))
-    if clock:
-        lines.append(f"<code>{h(clock)}</code> UTC+8")
-    link = _link(str(row.get("url") or ""))
-    if link:
-        lines.append(link)
-    return "\n".join(lines)
+def _shown_pair(kind: str, row: dict, score: str, winners: list[int]) -> tuple[str, str] | None:
+    if kind == "match" and _fmt(row) in {"bo3", "bo5"}:
+        left, right = _series_tally(row, winners)
+        if left or right:
+            return str(left), str(right)
+    return _score_pair(score if kind in {"preview", "score", "map", "match"} else "")
 
 
-def _match_card(kind: str, row: dict, when: datetime | None, score: str = "") -> dict:
-    show = score if kind in {"preview", "score", "final"} else ""
-    pair = _score_pair(show)
+def _map_score_line(kind: str, row: dict, rounds: tuple[int, int] | None) -> str:
+    if kind != "match" or _fmt(row) not in {"bo3", "bo5"} or not rounds or rounds == (0, 0):
+        return ""
+    return f"本图 {rounds[0]}–{rounds[1]}"
+
+
+def _match_card(
+    kind: str,
+    row: dict,
+    when: datetime | None,
+    score: str = "",
+    *,
+    winners: list[int] | None = None,
+    winner: int = 0,
+    rounds: tuple[int, int] | None = None,
+) -> dict:
+    wins = list(winners or [])
+    pair = _shown_pair(kind, row, score, wins)
+    rows = _map_rows(row, wins)
     return {
         "view": "match",
         "kind": kind,
@@ -286,25 +403,78 @@ def _match_card(kind: str, row: dict, when: datetime | None, score: str = "") ->
         "event_id": row.get("event_id") or "",
         "event_logo": row.get("event_logo") or "",
         "pair": pair,
+        "winner": winner if winner in {1, 2} else 0,
+        "map_rows": rows,
+        "map_score": _map_score_line(kind, row, rounds),
         "event": row.get("event") or "",
-        "note": score_note(row, scored=bool(pair)),
+        "note": "",
         "clock": _clock(when, str(row.get("time") or "")),
     }
 
 
-def _match_html(kind: str, row: dict, when: datetime | None, score: str = "") -> str:
-    return _match_caption(kind, row, when, score)
+def _match_caption(card: dict, row: dict) -> str:
+    label = str(card.get("label") or "")
+    kind = str(card.get("kind") or "")
+    pair = card.get("pair")
+    winner = card.get("winner")
+    if kind in {"map", "match"} and winner in {1, 2}:
+        name = card.get("team1") if winner == 1 else card.get("team2")
+        other = card.get("team2") if winner == 1 else card.get("team1")
+        lines = [f"<b>{h(label)}</b>", f"<b>{h(name or '?')}</b>"]
+        if pair:
+            lines.append(f"<code>{h(pair[0])}</code>–<code>{h(pair[1])}</code>")
+        lines.append(f"对 {h(other or '?')}")
+    else:
+        t1 = h(card.get("team1") or "?")
+        t2 = h(card.get("team2") or "?")
+        if pair:
+            lines = [f"<b>{h(label)}</b>  {t1} <code>{h(pair[0])}</code>–<code>{h(pair[1])}</code> {t2}"]
+        else:
+            lines = [f"<b>{h(label)}</b>  {t1} vs {t2}"]
+    extra = (card.get("map_score") or "").strip()
+    if extra:
+        lines.append(h(extra))
+    note = _map_caption(list(card.get("map_rows") or []))
+    if note:
+        lines.append(h(note))
+    if kind in {"preview", "score"}:
+        lines.append("CT 蓝，T 橙。赛程页不标这一半。")
+    event = (card.get("event") or "").strip()
+    if event:
+        lines.append(f"<b>{h(tier_label(classify_tier(event)))}</b>")
+        lines.append(f"<b>{h(event)}</b>")
+    clock = card.get("clock") or ""
+    if clock:
+        lines.append(f"<code>{h(clock)}</code> UTC+8")
+    link = _link(str(row.get("url") or ""))
+    if link:
+        lines.append(link)
+    return "\n".join(lines)
 
 
-def _score_notice(kind: str, row: dict, when: datetime | None, score: str, cfg: RemindConfig) -> Notice:
+def _score_notice(
+    kind: str,
+    row: dict,
+    when: datetime | None,
+    score: str,
+    cfg: RemindConfig,
+    *,
+    winners: list[int] | None = None,
+    winner: int = 0,
+    rounds: tuple[int, int] | None = None,
+    map_index: int = -1,
+) -> Notice:
     mid = str(row.get("id") or "")
     if kind == "preview":
         key = f"m:{mid}:preview"
-    elif kind == "final":
-        key = f"m:{mid}:final"
+    elif kind == "map":
+        key = f"m:{mid}:map:{map_index}"
+    elif kind == "match":
+        key = f"m:{mid}:match"
     else:
         key = f"m:{mid}:score:{feed_sig(row)}"
-    return Notice(key, _match_html(kind, row, when, score), _match_card(kind, row, when, score), mid, score_lane(row, cfg))
+    card = _match_card(kind, row, when, score, winners=winners, winner=winner, rounds=rounds)
+    return Notice(key, _match_caption(card, row), card, mid, score_lane(row, cfg))
 
 
 def _hours_left(ev: dict, now: datetime) -> float | None:
@@ -389,7 +559,17 @@ def _zero_row(row: dict) -> dict:
     return item
 
 
-def _snapshot_match(row: dict, *, opened: bool, soon: bool, score: str, live: bool, previewed: bool) -> dict:
+def _snapshot_match(
+    row: dict,
+    *,
+    opened: bool,
+    soon: bool,
+    score: str,
+    live: bool,
+    previewed: bool,
+    map_winners: str = "",
+    match_sent: bool = False,
+) -> dict:
     held = _pair(score)
     score1 = str(held[0]) if held else (row.get("score1") or "")
     score2 = str(held[1]) if held else (row.get("score2") or "")
@@ -419,6 +599,8 @@ def _snapshot_match(row: dict, *, opened: bool, soon: bool, score: str, live: bo
         "map_index": row.get("map_index") or "",
         "won1": row.get("won1") or "",
         "won2": row.get("won2") or "",
+        "map_winners": map_winners,
+        "match_sent": bool(match_sent),
         "sig": feed_sig(row),
     }
 
@@ -711,13 +893,17 @@ def plan_reminders(
                 if not mid:
                     continue
                 live = row.get("live") == "1"
+                score = score_text(row)
+                winners = merge_map_winners({}, row, _pair(score))
                 seeded[mid] = _snapshot_match(
                     row,
                     opened=False,
                     soon=live,
-                    score=score_text(row),
+                    score=score,
                     live=live,
                     previewed=live,
+                    map_winners=_winners_text(winners),
+                    match_sent=_clinched(row, winners, _pair(score)),
                 )
             base["matches"] = seeded
             base["matches_seeded"] = True
@@ -746,35 +932,92 @@ def plan_reminders(
                 speak = _speak(cfg, mid, base)
                 became_live = known and live and "live" in old and not old.get("live")
                 audible = speak and lane_open(row, cfg)
+                held = False
+                pending = ""
                 if became_live and not previewed:
                     if _real_score(score):
-                        if audible:
-                            notes.append(_score_notice("score", row, start, score, cfg))
+                        pending = "score"
                         opened = True
                     else:
-                        shown = _zero_row(row)
-                        if audible:
-                            notes.append(_score_notice("preview", shown, start, "0-0", cfg))
+                        pending = "preview"
                         opened = True
                         score = "0-0"
                     previewed = True
                 elif known and score != old_score:
                     if old_score and not accept_round_score(old, row):
+                        held = True
                         score = old_score
                     elif _real_score(score):
-                        if audible:
-                            notes.append(_score_notice("score", row, start, score, cfg))
+                        pending = "score"
                         opened = True
+                view = dict(row)
+                if held:
+                    view["score1"] = old.get("score1") or ""
+                    view["score2"] = old.get("score2") or ""
+                    view["won1"] = old.get("won1") or ""
+                    view["won2"] = old.get("won2") or ""
+                    view["map_index"] = old.get("map_index") or ""
+                    view["maps"] = old.get("maps") or row.get("maps") or ""
+                rounds = _pair(score)
+                winners = merge_map_winners(old if known else {}, view, None if held else rounds)
+                match_sent = bool(old.get("match_sent"))
+                win_side = 0
+                map_at = -1
+                if not known:
+                    pending = ""
+                    if _clinched(view, winners, None if held else rounds):
+                        match_sent = True
+                elif pending != "preview" and not match_sent and not held and _clinched(view, winners, rounds):
+                    pending = "match"
+                    opened = True
+                    tally = _series_tally(view, winners)
+                    if tally[0] > tally[1]:
+                        win_side = 1
+                    elif tally[1] > tally[0]:
+                        win_side = 2
+                    elif rounds and rounds[0] != rounds[1]:
+                        win_side = 1 if rounds[0] > rounds[1] else 2
+                elif pending != "preview" and not match_sent and not held:
+                    fresh = _fresh_wins(old, winners)
+                    if fresh:
+                        pending = "map"
+                        opened = True
+                        map_at = fresh[-1]
+                        win_side = winners[map_at]
+                if pending == "score" and match_sent:
+                    pending = ""
+                if pending == "match":
+                    match_sent = True
+                if pending and audible:
+                    if pending == "preview":
+                        shown = _zero_row(view)
+                        notes.append(_score_notice("preview", shown, start, "0-0", cfg, winners=winners))
+                    else:
+                        notes.append(
+                            _score_notice(
+                                pending,
+                                view,
+                                start,
+                                score,
+                                cfg,
+                                winners=winners,
+                                winner=win_side,
+                                rounds=rounds,
+                                map_index=map_at,
+                            )
+                        )
                 if live:
                     soon_sent = True
                     previewed = True
                 nxt[mid] = _snapshot_match(
-                    row,
+                    view,
                     opened=opened,
                     soon=soon_sent,
                     score=score or str(old.get("score") or ""),
                     live=live,
                     previewed=previewed,
+                    map_winners=_winners_text(winners),
+                    match_sent=match_sent,
                 )
                 quiet.discard(mid)
             for mid, old in prev.items():
@@ -802,9 +1045,32 @@ def plan_reminders(
                     "map_index": old.get("map_index"),
                     "won1": old.get("won1"),
                     "won2": old.get("won2"),
+                    "map_winners": old.get("map_winners") or "",
                 }
-                if _speak(cfg, mid, base) and lane_open(row, cfg):
-                    notes.append(_score_notice("final", row, start_at(row), str(old.get("score") or ""), cfg))
+                if not old.get("match_sent") and _speak(cfg, mid, base) and lane_open(row, cfg):
+                    winners = _parse_winners(str(old.get("map_winners") or ""), len(_map_names(row)))
+                    rounds = _pair(str(old.get("score") or ""))
+                    tally = _series_tally(row, winners)
+                    if tally[0] > tally[1]:
+                        win_side = 1
+                    elif tally[1] > tally[0]:
+                        win_side = 2
+                    elif rounds and rounds[0] != rounds[1]:
+                        win_side = 1 if rounds[0] > rounds[1] else 2
+                    else:
+                        win_side = 0
+                    notes.append(
+                        _score_notice(
+                            "match",
+                            row,
+                            start_at(row),
+                            str(old.get("score") or ""),
+                            cfg,
+                            winners=winners,
+                            winner=win_side,
+                            rounds=rounds,
+                        )
+                    )
                 quiet.discard(mid)
             base["matches"] = nxt
             base["quiet_ids"] = sorted(quiet)

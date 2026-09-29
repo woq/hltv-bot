@@ -63,14 +63,14 @@ HELP = """\
 • <code>/matches</code> — 比赛列表（<code>t2</code> / <code>t3</code> / <code>all</code> / <code>text</code>）
 • <code>/events</code> — Major / T1 赛事
 
-比分只看赛程总页。进入 Live 时 0:0 只发一次，当作预告。同一张图里两边的回合分只会变大。BO3 / BO5 写出当前地图和系列分。新的一条比分会删掉这场上一条。
+比分只看赛程总页。进入 Live 时 0:0 只发一次，当作预告。同一张图里两边的回合分只会变大。一张图结束是 Map winner，整场结束是 Match winner。地图按顺序排，赢的图后面是战队图标。新的一条会删掉这场上一条。
 
 一个比赛日是 UTC+8 早上 10:00 到次日 10:00，跨过凌晨，用来装国外晚上的比赛。赛程每天两次：10:00 看这一整日，20:00 看这一日里还没开的，含次日凌晨。不按比赛自己的开赛钟点。
 
 赛事另按开赛倒计时，只推 Major / T1：进入窗口、剩 1 天、最后 N 小时。默认前 7 天到前 6 小时，<code>/window 7 6</code> 可改。
 
 <b>补充监控</b>
-• <code>/follow 比赛id</code> — 单场。赛事本身不够默认条件时用
+• <code>/follow</code> — 本群加入单场。不带参数就是加入。<code>/follow 比赛id</code> 加上这场
 • <code>/unfollow 比赛id</code>
 • <code>/cover 赛事id</code> — 打开这一赛事每个比赛日的全部比赛
 • <code>/uncover 赛事id</code>
@@ -80,15 +80,16 @@ HELP = """\
 • <code>/groups</code> — 通知群
 • <code>/allow</code> — 把本群加入通知
 • <code>/deny</code> — 移出通知
-• <code>/follow 比赛id</code> — 单场加入比分监控
+• <code>/follow</code> — 加入单场。不带参数就是加入本群
+• <code>/follow 比赛id</code> — 加上这场
 • <code>/unfollow 比赛id</code> — 取消单场
 • <code>/cover 赛事id</code> — 批量打开该赛事每个比赛日
 • <code>/uncover 赛事id</code> — 关闭该赛事
 • <code>/ignore 比赛id</code> — 这一场不推
 • <code>/unignore 比赛id</code> — 恢复这场
-• <code>/watch</code> — 本群打开多场比分（Major/T1 和 /cover）
-• <code>/stop</code> — 本群关闭比分
-• <code>/follow on</code> — 本群打开单场比分
+• <code>/watch</code> — 加入多场（Major/T1 和 /cover）。不带参数就是加入
+• <code>/stop</code> — 关闭本群比分
+• <code>/follow off</code> — 关闭单场
 • <code>/track</code> — 打开赛程和赛事提醒
 • <code>/untrack</code> — 关闭赛程和赛事提醒
 • <code>/digest 10 20</code> — 赛程提醒钟点，UTC+8
@@ -629,27 +630,30 @@ class HltvTelegramBot:
 
     def _cmd_follow(self, chat_id: int, arg: str) -> None:
         raw = arg.strip().lower()
-        if raw in {"on", "开", "开启"}:
+        if raw in {"", "on", "开", "开启"}:
             self._write_score_chats(chat_id, single=True)
             self._kick()
-            self._reply(chat_id, "本群已打开单场比分。只推到这个群，跟过的比赛有变化才发。")
+            self._reply(chat_id, "已加入")
             return
         if raw in {"off", "关", "关闭"}:
             self._write_score_chats(chat_id, single=False)
             self._kick()
-            self._reply(chat_id, "本群已关闭单场比分。多场用 <code>/watch</code>。")
+            self._reply(chat_id, "已关闭")
             return
-        self._cmd_id_list(
-            chat_id,
-            arg,
-            key="followed",
-            title="单场监控",
-            usage="/follow 比赛id",
-            tail="比分只推到本群。其它群要自己发 <code>/follow on</code>。",
-        )
-        if any(part.isdigit() for part in arg.split()):
+        ids = [part for part in arg.split() if part.isdigit()]
+        if not ids:
             self._write_score_chats(chat_id, single=True)
             self._kick()
+            self._reply(chat_id, "已加入")
+            return
+        current = list(self._saved().get("followed") or [])
+        for mid in ids:
+            if mid not in current:
+                current.append(mid)
+        self._write_settings({"followed": current})
+        self._write_score_chats(chat_id, single=True)
+        self._kick()
+        self._reply(chat_id, "已加入")
 
     def _cmd_id_list(self, chat_id: int, arg: str, *, key: str, title: str, usage: str, tail: str = "") -> None:
         ids = [p for p in arg.split() if p.isdigit()]
@@ -734,31 +738,19 @@ class HltvTelegramBot:
     def _cmd_stop_watch(self, chat_id: int) -> None:
         self._write_score_chats(chat_id, multi=False, single=False)
         self._kick()
-        self._reply(
-            chat_id,
-            "本群比分已关。\n多场 <code>/watch</code>\n单场 <code>/follow on</code>\n赛事提醒用 <code>/track</code>",
-        )
+        self._reply(chat_id, "已关闭")
 
     def _cmd_watch(self, chat_id: int, arg: str) -> None:
         raw = arg.strip().lower()
         if raw in {"0", "off", "false", "no", "关", "关闭"}:
             self._write_score_chats(chat_id, multi=False)
             self._kick()
-            self._reply(chat_id, "本群多场比分已关。单场还开着的话，用 <code>/follow off</code>。")
+            self._reply(chat_id, "已关闭")
             return
         self._write_score_chats(chat_id, multi=True)
         self._quiet(all_matches=True)
         self._kick()
-        ignored = self._saved().get("ignored") or []
-        extra = ""
-        if ignored:
-            extra = "\n仍忽略 " + " ".join(f"<code>{h(mid)}</code>" for mid in ignored)
-        self._reply(
-            chat_id,
-            "本群已打开多场比分。Major/T1，以及 <code>/cover</code> 的赛事，只推到这个群。"
-            + extra
-            + "\n不补发当前比分。",
-        )
+        self._reply(chat_id, "已加入")
 
     def _cmd_track(self, chat_id: int) -> None:
         self._write_settings({"event_watch": True})
