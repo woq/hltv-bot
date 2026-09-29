@@ -233,6 +233,34 @@ def _sniff(data: bytes) -> str | None:
     return None
 
 
+def _webp_to_png(data: bytes) -> bytes | None:
+    """img-cdn often returns WebP for a .png URL. The card paints PNG."""
+    try:
+        import io
+
+        from PIL import Image
+
+        image = Image.open(io.BytesIO(data))
+        out = io.BytesIO()
+        image.save(out, format="PNG")
+        return out.getvalue()
+    except Exception as e:
+        log.debug("webp convert failed: %s", e)
+        return None
+
+
+def _asset_get(url: str, timeout: float = 8.0) -> bytes | None:
+    try:
+        from hltv_bot.http import fetch_asset
+
+        status, body = fetch_asset(url, timeout=timeout)
+        if status == 200 and body:
+            return body
+    except Exception as e:
+        log.debug("team logo asset failed url=%s: %s", url, e)
+    return None
+
+
 def _urllib_get(url: str, timeout: float = 8.0) -> bytes | None:
     req = Request(
         url,
@@ -255,7 +283,16 @@ def _urllib_get(url: str, timeout: float = 8.0) -> bytes | None:
 def _as_image(data: bytes | None) -> bytes | None:
     if not data or _sniff(data) is None:
         return None
+    if _sniff(data) == "webp":
+        png = _webp_to_png(data)
+        if png and _sniff(png) == "png":
+            return png
     return data
+
+
+def _fetch_logo(url: str, timeout: float = 8.0) -> bytes | None:
+    """CDN blocks a plain GET. Browser TLS first, then urllib."""
+    return _asset_get(url, timeout) or _urllib_get(url, timeout)
 
 
 def _download_many(urls: list[str]) -> dict[str, bytes]:
@@ -273,7 +310,7 @@ def _download_many(urls: list[str]) -> dict[str, bytes]:
         return out
     workers = min(_FETCH_WORKERS, len(unique))
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = {pool.submit(_urllib_get, url): url for url in unique}
+        futures = {pool.submit(_fetch_logo, url): url for url in unique}
         for fut in as_completed(futures):
             url = futures[fut]
             try:

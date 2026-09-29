@@ -1,21 +1,14 @@
 """Browser request profile captured from Chrome MCP (Chrome 134 / Windows).
 
 Header names and order follow a live scorebot-lb request, not a made-up set.
-TLS impersonate string is chosen at runtime to the closest curl_cffi chrome.
+TLS fingerprint is this profile. Callers pass the name through; they do not
+ask the HTTP library which browsers it knows.
 """
 
 from __future__ import annotations
 
-# Closest curl_cffi targets to MCP Chrome/134; first available wins.
-IMPERSONATE_CANDIDATES = (
-    "chrome136",
-    "chrome133",
-    "chrome131",
-    "chrome124",
-    "chrome120",
-    "chrome119",
-    "chrome116",
-)
+# One Chrome fingerprint for HTML, scorebot, and image CDN.
+FINGERPRINT = "chrome131"
 
 DEFAULT_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -41,23 +34,16 @@ HEADER_ORDER = (
 )
 
 
+def fingerprint(preferred: str | None = None) -> str:
+    """The TLS fingerprint every outbound client must use."""
+    name = str(preferred or "").strip()
+    if name.lower().startswith("browsertype."):
+        name = name.split(".", 1)[1]
+    return name or FINGERPRINT
+
+
 def pick_impersonate(preferred: str | None = None) -> str:
-    names: list[str] = []
-    if preferred:
-        names.append(preferred)
-    names.extend(IMPERSONATE_CANDIDATES)
-    try:
-        from curl_cffi.requests import BrowserType
-        allowed = {str(x).split(".")[-1] for x in BrowserType}
-    except Exception:
-        allowed = set(IMPERSONATE_CANDIDATES)
-    for name in names:
-        key = name.replace("BrowserType.", "")
-        if key in allowed or name in allowed:
-            return key
-        if not allowed:
-            return name
-    return names[0]
+    return fingerprint(preferred)
 
 
 def build_headers(

@@ -114,3 +114,21 @@ def request(
             )
             raise CloudflareError(resp.status_code, url, hdrs.get("cf-mitigated", ""))
         return resp.status_code, resp.content, hdrs
+
+
+def fetch_asset(url: str, timeout: float = 8.0) -> tuple[int, bytes]:
+    """GET a public image with the same fingerprint as the HLTV session."""
+    from curl_cffi.requests import Session
+
+    from hltv_bot.profile import build_headers
+    from hltv_bot.session import session_fingerprint
+
+    headers = build_headers(
+        accept="image/avif,image/webp,image/png,image/svg+xml,image/*,*/*;q=0.8",
+        fetch_dest="image",
+        fetch_mode="no-cors",
+        fetch_site="cross-site",
+    )
+    with Session(impersonate=session_fingerprint()) as client:
+        resp = client.get(url, headers=headers, timeout=timeout)
+    return int(resp.status_code), resp.content or b""

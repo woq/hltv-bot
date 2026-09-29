@@ -363,8 +363,11 @@ def test_scorebot_base_picks_last_url():
 
 
 def test_pick_impersonate_returns_string():
-    name = pick_impersonate("chrome131")
-    assert isinstance(name, str) and name.startswith("chrome")
+    from hltv_bot.profile import FINGERPRINT, fingerprint
+
+    assert pick_impersonate("chrome131") == "chrome131"
+    assert fingerprint(None) == FINGERPRINT
+    assert fingerprint("") == FINGERPRINT
 
 
 def test_format_kv_table_standard_html():

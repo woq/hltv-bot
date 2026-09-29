@@ -8,7 +8,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from hltv_bot.profile import DEFAULT_UA, build_headers, pick_impersonate
+from hltv_bot.profile import DEFAULT_UA, build_headers, fingerprint
 
 # Scorebot Set-Cookie 只轮换这些；其它（OptanonConsent 等）保留 Chrome 粘贴原样。
 _ROTATE_COOKIE_KEYS = frozenset(("io", "_cfuvid", "__cflb", "cf_clearance", "__cf_bm"))
@@ -295,6 +295,18 @@ def parse_cookie_line(raw: str) -> str:
     return text
 
 
+def session_fingerprint(path: str | Path | None = None) -> str:
+    """Same fingerprint `load_session` stores on the browser session."""
+    file = Path(path or os.environ.get("HLTV_SESSION") or "data/session.json")
+    preferred = None
+    if file.is_file():
+        try:
+            preferred = json.loads(file.read_text(encoding="utf-8")).get("impersonate")
+        except (OSError, json.JSONDecodeError):
+            preferred = None
+    return fingerprint(preferred)
+
+
 def load_session(path: str | Path) -> BrowserSession:
     p = Path(path)
     data = json.loads(p.read_text(encoding="utf-8"))
@@ -308,7 +320,7 @@ def load_session(path: str | Path) -> BrowserSession:
         dnt=str(data.get("dnt") or "1"),
     )
     return BrowserSession(
-        impersonate=pick_impersonate(data.get("impersonate")),
+        impersonate=fingerprint(data.get("impersonate")),
         headers=headers,
         cookie=cookie,
         path=p,
