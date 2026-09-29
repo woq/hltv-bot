@@ -63,7 +63,7 @@ HELP = """\
 • <code>/matches</code> — 比赛列表（<code>t2</code> / <code>t3</code> / <code>all</code> / <code>text</code>）
 • <code>/events</code> — Major / T1 赛事
 
-比分只看赛程总页。进入 Live 时 0:0 只发一次，当作预告。同一张图里两边的回合分只会变大。一张图结束是 Map winner，整场结束是 Match winner。地图按顺序排，赢的图后面是战队图标。新的一条会删掉这场上一条。
+比分只看赛程总页。进入 Live 时 0:0 只发一次，当作预告。同一张图里两边的回合分只会变大。一张图结束是 Map winner，整场结束是 Match winner。地图按顺序排，赢的图后面是战队图标。同一场比分改原来那条。
 
 一个比赛日是 UTC+8 早上 10:00 到次日 10:00，跨过凌晨，用来装国外晚上的比赛。赛程每天两次：10:00 看这一整日，20:00 看这一日里还没开的，含次日凌晨。不按比赛自己的开赛钟点。
 
@@ -937,8 +937,24 @@ class HltvTelegramBot:
             ids.update(int(item) for item in cfg.score_multi)
         return sorted(ids)
 
+    def _send_score(self, gid: int, png: bytes | None, caption: str, *, silent: bool, previous: int | None):
+        from hltv_bot.telegram_api import is_not_modified
+
+        if previous:
+            try:
+                if png:
+                    return self.tg.edit_message_media(gid, previous, png, caption=caption)
+                return self.tg.edit_message(gid, previous, caption)
+            except Exception as exc:
+                if is_not_modified(exc):
+                    return {"message_id": previous}
+                log.info("score edit chat=%s msg=%s failed, send new", gid, previous)
+        if png:
+            return self.tg.send_photo(gid, png, caption=caption, filename="hltv.png", silent=silent)
+        return self.tg.send_message(gid, caption, silent=silent)
+
     def _broadcast_score(self, note) -> None:
-        """One live card per match. The new photo replaces the previous one."""
+        """One live card per match. Later scores edit that message."""
         ids = self._score_recipients(getattr(note, "lane", "") or "")
         caption = note.html if hasattr(note, "html") else str(note)
         if not ids:
@@ -961,10 +977,13 @@ class HltvTelegramBot:
         for gid in ids:
             previous = slot.get(str(gid))
             try:
-                if png:
-                    msg = self.tg.send_photo(gid, png, caption=caption, filename="hltv.png", silent=silent)
-                else:
-                    msg = self.tg.send_message(gid, caption, silent=silent)
+                msg = self._send_score(
+                    gid,
+                    png,
+                    caption,
+                    silent=silent,
+                    previous=int(previous) if previous else None,
+                )
             except Exception:
                 log.exception("score chat=%s", gid)
                 continue
@@ -972,11 +991,6 @@ class HltvTelegramBot:
             if message_id is None:
                 continue
             slot[str(gid)] = int(message_id)
-            if previous and int(previous) != int(message_id):
-                try:
-                    self.tg.delete_message(gid, int(previous))
-                except Exception:
-                    log.debug("score delete chat=%s msg=%s failed", gid, previous)
         if mid:
             with self._state_lock:
                 book = dict(self._state.get("score_msgs") or {})

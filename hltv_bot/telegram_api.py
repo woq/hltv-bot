@@ -238,6 +238,77 @@ class Telegram:
             return result
         raise RuntimeError(f"telegram sendPhoto rate limited: {last_err}")
 
+    def edit_message_media(
+        self,
+        chat_id: int | str,
+        message_id: int,
+        photo_bytes: bytes,
+        *,
+        caption: str = "",
+        filename: str = "hltv.png",
+    ) -> dict:
+        """Replace the photo and caption of a message this bot already sent."""
+        import uuid
+
+        boundary = f"----WebKitFormBoundary{uuid.uuid4().hex}"
+        media = json.dumps(
+            {
+                "type": "photo",
+                "media": "attach://photo",
+                "caption": caption[:1024],
+                "parse_mode": "HTML",
+            },
+            ensure_ascii=False,
+        )
+        body_parts: list[bytes] = []
+        fields = {
+            "chat_id": str(chat_id),
+            "message_id": str(message_id),
+            "media": media,
+        }
+        for key, value in fields.items():
+            body_parts.append(
+                f"--{boundary}\r\nContent-Disposition: form-data; name=\"{key}\"\r\n\r\n{value}\r\n".encode("utf-8")
+            )
+        body_parts.append(
+            f"--{boundary}\r\nContent-Disposition: form-data; name=\"photo\"; filename=\"{filename}\"\r\n"
+            f"Content-Type: image/png\r\n\r\n".encode("utf-8")
+            + photo_bytes
+            + b"\r\n"
+        )
+        body_parts.append(f"--{boundary}--\r\n".encode("utf-8"))
+        data = b"".join(body_parts)
+        log.debug("tg editMessageMedia chat=%s msg=%s photo_len=%s", chat_id, message_id, len(photo_bytes))
+        last_err: Exception | None = None
+        for attempt in range(2):
+            req = Request(
+                f"{self.base}/editMessageMedia",
+                data=data,
+                headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+                method="POST",
+            )
+            try:
+                with urlopen(req, timeout=self.timeout) as resp:
+                    raw_body = resp.read().decode("utf-8")
+                    body = json.loads(raw_body)
+            except HTTPError as e:
+                raw = e.read().decode("utf-8", "replace")
+                log.warning("tg editMessageMedia HTTP %s attempt=%s body=%s", e.code, attempt, clip(raw, 400))
+                if is_not_modified(RuntimeError(raw)):
+                    return {"message_id": int(message_id)}
+                if e.code == 429:
+                    time.sleep(retry_after_seconds(raw))
+                    last_err = e
+                    continue
+                raise RuntimeError(f"telegram editMessageMedia HTTP {e.code}: {raw[:200]}") from e
+            if not body.get("ok"):
+                if is_not_modified(RuntimeError(str(body))):
+                    return {"message_id": int(message_id)}
+                raise RuntimeError(f"telegram editMessageMedia failed: {body}")
+            result = body.get("result")
+            return result if isinstance(result, dict) else {"message_id": int(message_id)}
+        raise RuntimeError(f"telegram editMessageMedia rate limited: {last_err}")
+
     def edit_message(self, chat_id: int | str, message_id: int, text: str) -> dict:
         return self._call(
             "editMessageText",

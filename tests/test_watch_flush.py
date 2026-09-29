@@ -8,6 +8,7 @@ class Tg:
     def __init__(self):
         self.sent = []
         self.deleted = []
+        self.edited = []
 
     def send_message(self, chat_id, text, silent=False):
         self.sent.append((chat_id, text, silent))
@@ -16,6 +17,14 @@ class Tg:
     def send_photo(self, chat_id, photo, caption="", filename="hltv.png", silent=False):
         self.sent.append((chat_id, caption, silent))
         return {"message_id": 7}
+
+    def edit_message_media(self, chat_id, message_id, photo, caption="", filename="hltv.png"):
+        self.edited.append((chat_id, message_id, caption))
+        return {"message_id": message_id}
+
+    def edit_message(self, chat_id, message_id, text):
+        self.edited.append((chat_id, message_id, text))
+        return {"message_id": message_id}
 
     def delete_message(self, chat_id, message_id):
         self.deleted.append(message_id)
@@ -74,7 +83,9 @@ def test_score_push_stays_in_the_chat_that_enabled_it_and_replaces_the_previous(
     assert [item[0] for item in tg.sent] == [-100]
     second = Notice("m:9:score:12-10|bo3", "<b>比分</b>", {"view": "match"}, "9", "multi")
     bot._broadcast(second)
-    assert tg.deleted == [21]
+    assert tg.deleted == []
+    assert tg.edited == [(-100, 21, "<b>比分</b>")]
+    assert [item[0] for item in tg.sent] == [-100]
     single = Notice("m:9:score:12-11|bo3", "<b>比分</b>", {"view": "match"}, "9", "single")
     tg.sent.clear()
     bot._broadcast(single)
