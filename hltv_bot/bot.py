@@ -88,7 +88,7 @@ HELP = """\
 • <code>/ignore 比赛id</code> — 这一场不推
 • <code>/unignore 比赛id</code> — 恢复这场
 • <code>/watch</code> — 加入多场（Major/T1 和 /cover）。不带参数就是加入
-• <code>/stop</code> — 关闭本群比分
+• <code>/stop</code> — 关闭比分、赛程和赛事提醒
 • <code>/follow off</code> — 关闭单场
 • <code>/track</code> — 打开赛程和赛事提醒
 • <code>/untrack</code> — 关闭赛程和赛事提醒
@@ -736,7 +736,7 @@ class HltvTelegramBot:
         self._reply(chat_id, "已恢复 " + " ".join(f"<code>{h(mid)}</code>" for mid in ids) + "\n下一次比分变化才会推")
 
     def _cmd_stop_watch(self, chat_id: int) -> None:
-        self._write_score_chats(chat_id, multi=False, single=False)
+        self._write_settings({"score_multi": [], "score_single": [], "event_watch": False})
         self._kick()
         self._reply(chat_id, "已关闭")
 

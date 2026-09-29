@@ -361,9 +361,13 @@ def test_ignore_stop_and_watch_commands(tmp_path, monkeypatch):
     )
     bot.handle_text(1, "/ignore 2396932", user_id=DEFAULT_ADMIN_ID)
     assert "2396932" in bot._cfg().ignored
+    bot.handle_text(1, "/follow", user_id=DEFAULT_ADMIN_ID)
+    bot._cool._last.clear()
     bot.handle_text(1, "/stop", user_id=DEFAULT_ADMIN_ID)
     assert bot._cfg().watch is False
     assert bot._cfg().score_multi == frozenset()
+    assert bot._cfg().score_single == frozenset()
+    assert bot._cfg().event_watch is False
     bot.handle_text(1, "/watch", user_id=DEFAULT_ADMIN_ID)
     assert bot._cfg().watch is True
     assert bot._cfg().score_multi == frozenset({"1"})

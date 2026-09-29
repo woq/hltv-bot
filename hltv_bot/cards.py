@@ -627,7 +627,7 @@ def _guide_html(card: dict, height: int, width: int) -> str:
         ("比赛日", f"UTC+8 {morning:02d}:00 到次日 {morning:02d}:00，含国外晚上打到凌晨的比赛。"),
         ("赛程", f"每天 {morning:02d}:00 发整日，{evening:02d}:00 发还没开的，含次日凌晨。"),
         ("补充", "/follow 单场。/cover 整赛事，每个比赛日都算。/ignore 摘掉一场。"),
-        ("开关", "/watch 加入多场。/follow 加入单场。不带参数就是加入本群。/stop 关闭。"),
+        ("开关", "/watch 加入多场。/follow 加入单场。不带参数就是加入本群。/stop 全部关闭。"),
         ("赛事", "Major / Tier 1：进入窗口、剩 1 天、最后几小时。/track 打开。/window 7 6 可改。"),
     ]
     bits = [

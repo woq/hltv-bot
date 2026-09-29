@@ -94,7 +94,7 @@ python3 -m hltv_bot bot
 | `/groups` | 通知群 |
 | `/ignore 比赛id` | 这场不再推比分 |
 | `/unignore 比赛id` | 恢复这场。不补发当前比分 |
-| `/stop` | 暂停全部比分推送。赛事提醒还在 |
+| `/stop` | 关闭全部比分、赛程和赛事提醒 |
 | `/watch` | 恢复比分推送 |
 | `/allow` | 把本群加入通知 |
 | `/deny` | 移出通知 |
