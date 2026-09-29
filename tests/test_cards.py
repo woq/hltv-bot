@@ -79,9 +79,10 @@ def test_winner_card_puts_name_then_score_and_map_logos():
         "map_rows": card["map_rows"],
     }
     live_html = _match_html(live, 520, 520)
-    assert "name ct" in live_html and "name t" in live_html
-    assert "赛程页不标这一半" in live_html
-    assert ">CT<" in live_html and ">T<" in live_html
+    assert "赛程页不标这一半" not in live_html
+    assert "Counter-Terrorist" not in live_html
+    assert "Terrorist" not in live_html
+    assert "name ct" not in live_html and "name t" not in live_html
 
 
 def test_matches_card_html_and_render():

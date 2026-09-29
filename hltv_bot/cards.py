@@ -41,6 +41,7 @@ html, body {
 .tlogo-ph, .elogo-ph { display: inline-block; background: #3a3833; }
 .name {
   flex: 1;
+  min-width: 0;
   font-size: 28px;
   line-height: 1;
   font-weight: 700;
@@ -49,16 +50,6 @@ html, body {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.name.ct { color: #8eb7ff; }
-.name.t { color: #f0b15a; }
-.side {
-  margin-left: 8px;
-  font-size: 13px;
-  letter-spacing: 0.16em;
-  font-weight: 700;
-}
-.side.ct { color: #8eb7ff; }
-.side.t { color: #f0b15a; }
 .hero { margin-top: 18px; display: flex; align-items: center; }
 .hero .name { font-size: 34px; }
 .hero-score {
@@ -69,8 +60,7 @@ html, body {
   letter-spacing: 0.06em;
   font-weight: 700;
 }
-.hero-score .ct { color: #8eb7ff; }
-.hero-score .t { color: #f0b15a; }
+.hero-score .num { color: #f6f3ee; }
 .hero-score .dash { color: #9a948a; padding: 0 10px; }
 .opp { margin-top: 8px; font-size: 16px; color: #e4ddd2; font-weight: 600; }
 .mapline { margin-top: 14px; }
@@ -86,9 +76,6 @@ html, body {
 .mp.now { color: #e8ff5a; }
 .mplogo, .mplogo-ph { width: 16px; height: 16px; margin-left: 6px; object-fit: contain; }
 .mplogo-ph { display: none; }
-.side-note { margin-top: 10px; font-size: 13px; letter-spacing: 0.04em; color: #d2ccc2; font-weight: 600; }
-.side-note .ct { color: #8eb7ff; font-weight: 700; }
-.side-note .t { color: #f0b15a; font-weight: 700; }
 .sc {
   width: 52px;
   text-align: right;
@@ -454,20 +441,14 @@ def _team_row(
     *,
     team_id: str = "",
     limit: int = CARD_NAME_UNITS,
-    side: str = "",
-    tone: str = "",
 ) -> str:
     from hltv_bot.matches import short_team
 
     mark = _e(score) if score else "–"
-    color = tone if tone in {"ct", "t"} else ""
-    word = side if side in {"ct", "t"} else ""
-    shown = "CT" if word == "ct" else "T" if word == "t" else ""
-    label = f"<span class='side {word}'>{shown}</span>" if shown else ""
     return (
         "<div class='trow'>"
         + _img(_team_logo_uri(team_id, logo), "tlogo")
-        + f"<div class='name {color}'>{_e(short_team(name, limit))}{label}</div>"
+        + f"<div class='name'>{_e(short_team(name, limit))}</div>"
         + f"<div class='sc {accent}'>{mark}</div>"
         + "</div>"
     )
@@ -513,7 +494,7 @@ def _winner_block(card: dict) -> str:
         bits.append(f"<div class='opp'>{_e(card.get('team2') or '?')}</div>")
     bits.append(
         "<div class='hero-score'>"
-        + f"<span class='ct'>{_e(left)}</span><span class='dash'>–</span><span class='t'>{_e(right)}</span>"
+        + f"<span class='num'>{_e(left)}</span><span class='dash'>–</span><span class='num'>{_e(right)}</span>"
         + "</div>"
     )
     if other:
@@ -525,19 +506,6 @@ def _winner_block(card: dict) -> str:
     return "".join(bits)
 
 
-def _slot_side(card: dict, key: str, fallback: str) -> tuple[str, str]:
-    raw = str(card.get(key) or "")
-    if raw in {"ct", "t"}:
-        return raw, raw
-    return fallback, ""
-
-
-def _side_note(card: dict) -> str:
-    if str(card.get("side1") or "") in {"ct", "t"} or str(card.get("side2") or "") in {"ct", "t"}:
-        return ""
-    return "<div class='side-note'><span class='ct'>CT</span> 蓝 · <span class='t'>T</span> 橙 · 赛程页不标这一半</div>"
-
-
 def _match_html(card: dict, height: int, width: int) -> str:
     kind = card.get("kind") or "score"
     accent = {"preview": "live", "final": "final", "soon": "soon"}.get(kind, "")
@@ -547,8 +515,6 @@ def _match_html(card: dict, height: int, width: int) -> str:
     if kind in {"map", "match"}:
         head = _winner_block(card)
     else:
-        tone1, word1 = _slot_side(card, "side1", "ct")
-        tone2, word2 = _slot_side(card, "side2", "t")
         head = (
             f"<div class='kicker'>{_e(card.get('label'))}</div>"
             + _team_row(
@@ -557,8 +523,6 @@ def _match_html(card: dict, height: int, width: int) -> str:
                 card.get("logo1") or "",
                 accent,
                 team_id=str(card.get("team1_id") or ""),
-                side=word1,
-                tone=tone1,
             )
             + _team_row(
                 card.get("team2") or "?",
@@ -566,11 +530,8 @@ def _match_html(card: dict, height: int, width: int) -> str:
                 card.get("logo2") or "",
                 accent,
                 team_id=str(card.get("team2_id") or ""),
-                side=word2,
-                tone=tone2,
             )
             + _map_strip(list(card.get("map_rows") or []))
-            + _side_note(card)
         )
     bits = [
         head,

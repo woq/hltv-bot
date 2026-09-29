@@ -437,8 +437,6 @@ def _match_caption(card: dict, row: dict) -> str:
     note = _map_caption(list(card.get("map_rows") or []))
     if note:
         lines.append(h(note))
-    if kind in {"preview", "score"}:
-        lines.append("CT 蓝，T 橙。赛程页不标这一半。")
     event = (card.get("event") or "").strip()
     if event:
         lines.append(f"<b>{h(tier_label(classify_tier(event)))}</b>")
