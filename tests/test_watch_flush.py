@@ -113,7 +113,13 @@ def test_events_list_and_daily_digest_are_not_deleted(monkeypatch):
     monkeypatch.setattr("hltv_bot.bot.filter_and_sort_events", lambda rows, allowed_tiers=(): rows)
     monkeypatch.setattr("hltv_bot.cards.render_card", lambda card: b"png")
     bot.handle_text(1, "/events", user_id=1, message_id=9)
-    assert timers == []
+    bot.handle_text(1, "/status", user_id=2, message_id=4)
+    assert [item[0] for item in timers] == [MSG_TTL, MSG_TTL, MSG_TTL]
+    for item in timers:
+        item[1]()
+    assert tg.deleted == [9, 4, 7]
+    timers.clear()
+    tg.deleted.clear()
     assert tg.sent
 
     monkeypatch.setattr("hltv_bot.bot.group_ids", lambda: [5])

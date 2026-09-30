@@ -306,6 +306,8 @@ class HltvTelegramBot:
             if self.is_admin(user_id):
                 self._apply_cookie(chat_id, text, message_id=message_id)
             return
+        if cmd.startswith("/") and message_id is not None and self.can_delete_in_chat(chat_id):
+            self._schedule_delete(chat_id, int(message_id))
         if cmd in {"/allow", "/deny"}:
             if not self.can_setup_chat(chat_id, user_id, chat_type):
                 self._reply(chat_id, f"无权限授权本群\n你的 id: <code>{user_id}</code>\nchat: <code>{chat_id}</code>")
@@ -316,13 +318,6 @@ class HltvTelegramBot:
             return
         if cmd not in ADMIN_CMDS | {"/start", "/help", "/hltv"} and not listed and not self.is_admin(user_id):
             return
-        if (
-            cmd.startswith("/")
-            and cmd not in {"/events", "/event"}
-            and message_id is not None
-            and self.can_delete_in_chat(chat_id)
-        ):
-            self._schedule_delete(chat_id, int(message_id))
         if cmd.startswith("/") and user_id is not None:
             interval = CMD_COOLDOWN.get(cmd, DEFAULT_CMD_COOLDOWN)
             key = f"{user_id}:{cmd}"
