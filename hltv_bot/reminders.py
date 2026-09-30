@@ -147,10 +147,125 @@ def _won_pair(row: dict) -> tuple[int, int] | None:
     return None
 
 
+def _forward_pair(old: tuple[int, int] | None, new: tuple[int, int] | None) -> tuple[int, int] | None:
+    """Keep the previous pair when either side of the new reading is lower."""
+    if new is None:
+        return old
+    if old is None:
+        return new
+    if new[0] >= old[0] and new[1] >= old[1]:
+        return new
+    return old
+
+
+def _parse_round_list(raw: str) -> list[tuple[int, int] | None]:
+    items: list[tuple[int, int] | None] = []
+    for part in str(raw or "").split(","):
+        text = part.strip()
+        items.append(_pair(text) if text else None)
+    return items
+
+
+def _format_round_list(items: list[tuple[int, int] | None]) -> str:
+    return ",".join("" if item is None else f"{item[0]}-{item[1]}" for item in items)
+
+
+def _stored_rounds(old: dict) -> list[tuple[int, int] | None]:
+    if "map_rounds" in old:
+        return _parse_round_list(str(old.get("map_rounds") or ""))
+    pair = _pair(str(old.get("score") or ""))
+    if pair is None:
+        return []
+    raw = str(old.get("map_index") or "")
+    idx = int(raw) if raw.isdigit() else 0
+    items: list[tuple[int, int] | None] = [None] * (idx + 1)
+    items[idx] = pair
+    return items
+
+
+def _map_slot(won: tuple[int, int], rounds: tuple[int, int] | None, n_maps: int) -> int:
+    from hltv_bot.matches import map_is_over
+
+    played = won[0] + won[1]
+    finished = rounds is not None and map_is_over(*rounds)
+    idx = played - 1 if finished and played > 0 else played
+    if idx < 0:
+        idx = 0
+    if n_maps and idx >= n_maps:
+        idx = n_maps - 1
+    return idx
+
+
+def _low_reset(previous: tuple[int, int] | None, incoming: tuple[int, int]) -> bool:
+    from hltv_bot.matches import map_is_over
+
+    if previous is None or not map_is_over(*previous):
+        return False
+    return max(incoming) <= 5 and (incoming[0] < previous[0] or incoming[1] < previous[1])
+
+
+def cache_match_score(old: dict, row: dict) -> dict:
+    """Remember series wins and each map's rounds. A later reading can only add.
+
+    The matches list sometimes omits ``maps-won`` or repeats an older round
+    score. A lower number stays on the shelf. A finished map followed by a
+    single-digit score is the next map, not a rewrite of the one that ended.
+    """
+    from hltv_bot.matches import map_is_over
+
+    view = dict(row)
+    n_maps = len(_map_names(row) or _map_names(old))
+    stored = _stored_rounds(old)
+    old_won = _won_pair(old)
+    won = _forward_pair(old_won, _won_pair(row))
+    incoming = _pair(score_text(row))
+    if incoming is not None:
+        won_now = won if won is not None else (0, 0)
+        grew = (
+            old_won is not None
+            and won is not None
+            and won[0] >= old_won[0]
+            and won[1] >= old_won[1]
+            and (won[0] + won[1]) > (old_won[0] + old_won[1])
+        )
+        slot = _map_slot(won_now, incoming, n_maps)
+        while len(stored) <= slot:
+            stored.append(None)
+        if stored[slot] is not None and _low_reset(stored[slot], incoming) and not grew:
+            previous = stored[slot]
+            if previous is not None and previous[0] != previous[1] and (won_now[0] + won_now[1]) <= slot:
+                bumped = [won_now[0], won_now[1]]
+                bumped[0 if previous[0] > previous[1] else 1] += 1
+                won = (bumped[0], bumped[1])
+                won_now = won
+            slot = _map_slot(won_now, incoming, n_maps)
+            while len(stored) <= slot:
+                stored.append(None)
+        stored[slot] = _forward_pair(stored[slot], incoming)
+        pair = stored[slot]
+        if pair is not None and map_is_over(*pair) and pair[0] != pair[1]:
+            base = won if won is not None else (0, 0)
+            if base[0] + base[1] <= slot:
+                side = 0 if pair[0] > pair[1] else 1
+                won = (base[0] + int(side == 0), base[1] + int(side == 1))
+    shown = next((i for i in range(len(stored) - 1, -1, -1) if stored[i] is not None), None)
+    if shown is not None and stored[shown] is not None:
+        left, right = stored[shown]
+        view["score1"] = str(left)
+        view["score2"] = str(right)
+        view["map_index"] = str(shown)
+    if won is not None:
+        view["won1"] = str(won[0])
+        view["won2"] = str(won[1])
+    view["map_rounds"] = _format_round_list(stored)
+    return view
+
+
 def accept_round_score(old: dict, row: dict) -> bool:
     """On one map each side can only stay or go up.
 
-    A new map is a series-win change, or a finished map resetting to a low score.
+    A new map is a series that gained a win without either side losing one,
+    or a finished map resetting to a low score. A lower series tally is noise.
     """
     from hltv_bot.matches import map_is_over
 
@@ -162,7 +277,13 @@ def accept_round_score(old: dict, row: dict) -> bool:
         return True
     old_won = _won_pair(old)
     new_won = _won_pair(row)
-    if old_won is not None and new_won is not None and new_won != old_won:
+    if (
+        old_won is not None
+        and new_won is not None
+        and new_won[0] >= old_won[0]
+        and new_won[1] >= old_won[1]
+        and new_won != old_won
+    ):
         return True
     if map_is_over(*old_score) and max(new) <= 5 and (new[0] < old_score[0] or new[1] < old_score[1]):
         return True
@@ -597,6 +718,7 @@ def _snapshot_match(
         "map_index": row.get("map_index") or "",
         "won1": row.get("won1") or "",
         "won2": row.get("won2") or "",
+        "map_rounds": row.get("map_rounds") or "",
         "map_winners": map_winners,
         "match_sent": bool(match_sent),
         "sig": feed_sig(row),
@@ -890,6 +1012,7 @@ def plan_reminders(
                 mid = str(row.get("id") or "")
                 if not mid:
                     continue
+                row = cache_match_score({}, row)
                 live = row.get("live") == "1"
                 score = score_text(row)
                 winners = merge_map_winners({}, row, _pair(score))
@@ -920,6 +1043,7 @@ def plan_reminders(
                 seen.add(mid)
                 known = mid in prev
                 old = prev.get(mid) or {}
+                row = cache_match_score(old, row)
                 live = row.get("live") == "1"
                 score = score_text(row)
                 old_score = str(old.get("score") or "")

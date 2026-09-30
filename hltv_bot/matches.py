@@ -449,6 +449,38 @@ _TEAM_LINE = re.compile(r'class="[^"]*match-teamname[^"]*"[^>]*>\s*([^<]+)', re.
 _CURRENT_MAP_SCORE = re.compile(r'data-livescore-current-map-score="(\d+)"', re.I)
 _MAP_POOL = re.compile(r'data-maps="([^"]*)"', re.I)
 _WON_TEXT = re.compile(r'data-livescore-maps-won-for="[^"]*"[^>]*>\s*(\d+)', re.I)
+_LIVE_TEAM = re.compile(r'data-livescore-team="(\d+)"', re.I)
+
+
+def _livescore_slots(chunk: str, rx: re.Pattern[str]) -> list[tuple[str, str]]:
+    """(team slot, number) in document order. Slot is ``1`` / ``2`` when present."""
+    found: list[tuple[str, str]] = []
+    for match in rx.finditer(chunk):
+        start = chunk.rfind("<", 0, match.start())
+        end = chunk.find(">", match.start())
+        if start < 0:
+            start = match.start()
+        if end < 0:
+            end = match.end()
+        else:
+            end += 1
+        tag = chunk[start:end]
+        slot_m = _LIVE_TEAM.search(tag)
+        found.append((slot_m.group(1) if slot_m else "", match.group(1)))
+    return found
+
+
+def _pair_by_slot(pairs: list[tuple[str, str]]) -> tuple[str, str]:
+    """Team 1 then team 2. Without slot attributes, keep document order."""
+    if not pairs:
+        return "", ""
+    by_slot = {slot: value for slot, value in pairs if slot in {"1", "2"}}
+    if "1" in by_slot and "2" in by_slot:
+        return by_slot["1"], by_slot["2"]
+    values = [value for _slot, value in pairs]
+    first = values[0] if values else ""
+    second = values[1] if len(values) > 1 else ""
+    return first, second
 
 
 def _series_index(map_names: list[str], won: list[int], score1: str, score2: str, *, live: bool, fmt: str) -> str:
@@ -517,15 +549,12 @@ def _parse_wrappers(html: str, *, limit: int = 100, exclude_tbd: bool = False) -
         pool = _MAP_POOL.search(chunk)
         map_names = [pretty_name(part.strip()) for part in (pool.group(1).split(",") if pool else []) if part.strip()]
         maps = " · ".join(map_names)
-        won_nums = [int(part) for part in _WON_TEXT.findall(chunk)]
-        scores = _CURRENT_MAP_SCORE.findall(chunk)
-        if len(scores) < 2:
-            scores = list(_team_scores(chunk))
-        score1 = scores[0] if scores else ""
-        score2 = scores[1] if len(scores) > 1 else ""
+        won1, won2 = _pair_by_slot(_livescore_slots(chunk, _WON_TEXT))
+        score1, score2 = _pair_by_slot(_livescore_slots(chunk, _CURRENT_MAP_SCORE))
+        if not score1 and not score2:
+            score1, score2 = _team_scores(chunk)
+        won_nums = [int(won1), int(won2)] if won1.isdigit() and won2.isdigit() else []
         map_index = _series_index(map_names, won_nums, score1, score2, live=live, fmt=fmt)
-        won1 = str(won_nums[0]) if won_nums else ""
-        won2 = str(won_nums[1]) if len(won_nums) > 1 else ""
         stars_m = re.search(r'data-stars="(\d)"', head)
         stars = int(stars_m.group(1)) if stars_m else _stars_in(chunk)
         unix_m = DATA_UNIX.search(chunk)

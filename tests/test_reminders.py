@@ -162,6 +162,77 @@ def test_same_map_score_only_moves_forward():
     assert notes == []
 
 
+def test_series_and_map_rounds_never_shrink():
+    now = datetime(2026, 9, 24, 18, 0, tzinfo=CST)
+    done = _match(
+        live="1",
+        score1="13",
+        score2="11",
+        format="bo3",
+        maps="Ancient · Nuke · Inferno",
+        map_index="0",
+        won1="1",
+        won2="0",
+    )
+    state, _ = plan_reminders(empty_state(), [done], None, now=now)
+    dipped = {**done, "score1": "4", "score2": "2", "won1": "0", "won2": "0", "map_index": "0"}
+    state, notes = plan_reminders(state, [dipped], None, now=now)
+    saved = state["matches"]["1"]
+    assert saved["won1"] == "1" and saved["won2"] == "0"
+    assert saved["score"] == "4-2"
+    assert saved["map_index"] == "1"
+    assert saved["map_rounds"] == "13-11,4-2"
+    assert notes[0].card["label"] == "比分"
+    state, notes = plan_reminders(
+        state,
+        [{**dipped, "score1": "3", "score2": "1", "won1": "1", "won2": "0"}],
+        None,
+        now=now,
+    )
+    assert notes == []
+    assert state["matches"]["1"]["score"] == "4-2"
+    assert state["matches"]["1"]["map_rounds"] == "13-11,4-2"
+    state, notes = plan_reminders(
+        state,
+        [{**done, "score1": "4", "score2": "3", "won1": "", "won2": "", "map_index": "0"}],
+        None,
+        now=now,
+    )
+    assert state["matches"]["1"]["won1"] == "1"
+    assert state["matches"]["1"]["score"] == "4-3"
+    assert notes[0].card["map_rows"][0]["winner"] == 1
+    assert notes[0].card["map_rows"][1]["current"] is True
+
+
+def test_missing_series_tally_still_opens_the_next_map():
+    now = datetime(2026, 9, 24, 18, 0, tzinfo=CST)
+    finished = _match(
+        live="1",
+        score1="13",
+        score2="5",
+        format="bo3",
+        maps="Ancient · Nuke",
+        map_index="0",
+        won1="",
+        won2="",
+    )
+    state, _ = plan_reminders(empty_state(), [finished], None, now=now)
+    state, notes = plan_reminders(
+        state,
+        [{**finished, "score1": "2", "score2": "0"}],
+        None,
+        now=now,
+    )
+    saved = state["matches"]["1"]
+    assert saved["won1"] == "1" and saved["won2"] == "0"
+    assert saved["score"] == "2-0"
+    assert saved["map_index"] == "1"
+    assert saved["map_rounds"] == "13-5,2-0"
+    assert notes[0].card["label"] == "比分"
+    assert notes[0].card["map_rows"][0]["winner"] == 1
+    assert notes[0].card["map_rows"][1]["current"] is True
+
+
 def test_low_star_or_non_tier_match_is_ignored():
     now = datetime(2026, 9, 24, 18, 0, tzinfo=CST)
     state, _ = plan_reminders(empty_state(), [_match(stars="0", live="1")], None, now=now)

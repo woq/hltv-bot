@@ -77,6 +77,27 @@ def test_list_row_names_the_map_from_series_wins():
     assert live["score1"] == "2"
 
 
+def test_livescore_follows_team_slot_not_document_order():
+    html = """
+    <div class="match-wrapper live-match-container" data-match-id="9" live="true">
+      <a href="/matches/9/a-vs-b-cup">
+        <div class="match-meta">bo3</div>
+        <div class="match-teamname">A</div>
+        <div class="match-teamname">B</div>
+        <span data-livescore-current-map-score="4" data-livescore-team="2"></span>
+        <span data-livescore-maps-won-for="" data-livescore-team="2">0</span>
+        <span data-livescore-current-map-score="11" data-livescore-team="1"></span>
+        <span data-livescore-maps-won-for="" data-livescore-team="1">1</span>
+      </a>
+    </div>
+    """
+    row = parse_match_list(html, limit=0)[0]
+    assert row["score1"] == "11"
+    assert row["score2"] == "4"
+    assert row["won1"] == "1"
+    assert row["won2"] == "0"
+
+
 def test_series_maps_lead_with_the_current_one():
     from hltv_bot.matches import map_order
 
