@@ -1,6 +1,29 @@
 from hltv_bot.cards import _events_html, _matches_html, render_card
 
 
+def test_event_card_is_title_then_countdown():
+    from hltv_bot.cards import _event_html
+
+    html = _event_html(
+        {
+            "view": "event",
+            "tier": "T1",
+            "name": "ESL Pro League Season 24",
+            "flag": "🇩🇪",
+            "location": "Cologne",
+            "clock": "10-03 18:00",
+            "remain": "还有 1 天 9 小时",
+        },
+        420,
+        520,
+    )
+    assert html.index("ESL Pro League Season 24") < html.index("还有 1 天 9 小时") < html.index("class='foot'")
+    assert "10-03 18:00" in html[html.index("class='foot'"):]
+    assert "Cologne" in html[html.index("class='foot'"):]
+    assert "Tier" not in html
+    assert ">赛事<" not in html
+
+
 def test_guide_card_explains_usage():
     from hltv_bot.cards import _guide_html
 

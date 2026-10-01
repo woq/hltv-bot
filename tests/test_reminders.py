@@ -295,12 +295,18 @@ def test_event_bells_at_nine_and_six():
     assert "09" not in (state.get("event_bells") or {}).get("2026-10-02", [])
 
     state, notes = plan_reminders(state, None, [far, ev, t2], now=morning, cfg=cfg)
-    assert [n.key for n in notes] == ["e:8244:2026-10-01:18", "e:8244:2026-10-02:09"]
-    assert notes[-1].card["view"] == "event"
-    assert "1 天" in notes[-1].html
-    flagged = _event_html({**ev, "country_code": "DE", "location": "Cologne"}, morning, "day")
-    assert "🇩🇪" in flagged
-    assert "Cologne" in flagged
+    assert [n.key for n in notes] == ["e:8244:now"]
+    assert notes[0].admins_only is True
+    assert notes[0].card["view"] == "event"
+    assert "1 天" in notes[0].html
+    assert "Tier" not in notes[0].html
+    assert state["event_bells"]["2026-10-01"] == ["18"]
+    assert state["event_bells"]["2026-10-02"] == ["09"]
+    from hltv_bot.reminders import _event_card
+
+    card = _event_card({**ev, "country_code": "DE", "location": "Cologne"}, morning, "day")
+    assert card["flag"] == "🇩🇪"
+    assert card["location"] == "Cologne"
 
     state, notes = plan_reminders(state, None, [ev], now=morning.replace(hour=12), cfg=cfg)
     assert notes == []
@@ -308,13 +314,15 @@ def test_event_bells_at_nine_and_six():
     evening = datetime(2026, 10, 2, 18, 0, tzinfo=CST)
     state, notes = plan_reminders(state, None, [ev], now=evening, cfg=cfg)
     assert [n.key for n in notes] == ["e:8244:2026-10-02:18"]
+    assert notes[0].admins_only is False
     assert "24 小时" in notes[0].html
 
     early = _ev(id="early", name="IEM Katowice", start_ts=int(datetime(2026, 10, 4, 12, 0, tzinfo=CST).timestamp()))
     at = datetime(2026, 10, 4, 9, 0, tzinfo=CST)
     state, notes = plan_reminders(state, None, [early], now=at, cfg=cfg)
     assert [n.key for n in notes] == ["e:early:2026-10-03:18", "e:early:2026-10-04:09"]
-    assert "最后提醒" in notes[-1].html
+    assert notes[-1].card["final"] is True
+    assert "最后提醒" not in notes[-1].html
     assert state["events"]["early"] == "hours"
 
 
@@ -327,10 +335,14 @@ def test_missed_event_bell_is_sent_later():
     assert notes == []
     late = datetime(2026, 10, 2, 11, 20, tzinfo=CST)
     state, notes = plan_reminders(state, None, [ev], now=late, cfg=cfg)
-    assert [n.key for n in notes] == ["e:8244:2026-10-01:18", "e:8244:2026-10-02:09"]
+    assert [n.key for n in notes] == ["e:8244:now"]
+    assert notes[0].admins_only is True
+    assert state["event_bells"]["2026-10-01"] == ["18"]
+    assert state["event_bells"]["2026-10-02"] == ["09"]
     early = datetime(2026, 10, 3, 8, 10, tzinfo=CST)
     state, notes = plan_reminders(state, None, [ev], now=early, cfg=cfg)
     assert [n.key for n in notes] == ["e:8244:2026-10-02:18"]
+    assert notes[0].admins_only is False
 
 
 def test_poll_is_fast_only_while_live():

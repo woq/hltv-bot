@@ -20,6 +20,7 @@ class Notice:
     card: dict | None = None
     match_id: str = ""
     lane: str = ""
+    admins_only: bool = False
 
 
 @dataclass(frozen=True)
@@ -623,27 +624,13 @@ def event_stage(ev: dict, now: datetime, cfg: RemindConfig) -> str:
 
 
 def _event_html(ev: dict, now: datetime, stage: str) -> str:
+    """Caption under the card: name, countdown, link. The picture holds the rest."""
+    del stage
     hours = _hours_left(ev, now) or 0
-    start_ts = int(ev.get("start_ts") or 0)
-    clock = ""
-    if start_ts:
-        clock = datetime.fromtimestamp(start_ts, CST).strftime("%m-%d %H:%M")
-    tier = classify_tier(str(ev.get("name") or ""))
-    loc = (ev.get("location") or "").strip()
-    flag = country_code_to_emoji(str(ev.get("country_code") or ""))
-    place = " ".join(bit for bit in (flag, h(loc) if loc else "") if bit)
     lines = [
-        "<b>赛事</b>",
-        f"<b>{h(tier_label(tier))}</b>",
         f"<b>{h(ev.get('name') or '')}</b>",
+        h(remain_text(hours)),
     ]
-    if place:
-        lines.append(place)
-    if clock:
-        lines.append(f"<code>{h(clock)}</code> UTC+8")
-    if stage == "hours":
-        lines.append("<b>最后提醒</b>")
-    lines.append(h(remain_text(hours)))
     link = _link(str(ev.get("url") or ""))
     if link:
         lines.append(link)
@@ -896,6 +883,24 @@ def _apply_event_bells(
     slots = due_event_bells(now)
     if not slots:
         return
+    # The first events poll only records stages. Leave these slots open.
+    if seed:
+        return
+    # No bell book yet: this process just learned the clock. Mark the open
+    # slots and show one card to the admins. Do not catch the groups up.
+    if "event_bells" not in base:
+        sent: dict = {}
+        for day, hour in slots:
+            done = {str(x) for x in (sent.get(day) or [])}
+            done.add(hour)
+            sent[day] = sorted(done)
+        base["event_bells"] = sent
+        if cfg.event_watch:
+            for note in current_event_notices(events, now, cfg):
+                notes.append(
+                    Notice(note.key, note.html, note.card, admins_only=True)
+                )
+        return
     sent = dict(base.get("event_bells") or {})
     pending: list[tuple[str, str]] = []
     for day, hour in slots:
@@ -903,9 +908,6 @@ def _apply_event_bells(
         if hour not in done:
             pending.append((day, hour))
     if not pending:
-        return
-    # The first events poll only records stages. Leave these slots open.
-    if seed:
         return
     for day, hour in pending:
         done = {str(x) for x in (sent.get(day) or [])}

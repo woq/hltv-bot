@@ -193,8 +193,34 @@ td.body { padding: 8px 0 8px; border-top: 1px solid #4a463f; }
 .event-solo .event-shade {
   background: linear-gradient(90deg, #141311 0%, #141311 48%, rgba(20,19,17,0) 64%);
 }
-.event-solo .event-copy { padding-right: 156px; min-height: 176px; }
-.event-solo .name { margin-top: 14px; font-size: 26px; line-height: 1.12; white-space: normal; }
+.event-solo .event-copy {
+  display: flex;
+  flex-direction: column;
+  padding-right: 156px;
+  min-height: 176px;
+}
+.event-solo .name {
+  margin-top: 0;
+  font-size: 36px;
+  line-height: 1.05;
+  font-weight: 700;
+  white-space: normal;
+}
+.event-solo .remain {
+  margin-top: 12px;
+  font-size: 22px;
+  line-height: 1.15;
+  font-weight: 600;
+}
+.event-solo .remain.final { font-size: 22px; letter-spacing: 0; }
+.event-solo .foot {
+  margin-top: auto;
+  padding-top: 18px;
+  font-size: 13px;
+  line-height: 1.4;
+  font-weight: 600;
+  color: #9a948a;
+}
 .event-row { min-height: 112px; margin-top: 14px; padding-top: 10px; border-top: 1px solid #4a463f; }
 .event-row .event-bg { width: 92px; height: 92px; right: 0; top: 14px; }
 .event-row .event-shade {
@@ -600,19 +626,18 @@ def _event_html(card: dict, height: int, width: int) -> str:
         "<div class='event-card event-solo'>",
         _event_bg(str(card.get("id") or ""), str(card.get("logo_url") or card.get("logo_small_url") or "")),
         f"<div class='event-copy {_tier_class(_tier_key(str(card.get('tier') or ''), str(card.get('name') or '')))}'>",
-        "<div class='kicker'>赛事</div>",
-        _tier_mark(_tier_key(str(card.get("tier") or ""), str(card.get("name") or ""))),
         f"<div class='name'>{_e(card.get('name'))}</div>",
     ]
+    remain_class = "remain final" if card.get("final") else "remain"
+    bits.append(f"<div class='{remain_class}'>{_e(card.get('remain'))}</div>")
+    foot = []
+    if card.get("clock"):
+        foot.append(_e(card.get("clock")))
     place = " ".join(x for x in (card.get("flag") or "", card.get("location") or "") if x)
     if place:
-        bits.append(f"<div class='place'><span class='flag'>{card.get('flag') or ''}</span> {_e(card.get('location'))}</div>")
-    bits.append("<div class='rule'></div>")
-    if card.get("clock"):
-        bits.append(f"<div class='when'>{_e(card.get('clock'))}   UTC+8</div>")
-    if card.get("final"):
-        bits.append("<div class='remain final'>最后提醒</div>")
-    bits.append(f"<div class='remain'>{_e(card.get('remain'))}</div>")
+        foot.append(f"<span class='flag'>{card.get('flag') or ''}</span> {_e(card.get('location'))}")
+    if foot:
+        bits.append("<div class='foot'>" + "<br>".join(foot) + "</div>")
     bits.append("</div></div>")
     return _page("".join(bits), height, width)
 

@@ -74,7 +74,7 @@ HELP = """\
 
 一个比赛日是 UTC+8 早上 10:00 到次日 10:00，跨过凌晨，用来装国外晚上的比赛。赛程每天两次：10:00 看这一整日，20:00 看这一日里还没开的，含次日凌晨。不按比赛自己的开赛钟点。
 
-赛事只推 Major / T1，开赛前的窗口里每天 <code>09:00</code> 和 <code>18:00</code> 各一次。默认前 7 天到开赛，<code>/window 7 6</code> 改窗口。最后几小时的那次会标成最后提醒。
+赛事只推 Major / T1，每天 <code>09:00</code> 和 <code>18:00</code>。刚启用时的补发只给管理员。之后的钟点进通知群。
 
 <b>补充监控</b>
 • <code>/follow</code> — 本群加入单场。不带参数就是加入。<code>/follow 比赛id</code> 加上这场
@@ -1029,8 +1029,11 @@ class HltvTelegramBot:
             self._broadcast_score(note)
             return
         silent = self._silent()
-        ids = set(group_ids())
-        ids.update(int(aid) for aid in self.admin_ids)
+        if getattr(note, "admins_only", False):
+            ids = {int(aid) for aid in self.admin_ids}
+        else:
+            ids = set(group_ids())
+            ids.update(int(aid) for aid in self.admin_ids)
         ordered = sorted(ids)
         caption = note.html if hasattr(note, "html") else str(note)
         if not ordered:
