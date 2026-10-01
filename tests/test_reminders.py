@@ -280,40 +280,57 @@ def test_bo1_score_note_and_pause():
     assert notes == []
 
 
-def test_event_stages_major_and_t1_only():
-    now = datetime(2026, 9, 24, 12, 0, tzinfo=CST)
+def test_event_bells_at_nine_and_six():
     cfg = RemindConfig(event_days=7, event_hours=6)
-    far = _ev(id="far", name="PGL Major Copenhagen", start_ts=int((now + timedelta(days=20)).timestamp()))
-    days = _ev(id="days", name="BLAST Premier", start_ts=int((now + timedelta(days=3)).timestamp()))
-    day = _ev(id="day", name="IEM Katowice", start_ts=int((now + timedelta(hours=20)).timestamp()))
-    hours = _ev(id="hours", name="ESL Pro League", start_ts=int((now + timedelta(hours=5)).timestamp()))
-    t2 = _ev(id="t2", name="CCT Season", start_ts=int((now + timedelta(days=2)).timestamp()))
-    state, notes = plan_reminders(empty_state(), None, [far, days, day, hours, t2], now=now, cfg=cfg)
+    start = datetime(2026, 10, 3, 18, 0, tzinfo=CST)
+    ev = _ev(id="8244", name="ESL Pro League Season 24", start_ts=int(start.timestamp()))
+    far = _ev(id="far", name="PGL Major Copenhagen", start_ts=int((start + timedelta(days=20)).timestamp()))
+    t2 = _ev(id="t2", name="CCT Season", start_ts=int(start.timestamp()))
+    morning = datetime(2026, 10, 2, 9, 0, tzinfo=CST)
+    state, notes = plan_reminders(empty_state(), None, [far, ev, t2], now=morning, cfg=cfg)
     assert notes == []
+    assert state["events"]["8244"] == "day"
     assert "far" not in state["events"]
     assert "t2" not in state["events"]
-    assert state["events"]["days"] == "days"
-    assert state["events"]["day"] == "day"
-    assert state["events"]["hours"] == "hours"
+    assert "09" not in (state.get("event_bells") or {}).get("2026-10-02", [])
 
-    later = now + timedelta(days=2, hours=12)
-    state, notes = plan_reminders(state, None, [days], now=later, cfg=cfg)
-    assert [n.key for n in notes] == ["e:days:day"]
-    assert notes[0].card["view"] == "event"
-    assert state["events"]["days"] == "day"
-    flagged = _event_html(
-        {**days, "country_code": "DE", "location": "Cologne"},
-        now,
-        "days",
-    )
+    state, notes = plan_reminders(state, None, [far, ev, t2], now=morning, cfg=cfg)
+    assert [n.key for n in notes] == ["e:8244:2026-10-01:18", "e:8244:2026-10-02:09"]
+    assert notes[-1].card["view"] == "event"
+    assert "1 天" in notes[-1].html
+    flagged = _event_html({**ev, "country_code": "DE", "location": "Cologne"}, morning, "day")
     assert "🇩🇪" in flagged
     assert "Cologne" in flagged
 
-    closing = now + timedelta(days=2, hours=20)
-    state, notes = plan_reminders(state, None, [days], now=closing, cfg=cfg)
-    assert [n.key for n in notes] == ["e:days:hours"]
-    assert "最后提醒" in notes[0].html
-    assert state["events"]["days"] == "hours"
+    state, notes = plan_reminders(state, None, [ev], now=morning.replace(hour=12), cfg=cfg)
+    assert notes == []
+
+    evening = datetime(2026, 10, 2, 18, 0, tzinfo=CST)
+    state, notes = plan_reminders(state, None, [ev], now=evening, cfg=cfg)
+    assert [n.key for n in notes] == ["e:8244:2026-10-02:18"]
+    assert "24 小时" in notes[0].html
+
+    early = _ev(id="early", name="IEM Katowice", start_ts=int(datetime(2026, 10, 4, 12, 0, tzinfo=CST).timestamp()))
+    at = datetime(2026, 10, 4, 9, 0, tzinfo=CST)
+    state, notes = plan_reminders(state, None, [early], now=at, cfg=cfg)
+    assert [n.key for n in notes] == ["e:early:2026-10-03:18", "e:early:2026-10-04:09"]
+    assert "最后提醒" in notes[-1].html
+    assert state["events"]["early"] == "hours"
+
+
+def test_missed_event_bell_is_sent_later():
+    cfg = RemindConfig(event_days=7, event_hours=6)
+    start = datetime(2026, 10, 3, 18, 0, tzinfo=CST)
+    ev = _ev(id="8244", name="ESL Pro League Season 24", start_ts=int(start.timestamp()))
+    morning = datetime(2026, 10, 2, 9, 0, tzinfo=CST)
+    state, notes = plan_reminders(empty_state(), None, [ev], now=morning, cfg=cfg)
+    assert notes == []
+    late = datetime(2026, 10, 2, 11, 20, tzinfo=CST)
+    state, notes = plan_reminders(state, None, [ev], now=late, cfg=cfg)
+    assert [n.key for n in notes] == ["e:8244:2026-10-01:18", "e:8244:2026-10-02:09"]
+    early = datetime(2026, 10, 3, 8, 10, tzinfo=CST)
+    state, notes = plan_reminders(state, None, [ev], now=early, cfg=cfg)
+    assert [n.key for n in notes] == ["e:8244:2026-10-02:18"]
 
 
 def test_poll_is_fast_only_while_live():
@@ -324,21 +341,33 @@ def test_poll_is_fast_only_while_live():
     soon = int((now + timedelta(minutes=20)).timestamp() * 1000)
     far = int((now + timedelta(days=3)).timestamp() * 1000)
     sent = {"2026-09-24": ["10"]}
-    assert choose_poll_wait([_match(unix=str(far))], RemindConfig(), now, sent) == QUIET_POLL
-    assert choose_poll_wait([_match(unix=str(later))], RemindConfig(), now, sent) == 5 * 3600 - 45 * 60
-    assert choose_poll_wait([_match(unix=str(far))], RemindConfig(), now, {}) == SOON_POLL
-    assert choose_poll_wait([_match(unix=str(soon))], RemindConfig(), now, {}) == SOON_POLL
-    assert choose_poll_wait([_match(live="1", score1="1", score2="0")], RemindConfig(), now, {}) == LIVE_POLL
+    bells = {"2026-09-23": ["09", "18"], "2026-09-24": ["09", "18"]}
+    assert choose_poll_wait([_match(unix=str(far))], RemindConfig(), now, sent, None, bells) == 3600
+    assert choose_poll_wait([_match(unix=str(later))], RemindConfig(), now, sent, None, bells) == 3600
+    assert choose_poll_wait([_match(unix=str(far))], RemindConfig(), now, {}, None, bells) == SOON_POLL
+    assert choose_poll_wait([_match(unix=str(soon))], RemindConfig(), now, {}, None, bells) == SOON_POLL
+    assert choose_poll_wait([_match(live="1", score1="1", score2="0")], RemindConfig(), now, {}, None, bells) == LIVE_POLL
     assert choose_poll_wait([_match(unix=str(far))], RemindConfig(watch=False, event_watch=False), now, {}) == QUIET_POLL
     # 20 minutes before the bell used to fall through to the 6-hour nap.
     far_unix = str(far)
     before_evening = datetime(2026, 9, 24, 19, 40, tzinfo=CST)
-    assert choose_poll_wait([_match(unix=far_unix)], RemindConfig(), before_evening, sent) == 20 * 60
+    assert choose_poll_wait([_match(unix=far_unix)], RemindConfig(), before_evening, sent, None, bells) == 20 * 60
     before_morning = datetime(2026, 9, 24, 9, 40, tzinfo=CST)
-    assert choose_poll_wait([_match(unix=far_unix)], RemindConfig(), before_morning, {"2026-09-23": ["20"]}) == 20 * 60
-    # Next event stage is the 24-hour mark, one hour from a start 25 hours out.
-    soon_ev = _ev(start_ts=int((now + timedelta(hours=25)).timestamp()))
-    assert choose_poll_wait([_match(unix=far_unix)], RemindConfig(), now, sent, [soon_ev]) == 3600
+    assert choose_poll_wait([_match(unix=far_unix)], RemindConfig(), before_morning, {"2026-09-23": ["20"]}, None, bells) == 20 * 60
+    before_event = datetime(2026, 9, 24, 8, 40, tzinfo=CST)
+    assert choose_poll_wait(
+        [_match(unix=far_unix)],
+        RemindConfig(),
+        before_event,
+        {"2026-09-23": ["20"]},
+        None,
+        bells,
+    ) == 20 * 60
+    late_morning = datetime(2026, 9, 24, 9, 5, tzinfo=CST)
+    assert choose_poll_wait([_match(unix=far_unix)], RemindConfig(), late_morning, sent) == SOON_POLL
+    # Next event stage is the 48-hour mark, one hour from a start 49 hours out.
+    soon_ev = _ev(start_ts=int((now + timedelta(hours=49)).timestamp()))
+    assert choose_poll_wait([_match(unix=far_unix)], RemindConfig(), now, sent, [soon_ev], bells) == 3600
 
 
 def test_digest_crosses_midnight_and_splits_evening():
@@ -472,10 +501,37 @@ def test_ignore_stop_and_watch_commands(tmp_path, monkeypatch):
     assert bot._cfg().covered == frozenset()
 
 
+def test_reminder_command_sends_this_chat_only(tmp_path, monkeypatch):
+    monkeypatch.setattr("hltv_bot.bot.threading.Timer", lambda *a, **k: type("T", (), {"start": lambda self: None})())
+    sent: list[tuple] = []
+
+    class Tg(_Tg):
+        def send_photo(self, chat_id, photo, caption="", filename="hltv.png", silent=False):
+            sent.append((chat_id, caption, photo))
+            return {"message_id": 9}
+
+    start = datetime(2026, 10, 3, 18, 0, tzinfo=CST)
+    ev = _ev(id="8244", name="ESL Pro League Season 24", start_ts=int(start.timestamp()))
+    monkeypatch.setattr("hltv_bot.bot.fetch_events", lambda session: [ev])
+    monkeypatch.setattr("hltv_bot.cards.render_card", lambda card: b"png")
+    bot = HltvTelegramBot(
+        Tg(),
+        BrowserSession("chrome131", {}, "cf_clearance=x"),
+        admin_ids={DEFAULT_ADMIN_ID},
+        state_path=tmp_path / "state.json",
+        settings_path=tmp_path / "settings.json",
+    )
+    bot.handle_text(DEFAULT_ADMIN_ID, "/reminder", user_id=DEFAULT_ADMIN_ID)
+    assert len(sent) == 1
+    assert sent[0][0] == DEFAULT_ADMIN_ID
+    assert "ESL Pro League" in sent[0][1]
+    assert bot._state.get("event_bells") in (None, {})
+
+
 def test_command_menu_is_one_full_list():
     names = [row["command"] for row in BOT_COMMANDS]
     assert names[:3] == ["matches", "events", "hltv"]
-    for cmd in ("watch", "stop", "track", "untrack", "follow", "cover", "digest", "ignore", "allow", "cookie", "status"):
+    for cmd in ("watch", "stop", "track", "untrack", "follow", "cover", "digest", "reminder", "ignore", "allow", "cookie", "status"):
         assert cmd in names
     assert "debug" not in names
     jobs = command_jobs({DEFAULT_ADMIN_ID}, {-100})

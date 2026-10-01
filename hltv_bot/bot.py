@@ -30,7 +30,14 @@ from hltv_bot.format import format_match_list, h
 from hltv_bot.http import CloudflareError
 from hltv_bot.matches import fetch_matches, prepare_match_list
 from hltv_bot.ratelimit import Cooldown
-from hltv_bot.reminders import CST, RemindConfig, choose_poll_wait, empty_state, plan_reminders
+from hltv_bot.reminders import (
+    CST,
+    RemindConfig,
+    choose_poll_wait,
+    current_event_notices,
+    empty_state,
+    plan_reminders,
+)
 from hltv_bot.session import BrowserSession, load_session
 from hltv_bot.settings import notify_config, update_settings
 from hltv_bot.telegram_api import Telegram
@@ -67,7 +74,7 @@ HELP = """\
 
 一个比赛日是 UTC+8 早上 10:00 到次日 10:00，跨过凌晨，用来装国外晚上的比赛。赛程每天两次：10:00 看这一整日，20:00 看这一日里还没开的，含次日凌晨。不按比赛自己的开赛钟点。
 
-赛事另按开赛倒计时，只推 Major / T1：进入窗口、剩 1 天、最后 N 小时。默认前 7 天到前 6 小时，<code>/window 7 6</code> 可改。
+赛事只推 Major / T1，开赛前的窗口里每天 <code>09:00</code> 和 <code>18:00</code> 各一次。默认前 7 天到开赛，<code>/window 7 6</code> 改窗口。最后几小时的那次会标成最后提醒。
 
 <b>补充监控</b>
 • <code>/follow</code> — 本群加入单场。不带参数就是加入。<code>/follow 比赛id</code> 加上这场
@@ -93,6 +100,7 @@ HELP = """\
 • <code>/track</code> — 打开赛程和赛事提醒
 • <code>/untrack</code> — 关闭赛程和赛事提醒
 • <code>/digest 10 20</code> — 赛程提醒钟点，UTC+8
+• <code>/reminder</code> — 立刻把赛事提醒发到本对话，用来看卡片。不记入 09:00 / 18:00
 • <code>/stars 1</code> — 默认比赛的最低星级
 • <code>/silent</code> — 无声开关，默认开
 • <code>/cookie</code> — 更新 Cookie
@@ -123,6 +131,7 @@ ADMIN_CMDS = frozenset(
         "/update_cookie",
         "/status",
         "/debug",
+        "/reminder",
     }
 )
 
@@ -144,6 +153,7 @@ BOT_COMMANDS = [
     {"command": "cover", "description": "打开整赛事每个比赛日"},
     {"command": "uncover", "description": "关闭整赛事监控"},
     {"command": "digest", "description": "赛程提醒钟点 UTC+8"},
+    {"command": "reminder", "description": "立刻发赛事提醒到本对话"},
     {"command": "stars", "description": "默认比赛的最低星级"},
     {"command": "silent", "description": "无声通知 开/关"},
     {"command": "cookie", "description": "更新 Cookie"},
@@ -343,6 +353,8 @@ class HltvTelegramBot:
             self._cmd_window(chat_id, arg)
         elif cmd == "/digest":
             self._cmd_digest(chat_id, arg)
+        elif cmd == "/reminder":
+            self._cmd_reminder(chat_id)
         elif cmd == "/follow":
             self._cmd_follow(chat_id, arg)
         elif cmd == "/unfollow":
@@ -503,6 +515,25 @@ class HltvTelegramBot:
             )
         caption = f"<b>赛事</b>\n{len(shown)} 场\n<i>/events all 查看全部赛事</i>"
         self._reply_card(chat_id, {"view": "events", "rows": card_rows}, caption, format_events_html(rows), keep=True)
+
+    def _cmd_reminder(self, chat_id: int) -> None:
+        """Send the current event cards to this chat only. Does not mark a bell sent."""
+        try:
+            events = fetch_events(self.session)
+        except CloudflareError as e:
+            self._reply(chat_id, f"Cloudflare 拦了赛事页：{e}\n发 /cookie 更新 Cookie", keep=True)
+            return
+        except Exception as e:
+            log.exception("reminder events")
+            self._reply(chat_id, f"赛事页失败: {h(e)}", keep=True)
+            return
+        notes = current_event_notices(events, datetime.now(CST), self._cfg())
+        if not notes:
+            self._reply(chat_id, "窗口里没有 Major / T1 赛事。", keep=True)
+            return
+        for note in notes:
+            card = note.card or {}
+            self._reply_card(chat_id, card, note.html, note.html, keep=True)
 
     def _cmd_window(self, chat_id: int, arg: str) -> None:
         parts = arg.split()
@@ -805,7 +836,7 @@ class HltvTelegramBot:
             f"比赛星级 ≥ <b>{cfg.min_stars}</b> 且 Major/T1",
             f"多场比分群 <b>{len(cfg.score_multi)}</b>  单场比分群 <b>{len(cfg.score_single)}</b>",
             f"赛程提醒 <b>{'on' if cfg.event_watch else 'off'}</b>  <code>{cfg.digest_morning:02d}:00</code> <code>{cfg.digest_evening:02d}:00</code>",
-            f"赛事倒计时 <b>{'on' if cfg.event_watch else 'off'}</b>  前 <code>{cfg.event_days}</code> 天 / <code>{cfg.event_hours}</code> 小时",
+            f"赛事提醒 <b>{'on' if cfg.event_watch else 'off'}</b>  <code>09:00</code> <code>18:00</code>  前 <code>{cfg.event_days}</code> 天",
             f"单场 <b>{len(cfg.followed)}</b>  赛事 <b>{len(cfg.covered)}</b>",
             f"忽略 <b>{len(cfg.ignored)}</b>",
             f"cf_clearance <b>{'yes' if self.session.has_clearance() else 'no'}</b>",
@@ -1094,12 +1125,14 @@ class HltvTelegramBot:
             self._plan()
         with self._state_lock:
             digests = dict(self._state.get("digests") or {})
+            event_bells = dict(self._state.get("event_bells") or {})
         wait = choose_poll_wait(
             self._list_rows,
             self._cfg(),
             datetime.now(CST),
             digests,
             self._event_rows,
+            event_bells,
         )
         if wait <= 0:
             wait = random.uniform(MATCH_PAGE_MIN, MATCH_PAGE_MAX)

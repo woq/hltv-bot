@@ -617,7 +617,7 @@ def event_stage(ev: dict, now: datetime, cfg: RemindConfig) -> str:
         return ""
     if hours <= cfg.event_hours:
         return "hours"
-    if hours <= 24 and window > 24:
+    if hours <= DAY_LEFT_HOURS and window > DAY_LEFT_HOURS:
         return "day"
     return "days"
 
@@ -815,8 +815,123 @@ def _digest_card(rows: list[dict], hour: str) -> dict:
 LIVE_POLL = 0.0
 SOON_POLL = 120.0
 QUIET_POLL = 6 * 3600.0
+EVENT_POLL = 3600.0
 START_LEAD = 45 * 60
 DIGEST_LEAD = 20 * 60
+# "还有 1 天" is the copy while more than 24 hours and at most 48 hours remain.
+DAY_LEFT_HOURS = 48.0
+# Event cards go out on the clock, twice a day, while the event is in the window.
+EVENT_MORNING = 9
+EVENT_EVENING = 18
+
+
+def _as_cst(now: datetime) -> datetime:
+    if now.tzinfo is None:
+        return now.replace(tzinfo=CST)
+    return now.astimezone(CST)
+
+
+def due_event_bells(now: datetime) -> list[tuple[str, str]]:
+    """09:00 and 18:00 slots that have opened, oldest first.
+
+    Only the latest two are kept, so a long outage does not replay a week.
+    A slot stays due until it is sent, including after midnight.
+    """
+    now = _as_cst(now)
+    found: list[tuple[datetime, str, str]] = []
+    for shift in (1, 0):
+        day = now - timedelta(days=shift)
+        for hour in (EVENT_MORNING, EVENT_EVENING):
+            at = day.replace(hour=hour, minute=0, second=0, microsecond=0)
+            if at <= now:
+                found.append((at, at.strftime("%Y-%m-%d"), f"{hour:02d}"))
+    found.sort()
+    return [(day, hour) for _at, day, hour in found[-2:]]
+
+
+def _slot_at(day: str, hour: str) -> datetime:
+    return datetime.strptime(f"{day} {hour}", "%Y-%m-%d %H").replace(tzinfo=CST)
+
+
+def _upcoming_event_bell(now: datetime) -> datetime:
+    now = now.astimezone(CST)
+    best: datetime | None = None
+    for shift in (0, 1):
+        day = (now + timedelta(days=shift)).replace(minute=0, second=0, microsecond=0)
+        for hour in (EVENT_MORNING, EVENT_EVENING):
+            at = day.replace(hour=hour)
+            if at > now and (best is None or at < best):
+                best = at
+    return best or now + timedelta(hours=1)
+
+
+def current_event_notices(events: list[dict], now: datetime, cfg: RemindConfig) -> list[Notice]:
+    """In-window Major/T1 cards as of now. Does not record a bell."""
+    now = _as_cst(now)
+    due = [ev for ev in events if event_stage(ev, now, cfg)]
+    due.sort(key=lambda ev: (int(ev.get("start_ts") or 0), str(ev.get("id") or "")))
+    notes: list[Notice] = []
+    for ev in due:
+        eid = str(ev.get("id") or "")
+        stage = event_stage(ev, now, cfg)
+        notes.append(
+            Notice(
+                f"e:{eid}:now",
+                _event_html(ev, now, stage),
+                _event_card(ev, now, stage),
+            )
+        )
+    return notes
+
+
+def _apply_event_bells(
+    base: dict,
+    events: list[dict],
+    now: datetime,
+    cfg: RemindConfig,
+    notes: list[Notice],
+    *,
+    seed: bool,
+) -> None:
+    slots = due_event_bells(now)
+    if not slots:
+        return
+    sent = dict(base.get("event_bells") or {})
+    pending: list[tuple[str, str]] = []
+    for day, hour in slots:
+        done = {str(x) for x in (sent.get(day) or [])}
+        if hour not in done:
+            pending.append((day, hour))
+    if not pending:
+        return
+    # The first events poll only records stages. Leave these slots open.
+    if seed:
+        return
+    for day, hour in pending:
+        done = {str(x) for x in (sent.get(day) or [])}
+        done.add(hour)
+        sent[day] = sorted(done)
+    if len(sent) > 14:
+        for old in sorted(sent)[:-14]:
+            sent.pop(old, None)
+    base["event_bells"] = sent
+    if not cfg.event_watch:
+        return
+    now = _as_cst(now)
+    for day, hour in pending:
+        at = _slot_at(day, hour)
+        due = [ev for ev in events if event_stage(ev, at, cfg) and event_stage(ev, now, cfg)]
+        due.sort(key=lambda ev: (int(ev.get("start_ts") or 0), str(ev.get("id") or "")))
+        for ev in due:
+            eid = str(ev.get("id") or "")
+            stage = event_stage(ev, now, cfg)
+            notes.append(
+                Notice(
+                    f"e:{eid}:{day}:{hour}",
+                    _event_html(ev, now, stage),
+                    _event_card(ev, now, stage),
+                )
+            )
 
 
 def _event_boundary_wait(events: list[dict] | None, cfg: RemindConfig, now: datetime) -> float | None:
@@ -824,8 +939,8 @@ def _event_boundary_wait(events: list[dict] | None, cfg: RemindConfig, now: date
     if not cfg.event_watch or not events:
         return None
     marks = [float(cfg.event_days * 24)]
-    if cfg.event_days * 24 > 24:
-        marks.append(24.0)
+    if cfg.event_days * 24 > DAY_LEFT_HOURS:
+        marks.append(DAY_LEFT_HOURS)
     if cfg.event_hours > 0:
         marks.append(float(cfg.event_hours))
     marks = sorted(set(marks), reverse=True)
@@ -853,12 +968,14 @@ def choose_poll_wait(
     now: datetime,
     digests: dict | None,
     events: list[dict] | None = None,
+    event_bells: dict | None = None,
 ) -> float:
     """Seconds until the next matches-list fetch.
 
     0 means a match is live: the caller uses the 3–5s clock.
     Two minutes when a watched match is about to start, or a digest is due.
-    Otherwise sleep until the next lead, and at most six hours.
+    Otherwise sleep until the next lead. Event bells are checked at least hourly
+    so a missed 09:00 or 18:00 is at most an hour late. Match-only quiet is six hours.
     """
     if now.tzinfo is None:
         now = now.replace(tzinfo=CST)
@@ -907,6 +1024,18 @@ def choose_poll_wait(
                 wakes.append(until)
             elif until > DIGEST_LEAD:
                 wakes.append(until - DIGEST_LEAD)
+        sent_bells = event_bells or {}
+        for day, hour in due_event_bells(now):
+            done = {str(x) for x in (sent_bells.get(day) or [])}
+            if hour not in done:
+                soon = True
+                break
+        nxt_bell = _upcoming_event_bell(now)
+        until_bell = (nxt_bell - now).total_seconds()
+        if 0 < until_bell <= DIGEST_LEAD:
+            wakes.append(until_bell)
+        elif until_bell > DIGEST_LEAD:
+            wakes.append(until_bell - DIGEST_LEAD)
         boundary = _event_boundary_wait(events, cfg, now)
         if boundary is not None and boundary > 0:
             wakes.append(boundary)
@@ -915,7 +1044,8 @@ def choose_poll_wait(
     wait = min(wakes)
     if wait < 60.0:
         return max(1.0, wait)
-    return min(wait, QUIET_POLL)
+    cap = EVENT_POLL if cfg.event_watch else QUIET_POLL
+    return min(wait, cap)
 
 
 def _upcoming_digest(now: datetime, morning: int, evening: int) -> datetime | None:
@@ -1201,7 +1331,6 @@ def plan_reminders(
 
     if events is not None:
         stages: dict[str, str] = {}
-        prev_ev = dict(base.get("events") or {})
         for ev in events:
             eid = str(ev.get("id") or "")
             if not eid:
@@ -1210,14 +1339,14 @@ def plan_reminders(
             if not stage:
                 continue
             stages[eid] = stage
-            if base.get("events_seeded") and cfg.event_watch and prev_ev.get(eid) != stage:
-                notes.append(
-                    Notice(
-                        f"e:{eid}:{stage}",
-                        _event_html(ev, now, stage),
-                        _event_card(ev, now, stage),
-                    )
-                )
+        _apply_event_bells(
+            base,
+            events,
+            now,
+            cfg,
+            notes,
+            seed=not base.get("events_seeded"),
+        )
         base["events"] = stages
         base["events_seeded"] = True
 
