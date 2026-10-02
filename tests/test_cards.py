@@ -153,6 +153,35 @@ def test_matches_card_html_and_render():
 
     png = render_card(card)
     assert png.startswith(b"\x89PNG")
+    assert "mgrid" not in html.split("</style>", 1)[-1]
+
+
+def test_eight_matches_use_two_columns():
+    rows = [
+        {
+            "id": str(i),
+            "team1": f"Team{i}A",
+            "team2": f"Team{i}B",
+            "time": f"{17 + i // 2}:00",
+            "event": "ESL Pro League Season 24",
+            "stars": "1",
+            "live": "0",
+        }
+        for i in range(8)
+    ]
+    html = _matches_html({"view": "matches", "title": "赛程  10:00  ·  UTC+8", "rows": rows}, 800, 416)
+    assert html.count("<table class='mgrid'>") == 1
+    assert html.count("<tr>") == 4
+    assert html.count("class='mcard mbody'") == 8
+    body = html.split("</style>", 1)[-1]
+    assert "ESL Pro League Season 24" in body
+    assert "event-chip" not in body
+    odd = [dict(row) for row in rows[:5]]
+    odd[0]["event"] = "BLAST Premier"
+    mixed = _matches_html({"view": "matches", "rows": odd}, 800, 416)
+    assert mixed.count("<tr>") == 3
+    assert mixed.count("<td></td>") == 1
+    assert "mevent" in mixed
 
 
 def test_events_card_html_and_render():

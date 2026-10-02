@@ -123,6 +123,20 @@ html, body {
   background: #32302b;
   border-radius: 12px;
 }
+.sheet-sub { margin-top: 4px; font-size: 14px; font-weight: 600; color: #e4ddd2; }
+table.mgrid { width: 100%; border-collapse: separate; border-spacing: 8px 8px; margin-top: 6px; }
+table.mgrid td { width: 50%; vertical-align: top; }
+table.mgrid .mcard { margin-top: 0; padding: 8px; }
+table.mgrid .mtag { width: 28px; font-size: 8px; }
+table.mgrid .mtime { font-size: 12px; }
+table.mgrid .mbody .name { font-size: 13px; }
+table.mgrid .mevent {
+  margin-top: 6px;
+  font-size: 11px;
+  line-height: 1.2;
+  color: #9a948a;
+  font-weight: 600;
+}
 .mhead { display: flex; align-items: center; }
 .mtag {
   width: 38px;
@@ -302,7 +316,10 @@ _LIST_W = 416  # list cards are 20% narrower for a phone
 # At 15px that is 22 Latin letters. The 520px match card uses 28px type, so 16.
 # A CJK character counts as two letters.
 LIST_NAME_UNITS = 22
+GRID_NAME_UNITS = 16
 CARD_NAME_UNITS = 16
+# Five or more matches are two columns. Four still fit as a single stack.
+TWO_COL_AT = 5
 
 
 def _team_logo_uri(team_id: str, url: str) -> str:
@@ -359,7 +376,11 @@ def _event_logo_uri(event_id: str, url: str, size: str = "s") -> str:
 def render_card(card: dict) -> bytes:
     view = card.get("view") or "match"
     if view == "matches":
-        height = 56 + 220 * max(1, min(len(card.get("rows") or []), 12))
+        n = max(1, min(len(card.get("rows") or []), 12))
+        if n >= TWO_COL_AT:
+            height = 80 + 150 * ((n + 1) // 2)
+        else:
+            height = 56 + 220 * n
         html = _matches_html(card, height, _LIST_W)
     elif view == "events":
         height = 64 + 132 * max(1, min(len(card.get("rows") or []), 8))
@@ -689,54 +710,84 @@ def _map_line(row: dict) -> str:
     return f"<div class='mmap'>{joined}</div>"
 
 
+def _match_cell(row: dict, *, compact: bool, event_line: bool) -> str:
+    live = row.get("live") == "1"
+    a = (row.get("score1") or "").strip()
+    b = (row.get("score2") or "").strip()
+    clock = (row.get("time") or "").strip()
+    if live and clock.upper() == "LIVE":
+        clock = ""
+    stars = "★" * _stars(row)
+    sc_accent = "live" if live else ("final" if (a or b) else "soon")
+    limit = GRID_NAME_UNITS if compact else LIST_NAME_UNITS
+    body = (
+        "<div class='mcard mbody'>"
+        "<div class='mhead'>"
+        f"<span class='mtag{' on' if live else ''}'>LIVE</span>"
+        f"<span class='mtime'>{_e(clock)}</span>"
+        f"<span class='mstars'>{_e(stars)}</span>"
+        "</div>"
+        + _team_row(
+            row.get("team1") or "?",
+            a,
+            row.get("team1_logo") or "",
+            sc_accent,
+            team_id=str(row.get("team1_id") or ""),
+            limit=limit,
+        )
+        + _team_row(
+            row.get("team2") or "?",
+            b,
+            row.get("team2_logo") or "",
+            sc_accent,
+            team_id=str(row.get("team2_id") or ""),
+            limit=limit,
+        )
+    )
+    if compact and event_line:
+        from hltv_bot.matches import short_team
+
+        event = short_team(str(row.get("event") or ""), 16)
+        if event:
+            body += f"<div class='mevent'>{_e(event)}</div>"
+    elif not compact:
+        mid = str(row.get("id") or "").strip()
+        body += _event_block(
+            str(row.get("event") or ""),
+            str(row.get("tier") or ""),
+            str(row.get("event_id") or ""),
+            str(row.get("event_logo") or ""),
+            extra=f"<div class='sub'>#{_e(mid)}</div>" if mid else "",
+        )
+        body += _map_line(row)
+    return body + "</div>"
+
+
 def _matches_html(card: dict, height: int, width: int) -> str:
     rows = list(card.get("rows") or [])[:12]
     bits = [f"<div class='sheet-title'>{_e(card.get('title') or '比赛  ·  UTC+8')}</div>"]
-    for row in rows:
-        live = row.get("live") == "1"
-        a = (row.get("score1") or "").strip()
-        b = (row.get("score2") or "").strip()
-        clock = (row.get("time") or "").strip()
-        if live and clock.upper() == "LIVE":
-            clock = ""
-        stars = "★" * _stars(row)
-        sc_accent = "live" if live else ("final" if (a or b) else "soon")
-        mid = str(row.get("id") or "").strip()
-        bits.append(
-            "<div class='mcard mbody'>"
-            "<div class='mhead'>"
-            f"<span class='mtag{' on' if live else ''}'>LIVE</span>"
-            f"<span class='mtime'>{_e(clock)}</span>"
-            f"<span class='mstars'>{_e(stars)}</span>"
-            "</div>"
-            + _team_row(
-                row.get("team1") or "?",
-                a,
-                row.get("team1_logo") or "",
-                sc_accent,
-                team_id=str(row.get("team1_id") or ""),
-                limit=LIST_NAME_UNITS,
-            )
-            + _team_row(
-                row.get("team2") or "?",
-                b,
-                row.get("team2_logo") or "",
-                sc_accent,
-                team_id=str(row.get("team2_id") or ""),
-                limit=LIST_NAME_UNITS,
-            )
-            + _event_block(
-                str(row.get("event") or ""),
-                str(row.get("tier") or ""),
-                str(row.get("event_id") or ""),
-                str(row.get("event_logo") or ""),
-                extra=f"<div class='sub'>#{_e(mid)}</div>" if mid else "",
-            )
-            + _map_line(row)
-            + "</div>"
-        )
+    events = {str(row.get("event") or "").strip() for row in rows}
+    events.discard("")
+    shared = len(rows) >= TWO_COL_AT and len(events) == 1
+    if shared:
+        bits.append(f"<div class='sheet-sub'>{_e(next(iter(events)))}</div>")
     if not rows:
         bits.append("<div class='mcard mbody'>没有比赛</div>")
+        return _page("".join(bits), height, width)
+    if len(rows) >= TWO_COL_AT:
+        bits.append("<table class='mgrid'>")
+        for i in range(0, len(rows), 2):
+            pair = rows[i:i + 2]
+            bits.append("<tr>")
+            for row in pair:
+                bits.append(f"<td>{_match_cell(row, compact=True, event_line=not shared)}</td>")
+            if len(pair) == 1:
+                bits.append("<td></td>")
+            bits.append("</tr>")
+        bits.append("</table>")
+        return _page("".join(bits), height, width)
+    for row in rows:
+        bits.append(_match_cell(row, compact=False, event_line=False))
     return _page("".join(bits), height, width)
 
 
