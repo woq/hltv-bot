@@ -749,5 +749,55 @@ def test_map_winner_followed_by_stale_round_score_cloudflare_cache_does_not_retr
     assert state["matches"]["2398720"]["map_rounds"] == "11-13"
 
 
+def test_contaminated_state_self_heals_when_real_map2_score_arrives():
+    now = datetime(2026, 10, 3, 21, 30, tzinfo=CST)
+    base_row = dict(
+        id="2398720",
+        title="Spirit vs ShindeN",
+        team1="Spirit",
+        team2="ShindeN",
+        event="ESL Pro League Season 24",
+        stars="1",
+        live="1",
+        format="bo3",
+        maps="Dust2 · Nuke · Mirage",
+    )
+    # Simulate a corrupted state where Map 2 slot 1 was previously contaminated with 11-12
+    corrupted_state = {
+        "matches_seeded": True,
+        "events_seeded": True,
+        "matches": {
+            "2398720": {
+                "opened": True,
+                "soon": True,
+                "live": True,
+                "previewed": True,
+                "score": "11-12",
+                "score1": "11",
+                "score2": "12",
+                "won1": "0",
+                "won2": "1",
+                "map_rounds": "11-13,11-12",
+                "map_winners": "2,0,0",
+                "map_index": "1",
+                "match_sent": False,
+                "halftimes": "0",
+                "missed": 0,
+            }
+        },
+    }
+    # Map 2 real score arrives (e.g. 3-3)
+    map2_row = {**base_row, "score1": "3", "score2": "3", "won1": "0", "won2": "1", "map_index": "1"}
+    state, notes = plan_reminders(corrupted_state, [map2_row], None, now=now)
+    assert len(notes) == 1
+    assert notes[0].card["label"] == "比分"
+    assert notes[0].card["pair"] == ("3", "3")
+    saved = state["matches"]["2398720"]
+    assert saved["score"] == "3-3"
+    assert saved["map_rounds"] == "11-13,3-3"
+    assert saved["map_index"] == "1"
+
+
+
 
 

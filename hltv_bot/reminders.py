@@ -267,7 +267,19 @@ def cache_match_score(old: dict, row: dict) -> dict:
             slot = _map_slot(won_now, incoming, n_maps)
             while len(stored) <= slot:
                 stored.append(None)
-        stored[slot] = _forward_pair(stored[slot], incoming)
+        if (
+            slot > 0
+            and stored[slot] is not None
+            and stored[slot - 1] is not None
+            and map_is_over(*stored[slot - 1])
+            and max(stored[slot]) > 5
+            and stored[slot][0] <= stored[slot - 1][0]
+            and stored[slot][1] <= stored[slot - 1][1]
+            and (incoming[0] < stored[slot][0] or incoming[1] < stored[slot][1])
+        ):
+            stored[slot] = incoming
+        else:
+            stored[slot] = _forward_pair(stored[slot], incoming)
         pair = stored[slot]
         if pair is not None and map_is_over(*pair) and pair[0] != pair[1]:
             base = won if won is not None else (0, 0)
@@ -316,6 +328,18 @@ def accept_round_score(old: dict, row: dict) -> bool:
     if old_idx.isdigit() and new_idx.isdigit() and int(new_idx) > int(old_idx):
         return True
     if map_is_over(*old_score) and max(new) <= 5 and (new[0] < old_score[0] or new[1] < old_score[1]):
+        return True
+    stored_rounds = _stored_rounds(old)
+    idx = int(new_idx) if new_idx.isdigit() else 0
+    if (
+        idx > 0
+        and idx - 1 < len(stored_rounds)
+        and stored_rounds[idx - 1] is not None
+        and map_is_over(*stored_rounds[idx - 1])
+        and max(old_score) > 5
+        and old_score[0] <= stored_rounds[idx - 1][0]
+        and old_score[1] <= stored_rounds[idx - 1][1]
+    ):
         return True
     return new[0] >= old_score[0] and new[1] >= old_score[1]
 
