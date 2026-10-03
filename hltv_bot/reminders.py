@@ -410,18 +410,35 @@ def _fresh_wins(old: dict, winners: list[int]) -> list[int]:
     return found
 
 
-def _map_rows(row: dict, winners: list[int]) -> list[dict]:
+def _map_rows(row: dict, winners: list[int], *, rounds: tuple[int, int] | None = None) -> list[dict]:
     names = _map_names(row)
     idx = str(row.get("map_index") or "")
     current = int(idx) if idx.isdigit() else -1
+    round_list = _parse_round_list(str(row.get("map_rounds") or ""))
     rows: list[dict] = []
     for i, name in enumerate(names):
         side = winners[i] if i < len(winners) else 0
         team = team_id = logo = ""
+        loser_team = loser_team_id = loser_logo = ""
         if side == 1:
             team, team_id, logo = row.get("team1") or "", row.get("team1_id") or "", row.get("team1_logo") or ""
+            loser_team, loser_team_id, loser_logo = row.get("team2") or "", row.get("team2_id") or "", row.get("team2_logo") or ""
         elif side == 2:
             team, team_id, logo = row.get("team2") or "", row.get("team2_id") or "", row.get("team2_logo") or ""
+            loser_team, loser_team_id, loser_logo = row.get("team1") or "", row.get("team1_id") or "", row.get("team1_logo") or ""
+
+        map_score = ""
+        pair = round_list[i] if i < len(round_list) and round_list[i] is not None else None
+        if pair is None and (i == current or len(names) == 1) and rounds:
+            pair = rounds
+        if pair is None and side != 0:
+            s1 = str(row.get("score1") or "")
+            s2 = str(row.get("score2") or "")
+            if s1.isdigit() and s2.isdigit() and (i == current or len(names) == 1):
+                pair = (int(s1), int(s2))
+        if pair and side != 0:
+            map_score = f"{max(pair)}-{min(pair)}"
+
         rows.append(
             {
                 "name": name,
@@ -430,6 +447,10 @@ def _map_rows(row: dict, winners: list[int]) -> list[dict]:
                 "team": team,
                 "team_id": team_id,
                 "logo": logo,
+                "loser_team": loser_team,
+                "loser_team_id": loser_team_id,
+                "loser_logo": loser_logo,
+                "score": map_score,
             }
         )
     return rows
@@ -440,7 +461,16 @@ def _map_caption(rows: list[dict]) -> str:
     for item in rows:
         name = str(item.get("name") or "")
         team = str(item.get("team") or "")
-        bits.append(f"{name} {team}".strip() if team else name)
+        score = str(item.get("score") or "").strip()
+        loser = str(item.get("loser_team") or "")
+        if team and score and loser:
+            bits.append(f"{name} {team} {score} {loser}".strip())
+        elif team and score:
+            bits.append(f"{name} {team} {score}".strip())
+        elif team:
+            bits.append(f"{name} {team}".strip())
+        else:
+            bits.append(name)
     return " · ".join(bit for bit in bits if bit)
 
 
@@ -518,7 +548,7 @@ def _match_card(
 ) -> dict:
     wins = list(winners or [])
     pair = _shown_pair(kind, row, score, wins)
-    rows = _map_rows(row, wins)
+    rows = _map_rows(row, wins, rounds=rounds)
     return {
         "view": "match",
         "kind": kind,

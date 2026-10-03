@@ -63,19 +63,30 @@ html, body {
 .hero-score .num { color: #f6f3ee; }
 .hero-score .dash { color: #9a948a; padding: 0 10px; }
 .opp { margin-top: 8px; font-size: 16px; color: #e4ddd2; font-weight: 600; }
-.mapline { margin-top: 14px; }
+.mapline { margin-top: 14px; display: flex; flex-wrap: wrap; gap: 8px 12px; }
 .mp {
   display: inline-flex;
   align-items: center;
-  margin-right: 14px;
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 600;
   color: #9a948a;
+  background: rgba(255, 255, 255, 0.04);
+  padding: 3px 8px;
+  border-radius: 4px;
 }
-.mp.won { color: #f6f3ee; }
-.mp.now { color: #e8ff5a; }
-.mplogo, .mplogo-ph { width: 16px; height: 16px; margin-left: 6px; object-fit: contain; }
+.mp.won { color: #f6f3ee; background: rgba(255, 255, 255, 0.08); }
+.mp.now { color: #e8ff5a; background: rgba(232, 255, 90, 0.08); }
+.mpname { margin-right: 2px; }
+.mplogo, .mplogo-ph { width: 16px; height: 16px; margin: 0 3px; object-fit: contain; vertical-align: middle; }
 .mplogo-ph { display: none; }
+.mpscore {
+  font-family: "Rajdhani", "Liberation Sans", "DejaVu Sans", sans-serif;
+  font-size: 14px;
+  font-weight: 700;
+  color: #f6f3ee;
+  margin: 0 2px;
+  letter-spacing: 0.04em;
+}
 .sc {
   width: 52px;
   text-align: right;
@@ -512,10 +523,23 @@ def _map_strip(rows: list) -> str:
             cls += " won"
         if item.get("current"):
             cls += " now"
-        logo = ""
+        extra = ""
         if item.get("winner"):
-            logo = _img(_team_logo_uri(str(item.get("team_id") or ""), str(item.get("logo") or "")), "mplogo")
-        bits.append(f"<span class='{cls}'>{name}{logo}</span>")
+            win_logo = _img(_team_logo_uri(str(item.get("team_id") or ""), str(item.get("logo") or "")), "mplogo")
+            score_text = str(item.get("score") or "").strip()
+            lose_logo = ""
+            if item.get("loser_logo") or item.get("loser_team_id"):
+                lose_logo = _img(
+                    _team_logo_uri(str(item.get("loser_team_id") or ""), str(item.get("loser_logo") or "")),
+                    "mplogo",
+                )
+            if score_text and lose_logo:
+                extra = f"{win_logo}<span class='mpscore'>{_e(score_text)}</span>{lose_logo}"
+            elif score_text:
+                extra = f"{win_logo}<span class='mpscore'>{_e(score_text)}</span>"
+            else:
+                extra = win_logo
+        bits.append(f"<span class='{cls}'><span class='mpname'>{name}</span>{extra}</span>")
     return f"<div class='mapline'>{''.join(bits)}</div>"
 
 

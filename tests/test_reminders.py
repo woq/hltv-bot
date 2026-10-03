@@ -522,7 +522,7 @@ def test_reminder_command_sends_this_chat_only(tmp_path, monkeypatch):
             sent.append((chat_id, caption, photo))
             return {"message_id": 9}
 
-    start = datetime(2026, 10, 3, 18, 0, tzinfo=CST)
+    start = datetime.now(CST) + timedelta(days=2)
     ev = _ev(id="8244", name="ESL Pro League Season 24", start_ts=int(start.timestamp()))
     monkeypatch.setattr("hltv_bot.bot.fetch_events", lambda session: [ev])
     monkeypatch.setattr("hltv_bot.cards.render_card", lambda card: b"png")
