@@ -387,5 +387,53 @@ def test_halftime_and_map_winner_send_photo_and_manage_slots(tmp_path, monkeypat
     assert bot._state["score_msgs"]["101"]["-100"] == 605
 
 
+def test_deletes_own_score_message_even_when_not_admin_in_group(tmp_path, monkeypatch):
+    """A bot can always delete its own messages in Telegram even if bot_can_delete_messages is False."""
+    from hltv_bot.reminders import Notice
+
+    tg = Tg()
+    tg.bot_can_delete_messages = lambda chat_id: False  # Bot is NOT an admin in group!
+    seq = {"n": 700}
+
+    def send_photo(chat_id, photo, caption="", filename="hltv.png", silent=False):
+        seq["n"] += 1
+        tg.sent.append((chat_id, caption, silent))
+        return {"message_id": seq["n"]}
+
+    tg.send_photo = send_photo
+    monkeypatch.setattr("hltv_bot.bot.threading.Timer", lambda *a, **k: type("T", (), {"start": lambda self: None})())
+    monkeypatch.setattr("hltv_bot.cards.render_card", lambda card: b"png")
+    monkeypatch.setattr("hltv_bot.bot.group_ids", lambda: [-100])
+    bot = HltvTelegramBot(
+        tg,
+        BrowserSession("chrome131", {}, "cf_clearance=x"),
+        admin_ids={1},
+        state_path=tmp_path / "state.json",
+        settings_path=tmp_path / "settings.json",
+    )
+    bot.handle_text(-100, "/watch", user_id=1)
+    tg.sent.clear()
+    tg.edited.clear()
+    tg.deleted.clear()
+
+    # 1. Live score sends photo (701)
+    note_init = Notice("m:201:score:1-0|bo3", "<b>比分 1-0</b>", {"view": "match", "kind": "score"}, "201", "multi")
+    bot._broadcast(note_init)
+    assert bot._state["score_msgs"]["201"]["-100"] == 701
+
+    # 2. Halftime bumps and MUST delete 701 even without admin permissions
+    note_ht = Notice("m:201:halftime:0", "<b>半场 7-5</b>", {"view": "match", "kind": "halftime"}, "201", "multi")
+    bot._broadcast(note_ht)
+    assert 701 in tg.deleted
+    assert bot._state["score_msgs"]["201"]["-100"] == 702
+
+    # 3. Map winner MUST delete bumped live card (702) even without admin permissions
+    note_map = Notice("m:201:map:0", "<b>Map winner 13-10</b>", {"view": "match", "kind": "map"}, "201", "multi")
+    bot._broadcast(note_map)
+    assert 702 in tg.deleted
+    assert "-100" not in bot._state.get("score_msgs", {}).get("201", {})
+
+
+
 
 

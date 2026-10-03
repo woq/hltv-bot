@@ -270,6 +270,10 @@ class HltvTelegramBot:
         self._consecutive_success = 0
 
     def can_delete_in_chat(self, chat_id: int) -> bool:
+        """Check if bot has permissions to delete other users' messages in a chat.
+
+        A bot can always delete its own outgoing messages in any chat without admin rights.
+        """
         cid = int(chat_id)
         if cid > 0:
             return True
@@ -888,7 +892,7 @@ class HltvTelegramBot:
                 slot = dict((self._state.get("score_msgs") or {}).get(mid) or {})
                 old_msg_id = slot.get(str(chat_id))
 
-            if old_msg_id and self.can_delete_in_chat(chat_id):
+            if old_msg_id:
                 try:
                     self.tg.delete_message(chat_id, int(old_msg_id))
                 except Exception:
@@ -1123,11 +1127,10 @@ class HltvTelegramBot:
                 if is_not_modified(exc):
                     return {"message_id": previous}
                 log.info("score edit chat=%s msg=%s failed, send new", gid, previous)
-                if self.can_delete_in_chat(gid):
-                    try:
-                        self.tg.delete_message(gid, int(previous))
-                    except Exception:
-                        pass
+                try:
+                    self.tg.delete_message(gid, int(previous))
+                except Exception:
+                    pass
         if png:
             return self.tg.send_photo(gid, png, caption=caption, filename="hltv.png", silent=silent)
         return self.tg.send_message(gid, caption, silent=silent)
@@ -1197,7 +1200,7 @@ class HltvTelegramBot:
         for gid in ids:
             if kind == "halftime":
                 old_msg_id = slot.get(str(gid))
-                if old_msg_id and self.can_delete_in_chat(gid):
+                if old_msg_id:
                     try:
                         self.tg.delete_message(gid, int(old_msg_id))
                     except Exception:
@@ -1221,7 +1224,7 @@ class HltvTelegramBot:
 
             if kind in {"map", "match"}:
                 old_msg_id = slot.pop(str(gid), None)
-                if old_msg_id and self.can_delete_in_chat(gid):
+                if old_msg_id:
                     try:
                         self.tg.delete_message(gid, int(old_msg_id))
                     except Exception:
