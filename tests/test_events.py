@@ -268,6 +268,8 @@ def test_classify_event_tier():
     assert classify_event_tier("PGL CS2 Major Copenhagen 2024", 0) == "T1"
     assert classify_event_tier("IEM Cologne 2026", 1) == "T1"
     assert classify_event_tier("BLAST Premier World Final", 2) == "T1"
+    assert classify_event_tier("ESL Pro League Season 24 Europe Qualifier", 1) == "T1"
+    assert classify_event_tier("ESL Pro League Season 24 Europe Qualifier", 0) == "T3"
     assert classify_event_tier("Random Local Cup", 4) == "T1"  # 4-5 stars
 
     # T2 cases

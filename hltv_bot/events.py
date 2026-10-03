@@ -356,7 +356,7 @@ def classify_event_tier(event_name: str, stars: int = 0) -> str:
     for kw in _TIER_KEYWORDS["T1"]:
         if kw in ev:
             if is_qualifier:
-                return "T2" if stars >= 1 else "T3"
+                return "T1" if stars >= 1 else "T3"
             return "T1"
 
     if stars >= 2:
@@ -418,12 +418,12 @@ def remain_text(hours: float) -> str:
     return f"还有 {max(mins, 1)} 分"
 
 
-def classify_tier(name: str) -> str:
+def classify_tier(name: str, stars: int = 0) -> str:
     """Return 'Major', 'T1', 'T2', 'T3', or 'Other'."""
     lower = (name or "").lower()
     if "major" in lower:
         return "Major"
-    return classify_event_tier(name, stars=0)
+    return classify_event_tier(name, stars=stars)
 
 
 def filter_and_sort_events(

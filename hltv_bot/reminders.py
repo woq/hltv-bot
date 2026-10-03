@@ -70,9 +70,10 @@ def match_allowed(row: dict, cfg: RemindConfig) -> bool:
     eid = str(row.get("event_id") or "")
     if eid and eid in cfg.covered:
         return True
-    if _stars(row) < cfg.min_stars:
+    stars = _stars(row)
+    if stars < cfg.min_stars:
         return False
-    return classify_tier(str(row.get("event") or "")) in {"Major", "T1"}
+    return classify_tier(str(row.get("event") or ""), stars=stars) in {"Major", "T1"}
 
 
 def _pair(score: str) -> tuple[int, int] | None:
@@ -108,9 +109,10 @@ def _multi_match(row: dict, cfg: RemindConfig) -> bool:
     eid = str(row.get("event_id") or "")
     if eid and eid in cfg.covered:
         return True
-    if _stars(row) < cfg.min_stars:
+    stars = _stars(row)
+    if stars < cfg.min_stars:
         return False
-    return classify_tier(str(row.get("event") or "")) in {"Major", "T1"}
+    return classify_tier(str(row.get("event") or ""), stars=stars) in {"Major", "T1"}
 
 
 def score_lane(row: dict, cfg: RemindConfig) -> str:
