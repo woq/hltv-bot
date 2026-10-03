@@ -1117,6 +1117,11 @@ class HltvTelegramBot:
                 if is_not_modified(exc):
                     return {"message_id": previous}
                 log.info("score edit chat=%s msg=%s failed, send new", gid, previous)
+                if self.can_delete_in_chat(gid):
+                    try:
+                        self.tg.delete_message(gid, int(previous))
+                    except Exception:
+                        pass
         if png:
             return self.tg.send_photo(gid, png, caption=caption, filename="hltv.png", silent=silent)
         return self.tg.send_message(gid, caption, silent=silent)
@@ -1205,7 +1210,26 @@ class HltvTelegramBot:
                     log.exception("halftime send chat=%s", gid)
                 continue
 
-            previous = None if is_milestone else slot.get(str(gid))
+            if kind in {"map", "match"}:
+                old_msg_id = slot.pop(str(gid), None)
+                if old_msg_id and self.can_delete_in_chat(gid):
+                    try:
+                        self.tg.delete_message(gid, int(old_msg_id))
+                    except Exception:
+                        pass
+                try:
+                    self._send_score(
+                        gid,
+                        png,
+                        caption,
+                        silent=silent,
+                        previous=None,
+                    )
+                except Exception:
+                    log.exception("score chat=%s", gid)
+                continue
+
+            previous = slot.get(str(gid))
             try:
                 msg = self._send_score(
                     gid,
@@ -1220,10 +1244,7 @@ class HltvTelegramBot:
             message_id = msg.get("message_id") if isinstance(msg, dict) else None
             if message_id is None:
                 continue
-            if kind in {"map", "match"}:
-                slot.pop(str(gid), None)
-            else:
-                slot[str(gid)] = int(message_id)
+            slot[str(gid)] = int(message_id)
         if mid:
             with self._state_lock:
                 book = dict(self._state.get("score_msgs") or {})

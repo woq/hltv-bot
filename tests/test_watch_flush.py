@@ -361,9 +361,10 @@ def test_halftime_and_map_winner_send_photo_and_manage_slots(tmp_path, monkeypat
     assert len(tg.sent) == 3
     assert tg.edited[-1] == (-100, 602, "<b>比分 8-5</b>")
 
-    # 5. Map winner -> sends NEW photo (604), slot cleared!
+    # 5. Map winner -> deletes old live card (602), sends NEW photo (604), slot cleared!
     note_map = Notice("m:101:map:0", "<b>Map winner 13-10</b>", {"view": "match", "kind": "map"}, "101", "multi")
     bot._broadcast(note_map)
+    assert 602 in tg.deleted
     assert len(tg.sent) == 4
     assert "-100" not in bot._state.get("score_msgs", {}).get("101", {})
 
