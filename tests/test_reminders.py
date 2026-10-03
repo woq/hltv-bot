@@ -553,3 +553,78 @@ def test_command_menu_is_one_full_list():
     assert {"type": "all_group_chats"} in clears
     assert {"type": "chat", "chat_id": 7} in clears
     assert {"type": "chat_member", "chat_id": -200, "user_id": 7} in clears
+
+
+def test_halftime_and_map_winner_flow():
+    now = datetime(2026, 10, 3, 19, 30, tzinfo=CST)
+    row = dict(
+        id="101",
+        title="Spirit vs ShindeN",
+        team1="Spirit",
+        team2="ShindeN",
+        event="ESL Pro League Season 24",
+        stars="1",
+        live="1",
+        score1="0",
+        score2="0",
+        format="bo3",
+        maps="Dust2 · Mirage · Nuke",
+        map_index="0",
+        won1="0",
+        won2="0",
+    )
+    # 1. Match is known at 0-0
+    state, notes = plan_reminders(empty_state(), [row], None, now=now)
+    assert notes == []
+
+    # 2. Score advances to 6-5
+    state, notes = plan_reminders(state, [{**row, "score1": "6", "score2": "5"}], None, now=now)
+    assert len(notes) == 1
+    assert notes[0].card["label"] == "比分"
+    assert notes[0].card["kind"] == "score"
+
+    # 3. Halftime reached at 7-5 (total rounds == 12)
+    state, notes = plan_reminders(state, [{**row, "score1": "7", "score2": "5"}], None, now=now)
+    assert len(notes) == 1
+    assert notes[0].card["label"] == "半场"
+    assert notes[0].card["kind"] == "halftime"
+    assert notes[0].card["pair"] == ("7", "5")
+    assert notes[0].key == "m:101:halftime:0"
+    assert "半场" in notes[0].html
+
+    # 4. Same 7-5 doesn't re-trigger halftime
+    state, notes = plan_reminders(state, [{**row, "score1": "7", "score2": "5"}], None, now=now)
+    assert notes == []
+
+    # 5. Second half advances to 12-10
+    state, notes = plan_reminders(state, [{**row, "score1": "12", "score2": "10"}], None, now=now)
+    assert len(notes) == 1
+    assert notes[0].card["label"] == "比分"
+
+    # 6. Map 1 ends at 13-10
+    state, notes = plan_reminders(state, [{**row, "score1": "13", "score2": "10", "won1": "1", "won2": "0"}], None, now=now)
+    assert len(notes) == 1
+    assert notes[0].card["label"] == "Map winner"
+    assert notes[0].card["kind"] == "map"
+    assert notes[0].card["winner"] == 1
+    assert notes[0].card["pair"] == ("13", "10")
+    assert notes[0].key == "m:101:map:0"
+
+    # 7. Map 2 starts, advances to 6-6 (Halftime on Map 2!)
+    map2_row = {**row, "score1": "6", "score2": "6", "won1": "1", "won2": "0", "map_index": "1"}
+    state, notes = plan_reminders(state, [map2_row], None, now=now)
+    assert len(notes) == 1
+    assert notes[0].card["label"] == "半场"
+    assert notes[0].card["kind"] == "halftime"
+    assert notes[0].card["pair"] == ("6", "6")
+    assert notes[0].key == "m:101:halftime:1"
+
+    # 8. Map 2 finishes at 13-7 (Spirit wins series 2-0 -> Match winner!)
+    map2_end = {**row, "score1": "13", "score2": "7", "won1": "2", "won2": "0", "map_index": "1"}
+    state, notes = plan_reminders(state, [map2_end], None, now=now)
+    assert len(notes) == 1
+    assert notes[0].card["label"] == "Match winner"
+    assert notes[0].card["kind"] == "match"
+    assert notes[0].card["winner"] == 1
+    assert notes[0].key == "m:101:match"
+

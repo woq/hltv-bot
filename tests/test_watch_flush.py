@@ -309,4 +309,68 @@ def test_cmd_bump_replaces_and_updates_slot(tmp_path, monkeypatch):
     assert tg.edited[-1] == (-100, 502, "<b>NaVi 12-9 FaZe</b>")
 
 
+def test_halftime_and_map_winner_send_photo_and_manage_slots(tmp_path, monkeypatch):
+    from hltv_bot.reminders import Notice
+
+    tg = Tg()
+    seq = {"n": 600}
+
+    def send_photo(chat_id, photo, caption="", filename="hltv.png", silent=False):
+        seq["n"] += 1
+        tg.sent.append((chat_id, caption, silent))
+        return {"message_id": seq["n"]}
+
+    tg.send_photo = send_photo
+    monkeypatch.setattr("hltv_bot.bot.threading.Timer", lambda *a, **k: type("T", (), {"start": lambda self: None})())
+    monkeypatch.setattr("hltv_bot.cards.render_card", lambda card: b"png")
+    monkeypatch.setattr("hltv_bot.bot.group_ids", lambda: [-100])
+    bot = HltvTelegramBot(
+        tg,
+        BrowserSession("chrome131", {}, "cf_clearance=x"),
+        admin_ids={1},
+        state_path=tmp_path / "state.json",
+        settings_path=tmp_path / "settings.json",
+    )
+    bot.handle_text(-100, "/watch", user_id=1)
+    tg.sent.clear()
+    tg.edited.clear()
+
+    # 1. Initial live score -> sends photo (601)
+    note_init = Notice("m:101:score:1-0|bo3", "<b>比分 1-0</b>", {"view": "match", "kind": "score"}, "101", "multi")
+    bot._broadcast(note_init)
+    assert len(tg.sent) == 1
+    assert bot._state["score_msgs"]["101"]["-100"] == 601
+
+    # 2. Score update (6-5) -> edits photo (601)
+    note_edit = Notice("m:101:score:6-5|bo3", "<b>比分 6-5</b>", {"view": "match", "kind": "score"}, "101", "multi")
+    bot._broadcast(note_edit)
+    assert len(tg.sent) == 1  # No new message sent
+    assert tg.edited[-1] == (-100, 601, "<b>比分 6-5</b>")
+
+    # 3. Halftime (7-5) -> sends NEW photo (602), slot updated to 602!
+    note_ht = Notice("m:101:halftime:0", "<b>半场 7-5</b>", {"view": "match", "kind": "halftime"}, "101", "multi")
+    bot._broadcast(note_ht)
+    assert len(tg.sent) == 2
+    assert bot._state["score_msgs"]["101"]["-100"] == 602
+
+    # 4. Next round (8-5) -> edits the halftime photo (602)
+    note_edit2 = Notice("m:101:score:8-5|bo3", "<b>比分 8-5</b>", {"view": "match", "kind": "score"}, "101", "multi")
+    bot._broadcast(note_edit2)
+    assert len(tg.sent) == 2
+    assert tg.edited[-1] == (-100, 602, "<b>比分 8-5</b>")
+
+    # 5. Map winner -> sends NEW photo (603), slot cleared!
+    note_map = Notice("m:101:map:0", "<b>Map winner 13-10</b>", {"view": "match", "kind": "map"}, "101", "multi")
+    bot._broadcast(note_map)
+    assert len(tg.sent) == 3
+    assert "-100" not in bot._state.get("score_msgs", {}).get("101", {})
+
+    # 6. Map 2 round 1 (1-0) -> sends NEW photo (604) for Map 2!
+    note_m2 = Notice("m:101:score:1-0_m2", "<b>比分 1-0</b>", {"view": "match", "kind": "score"}, "101", "multi")
+    bot._broadcast(note_m2)
+    assert len(tg.sent) == 4
+    assert bot._state["score_msgs"]["101"]["-100"] == 604
+
+
+
 

@@ -1135,11 +1135,15 @@ class HltvTelegramBot:
             except Exception:
                 log.exception("card render")
         mid = str(getattr(note, "match_id", "") or "")
+        card = getattr(note, "card", None)
+        kind = card.get("kind") if isinstance(card, dict) else ""
+        is_milestone = kind in {"halftime", "map", "match"}
+
         with self._state_lock:
             book = dict(self._state.get("score_msgs") or {})
             slot = dict(book.get(mid) or {})
         for gid in ids:
-            previous = slot.get(str(gid))
+            previous = None if is_milestone else slot.get(str(gid))
             try:
                 msg = self._send_score(
                     gid,
@@ -1154,7 +1158,10 @@ class HltvTelegramBot:
             message_id = msg.get("message_id") if isinstance(msg, dict) else None
             if message_id is None:
                 continue
-            slot[str(gid)] = int(message_id)
+            if kind in {"map", "match"}:
+                slot.pop(str(gid), None)
+            else:
+                slot[str(gid)] = int(message_id)
         if mid:
             with self._state_lock:
                 book = dict(self._state.get("score_msgs") or {})

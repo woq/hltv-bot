@@ -288,6 +288,10 @@ def accept_round_score(old: dict, row: dict) -> bool:
         and new_won != old_won
     ):
         return True
+    old_idx = str(old.get("map_index") or "")
+    new_idx = str(row.get("map_index") or "")
+    if old_idx.isdigit() and new_idx.isdigit() and int(new_idx) > int(old_idx):
+        return True
     if map_is_over(*old_score) and max(new) <= 5 and (new[0] < old_score[0] or new[1] < old_score[1]):
         return True
     return new[0] >= old_score[0] and new[1] >= old_score[1]
@@ -471,6 +475,7 @@ _KIND = {
     "soon": "即将开赛",
     "preview": "预告",
     "score": "比分",
+    "halftime": "半场",
     "map": "Map winner",
     "match": "Match winner",
 }
@@ -492,7 +497,7 @@ def _shown_pair(kind: str, row: dict, score: str, winners: list[int]) -> tuple[s
         left, right = _series_tally(row, winners)
         if left or right:
             return str(left), str(right)
-    return _score_pair(score if kind in {"preview", "score", "map", "match"} else "")
+    return _score_pair(score if kind in {"preview", "score", "halftime", "map", "match"} else "")
 
 
 def _map_score_line(kind: str, row: dict, rounds: tuple[int, int] | None) -> str:
@@ -589,6 +594,8 @@ def _score_notice(
     mid = str(row.get("id") or "")
     if kind == "preview":
         key = f"m:{mid}:preview"
+    elif kind == "halftime":
+        key = f"m:{mid}:halftime:{map_index}"
     elif kind == "map":
         key = f"m:{mid}:map:{map_index}"
     elif kind == "match":
@@ -700,6 +707,7 @@ def _snapshot_match(
     previewed: bool,
     map_winners: str = "",
     match_sent: bool = False,
+    halftimes: str = "",
 ) -> dict:
     held = _pair(score)
     score1 = str(held[0]) if held else (row.get("score1") or "")
@@ -733,6 +741,7 @@ def _snapshot_match(
         "map_rounds": row.get("map_rounds") or "",
         "map_winners": map_winners,
         "match_sent": bool(match_sent),
+        "halftimes": halftimes,
         "sig": feed_sig(row),
     }
 
@@ -1240,12 +1249,17 @@ def plan_reminders(
                 rounds = _pair(score)
                 winners = merge_map_winners(old if known else {}, view, None if held else rounds)
                 match_sent = bool(old.get("match_sent"))
+                halftimes = str(old.get("halftimes") or "")
+                ht_set = {x.strip() for x in halftimes.split(",") if x.strip()}
+                current_map_idx = str(view.get("map_index") or "0")
                 win_side = 0
-                map_at = -1
+                map_at = int(current_map_idx) if current_map_idx.isdigit() else -1
                 if not known:
                     pending = ""
                     if _clinched(view, winners, None if held else rounds):
                         match_sent = True
+                    if rounds and (rounds[0] + rounds[1] >= 12):
+                        ht_set.add(current_map_idx)
                 elif pending != "preview" and not match_sent and not held and _clinched(view, winners, rounds):
                     pending = "match"
                     opened = True
@@ -1263,6 +1277,10 @@ def plan_reminders(
                         opened = True
                         map_at = fresh[-1]
                         win_side = winners[map_at]
+                    elif rounds and (rounds[0] + rounds[1] == 12) and current_map_idx not in ht_set:
+                        pending = "halftime"
+                        opened = True
+                        ht_set.add(current_map_idx)
                 if pending == "score" and match_sent:
                     pending = ""
                 if pending == "match":
@@ -1297,6 +1315,7 @@ def plan_reminders(
                     previewed=previewed,
                     map_winners=_winners_text(winners),
                     match_sent=match_sent,
+                    halftimes=",".join(sorted(ht_set)),
                 )
                 quiet.discard(mid)
             for mid, old in prev.items():
@@ -1325,6 +1344,7 @@ def plan_reminders(
                     "won1": old.get("won1"),
                     "won2": old.get("won2"),
                     "map_winners": old.get("map_winners") or "",
+                    "halftimes": old.get("halftimes") or "",
                 }
                 if not old.get("match_sent") and _speak(cfg, mid, base) and lane_open(row, cfg):
                     winners = _parse_winners(str(old.get("map_winners") or ""), len(_map_names(row)))
