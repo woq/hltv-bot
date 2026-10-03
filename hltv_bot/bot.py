@@ -830,9 +830,10 @@ class HltvTelegramBot:
             )
         )
 
+        end_desc = "今日" if end_slate.date() == now.date() else "次日"
         lines = [
             "<b>✅ 已开启实时比分监控 (/watch)</b>",
-            f"📅 <b>监控区间</b>：截至次日 {cfg.digest_morning:02d}:00 (UTC+8 比赛日)",
+            f"📅 <b>监控区间</b>：截至{end_desc} {cfg.digest_morning:02d}:00 ({end_slate.strftime('%m-%d')}，UTC+8 比赛日)",
         ]
         if slate_matches:
             lines.append(f"🎯 <b>当前预期比赛（共 {len(slate_matches)} 场）</b>：")

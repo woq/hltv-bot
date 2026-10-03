@@ -173,7 +173,7 @@ def test_cmd_watch_summary_and_off(tmp_path, monkeypatch):
     assert tg.sent
     text = tg.sent[-1][1]
     assert "已开启实时比分监控" in text
-    assert "次日 10:00" in text
+    assert ("今日" in text or "次日" in text) and "10:00" in text
     assert "Spirit" in text and "FaZe" in text
     assert "MOUZ" in text and "Vitality" in text
     assert "低功耗模式" in text
