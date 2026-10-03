@@ -52,8 +52,77 @@ html, body {
 }
 .hero { margin-top: 18px; display: flex; align-items: center; }
 .hero .name { font-size: 34px; }
+.winner-hero {
+  margin-top: 14px;
+  display: flex;
+  align-items: center;
+  background: linear-gradient(90deg, rgba(232, 255, 90, 0.12) 0%, rgba(255, 255, 255, 0.03) 100%);
+  border: 1px solid rgba(232, 255, 90, 0.25);
+  border-radius: 8px;
+  padding: 10px 14px;
+}
+.winner-hero .tlogo {
+  width: 36px;
+  height: 36px;
+  margin-right: 12px;
+  object-fit: contain;
+}
+.winner-hero .name {
+  font-size: 26px;
+  font-weight: 700;
+  color: #f6f3ee;
+  letter-spacing: 0.02em;
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.winner-badge {
+  font-family: "Rajdhani", "Liberation Sans", "DejaVu Sans", sans-serif;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: #121210;
+  background: #e8ff5a;
+  padding: 3px 8px;
+  border-radius: 4px;
+  text-transform: uppercase;
+}
+.winner-matchup {
+  margin-top: 14px;
+  text-align: center;
+}
+.matchup-teams {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  font-size: 16px;
+  font-weight: 600;
+}
+.m-side {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.m-side.win { color: #f6f3ee; }
+.m-side.lose { color: #9a948a; }
+.m-logo, .m-logo-ph {
+  width: 20px;
+  height: 20px;
+  object-fit: contain;
+  vertical-align: middle;
+}
+.m-logo-ph { display: none; }
+.m-sep {
+  font-size: 13px;
+  font-weight: 700;
+  color: #4a463f;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
 .hero-score {
-  margin-top: 10px;
+  margin-top: 6px;
   font-family: "Rajdhani", "Liberation Sans", "DejaVu Sans", sans-serif;
   font-size: 42px;
   line-height: 1;
@@ -61,7 +130,15 @@ html, body {
   font-weight: 700;
 }
 .hero-score .num { color: #f6f3ee; }
-.hero-score .dash { color: #9a948a; padding: 0 10px; }
+.hero-score .num.win { color: #e8ff5a; }
+.hero-score .num.lose { color: #9a948a; }
+.hero-score .dash { color: #4a463f; padding: 0 10px; }
+.map-final-score {
+  margin-top: 4px;
+  font-size: 14px;
+  color: #9a948a;
+  font-weight: 600;
+}
 .opp { margin-top: 8px; font-size: 16px; color: #e4ddd2; font-weight: 600; }
 .mapline { margin-top: 14px; display: flex; flex-wrap: wrap; gap: 8px 12px; }
 .mp {
@@ -547,32 +624,60 @@ def _winner_block(card: dict) -> str:
     pair = card.get("pair") or ("", "")
     left = str(pair[0] if pair else "")
     right = str(pair[1] if len(pair) > 1 else "")
-    bits = [f"<div class='kicker'>{_e(card.get('label'))}</div>"]
     winner = card.get("winner")
+
+    t1_name = card.get("team1") or "?"
+    t1_logo = card.get("logo1") or ""
+    t1_id = str(card.get("team1_id") or "")
+    t2_name = card.get("team2") or "?"
+    t2_logo = card.get("logo2") or ""
+    t2_id = str(card.get("team2_id") or "")
+
+    bits = [f"<div class='kicker'>{_e(card.get('label'))}</div>"]
+
     if winner in {1, 2}:
-        name = card.get("team1") if winner == 1 else card.get("team2")
-        logo = card.get("logo1") if winner == 1 else card.get("logo2")
-        team_id = card.get("team1_id") if winner == 1 else card.get("team2_id")
-        other = card.get("team2") if winner == 1 else card.get("team1")
+        win_name = t1_name if winner == 1 else t2_name
+        win_logo = t1_logo if winner == 1 else t2_logo
+        win_id = t1_id if winner == 1 else t2_id
+        win_img = _img(_team_logo_uri(win_id, win_logo), "tlogo")
         bits.append(
-            "<div class='hero'>"
-            + _img(_team_logo_uri(str(team_id or ""), str(logo or "")), "tlogo")
-            + f"<div class='name'>{_e(name or '?')}</div></div>"
+            "<div class='winner-hero'>"
+            + win_img
+            + f"<div class='name'>{_e(win_name)}</div>"
+            + "<span class='winner-badge'>WINNER</span>"
+            + "</div>"
         )
     else:
-        other = ""
-        bits.append(f"<div class='opp'>{_e(card.get('team1') or '?')}</div>")
-        bits.append(f"<div class='opp'>{_e(card.get('team2') or '?')}</div>")
+        bits.append(
+            "<div class='winner-hero'>"
+            + f"<div class='name'>{_e(t1_name)} vs {_e(t2_name)}</div>"
+            + "</div>"
+        )
+
+    t1_img = _img(_team_logo_uri(t1_id, t1_logo), "m-logo")
+    t2_img = _img(_team_logo_uri(t2_id, t2_logo), "m-logo")
+    t1_cls = "win" if winner == 1 else ("lose" if winner == 2 else "")
+    t2_cls = "win" if winner == 2 else ("lose" if winner == 1 else "")
+
     bits.append(
-        "<div class='hero-score'>"
-        + f"<span class='num'>{_e(left)}</span><span class='dash'>–</span><span class='num'>{_e(right)}</span>"
+        "<div class='winner-matchup'>"
+        + "<div class='matchup-teams'>"
+        + f"<div class='m-side {t1_cls}'>{t1_img}<span class='m-name'>{_e(t1_name)}</span></div>"
+        + "<span class='m-sep'>vs</span>"
+        + f"<div class='m-side {t2_cls}'>{t2_img}<span class='m-name'>{_e(t2_name)}</span></div>"
+        + "</div>"
+        + "<div class='hero-score'>"
+        + f"<span class='num {t1_cls}'>{_e(left)}</span>"
+        + "<span class='dash'>–</span>"
+        + f"<span class='num {t2_cls}'>{_e(right)}</span>"
         + "</div>"
     )
-    if other:
-        bits.append(f"<div class='opp'>对 {_e(other)}</div>")
+
     extra = (card.get("map_score") or "").strip()
     if extra:
-        bits.append(f"<div class='opp'>{_e(extra)}</div>")
+        bits.append(f"<div class='map-final-score'>{_e(extra)}</div>")
+
+    bits.append("</div>")
     bits.append(_map_strip(list(card.get("map_rows") or [])))
     return "".join(bits)
 
