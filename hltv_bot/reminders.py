@@ -597,6 +597,29 @@ def _score_notice(
     return Notice(key, _match_caption(card, row), card, mid, score_lane(row, cfg))
 
 
+def current_match_notice(row: dict, cfg: RemindConfig) -> Notice:
+    """Build the latest score Notice for an ongoing or recently finished match."""
+    score = score_text(row)
+    names = _map_names(row)
+    winners = _parse_winners(str(row.get("map_winners") or ""), len(names))
+    rounds = _pair(score)
+    if _clinched(row, winners, rounds):
+        kind = "match"
+        tally = _series_tally(row, winners)
+        if tally[0] > tally[1]:
+            win_side = 1
+        elif tally[1] > tally[0]:
+            win_side = 2
+        elif rounds and rounds[0] != rounds[1]:
+            win_side = 1 if rounds[0] > rounds[1] else 2
+        else:
+            win_side = 0
+    else:
+        kind = "score" if _real_score(score) else "preview"
+        win_side = 0
+    return _score_notice(kind, row, start_at(row), score or "0-0", cfg, winners=winners, winner=win_side, rounds=rounds)
+
+
 def _hours_left(ev: dict, now: datetime) -> float | None:
     start_ts = int(ev.get("start_ts") or 0)
     if start_ts <= 0:

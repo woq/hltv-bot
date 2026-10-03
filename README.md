@@ -8,11 +8,11 @@ HLTV 赛程和赛事页（`curl_cffi`）+ Telegram 提醒。时间 **UTC+8**。�
 
 | 文档 | |
 |---|---|
-| [docs/rich-message.md](docs/rich-message.md) | Rich 只用在 `/watch`；`/matches` 等普通消息；官方它解决什么 |
 | [docs/hltv-api.md](docs/hltv-api.md) | 非官方 HLTV 接口：列表 HTML、详情 meta、Scorebot Engine.IO、事件字段 |
 | [docs/scorebot-data.md](docs/scorebot-data.md) | Scorebot / snapshot / log 归一化数据结构（全面） |
 | [docs/cloudflare.md](docs/cloudflare.md) | Cookie / Chrome keeper / curl 退路 |
-| [docs/scorebot-transport.md](docs/scorebot-transport.md) | 现行页内 WebSocket，以及否掉的 poll / Lightpanda / WebKit |
+| [docs/scorebot-transport.md](docs/scorebot-transport.md) | 传输方案技术总结（页内 WebSocket，以及否掉的方案） |
+| [docs/rich-message.md](docs/rich-message.md) | Telegram Rich Message 原生表格设计（已归档至分支 `archive/chrome-full`） |
 | [docs/chrome-gateway.md](docs/chrome-gateway.md) | 方案评估（历史；现行传输见上一篇） |
 | [docs/chrome-keeper-step1.md](docs/chrome-keeper-step1.md) | keeper 续 cookie 的设计记录 |
 | [deploy/chrome-session/README.md](deploy/chrome-session/README.md) | VPS 常驻 Chrome + Xvfb（bot 只 attach `:9222`） |
@@ -87,28 +87,44 @@ cp .env.example .env
 python3 -m hltv_bot bot
 ```
 
-| 命令 | |
-|---|---|
-| `/matches` | 比赛列表。`t2` / `t3` / `all` 放宽筛选 |
-| `/events` | Major / T1 赛事 |
-| `/groups` | 通知群 |
-| `/ignore 比赛id` | 这场不再推比分 |
-| `/unignore 比赛id` | 恢复这场。不补发当前比分 |
-| `/stop` | 关闭全部比分、赛程和赛事提醒 |
-| `/watch` | 恢复比分推送 |
-| `/allow` | 把本群加入通知 |
-| `/deny` | 移出通知 |
-| `/window 7 6` | 赛事提醒：开赛前 7 天，直到前 6 小时 |
-| `/stars 1` | 比赛提醒最低星级 |
-| `/silent` | 无声开关，默认开 |
-| `/cookie` | 更新 Cookie |
-| `/status` | 状态 |
+### 命令分类速查
+
+| 类别 | 命令 | 说明 |
+|---|---|---|
+| **赛程与赛事** | `/matches [t2/t3/all/text]` | 比赛列表。默认生成图片，加 `text` 发纯文本 |
+| | `/events` | 近期 Major / T1 赛事列表与倒计时 |
+| | `/reminder` | 立刻在当前会话生成赛事卡片预览（不计入定时提醒） |
+| **实时比分与监控** | `/watch` | 开启本群比分监控（自动锁定至次日 10:00 比赛，开赛发卡片，变动更新，完结入低功耗） |
+| | `/watch off` | 关闭本群多场比分监控 |
+| | `/bump [比赛id]` | 将进行中的比分卡重新发送置顶到群聊最下方（旧卡自动删） |
+| | `/stop` | 一键关闭本群全部比分、赛程与赛事提醒 |
+| | `/follow [比赛id]` | 开启单场追踪（不带 id 开启本群，带 id 指定比赛） |
+| | `/unfollow <比赛id>` | 取消单场比赛追踪 |
+| | `/cover [赛事id]` | 批量开启整项赛事每个比赛日全部比赛追踪 |
+| | `/uncover <赛事id>` | 关闭整项赛事追踪 |
+| | `/ignore <比赛id>` | 屏蔽某场比赛的比分推送 |
+| | `/unignore <比赛id>` | 恢复某场比赛的比分推送 |
+| | `/track` / `/untrack` | 开启 / 关闭每日赛程日报与赛事倒计时 |
+| **群组与配置** | `/allow` / `/deny` | 授权当前群 / 移出通知白名单 |
+| | `/groups` | 查看已授权的通知群列表 |
+| | `/stars [0-5]` | 默认比赛的最低星级门槛（默认 1） |
+| | `/digest [上午点] [晚上点]` | 赛程日报推送钟点（默认 10 20，UTC+8） |
+| | `/window [天数] [小时]` | 赛事提醒窗口（默认 7 6，开赛前 7 天至前 6 小时） |
+| | `/silent [on/off]` | 通知静音开关（默认开，静音不打扰） |
+| | `/cookie` | 在线热更新 Cloudflare Cookie |
+| | `/status` | 查看 Bot 运行状态与心跳 |
+| | `/hltv` | 显示用法分类完整指南 |
 
 默认管理员 Telegram user id：`1442477170`（`.env` 里 `TELEGRAM_ADMIN_IDS`，逗号分隔可加多个）。
 
-把 bot 拉进群后，用管理员账号发 `/allow`。开赛、比分、赛事提醒只发这些群，默认无声。比赛要至少 1 星，并且赛事是 Major 或 T1。比分看赛程总页，每 3–5 秒一次，同时打的 BO1/BO3/BO5 都在这一页上。LIVE 只是直播位；还没在比赛页 live log 里看到 start 之前，才会抽空打开那场页面，看到之后就不再进。赛事页只在启动时拉一次，之后按固定开赛时间本地提醒。一方比分连续单边上涨满 5 分，消息里会多一行标记。`/ignore`、`/stop`、`/watch` 和其它管理命令只给管理员。
+### 核心工作流与功耗机制
 
-命令回复 30 秒后自动删。提醒消息留着。
+- **群组白名单与静音**：把 bot 拉进群后，用管理员账号发 `/allow`。开赛、比分、赛事提醒只发这些群，默认无声（`/silent off` 响铃）。
+- **自然比赛日周期**：以每日 UTC+8 10:00 至次日 10:00 为一个完整比赛日，完美覆盖国外夜间打到凌晨的赛事。
+- **比分监控与卡片**：比分看赛程总页（`/matches`），单次请求覆盖同时进行的 BO1/BO3/BO5。进入 LIVE 自动提速并发卡片；比赛中实时更新比分变动（Map winner / Match winner）；预期比赛全部打完后自动转入低功耗长休眠。
+- **智能反爬与自适应上浮**：Live 期间高频采集，若遇到网络拥塞、Cloudflare 质询或频控拦截，系统自动阶梯上浮间隔并协同所有通知，安全恢复后自适应回落至高效速率。
+- **消息自删与保留**：交互命令回复在 30 秒后自动删除（保持群聊整洁），提醒与比分消息永久留存。
+- **权限安全**：管理与设置类命令只响应管理员。
 
 ## 建议跑在哪
 

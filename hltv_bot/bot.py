@@ -12,7 +12,7 @@ import os
 import random
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from hltv_bot.chats import add_group, group_ids, list_groups, remove_group
@@ -35,8 +35,13 @@ from hltv_bot.reminders import (
     RemindConfig,
     choose_poll_wait,
     current_event_notices,
+    current_match_notice,
     empty_state,
+    lane_open,
+    match_allowed,
     plan_reminders,
+    slate_start,
+    start_at,
 )
 from hltv_bot.session import BrowserSession, load_session
 from hltv_bot.settings import notify_config, update_settings
@@ -60,51 +65,47 @@ CMD_COOLDOWN = {
     "/match": 8.0,
     "/events": 8.0,
     "/cookie": 3.0,
+    "/bump": 3.0,
 }
 DEFAULT_CMD_COOLDOWN = 1.2
 
 HELP = """\
-<b>hltv-bot</b>
-时间 <code>UTC+8</code>。提醒默认无声，发到通知群，同时私聊管理员。
+<b>hltv-bot 指南</b>
+时间一律 <code>UTC+8</code> · 提醒默认无声（发往通知群与管理员）
 
-• <code>/matches</code> — 比赛列表（<code>t2</code> / <code>t3</code> / <code>all</code> / <code>text</code>）
-• <code>/events</code> — Major / T1 赛事
+<b>📋 赛程与赛事</b>
+• <code>/matches</code> — 比赛列表（参数可选 <code>t2</code> / <code>t3</code> / <code>all</code> / <code>text</code>）
+• <code>/events</code> — Major / T1 赛事列表与倒计时
+• <code>/reminder</code> — 立刻在当前对话生成赛事卡片预览
 
-比分只看赛程总页。进入 Live 时 0:0 只发一次，当作预告。同一张图里两边的回合分只会变大。一张图结束是 Map winner，整场结束是 Match winner。地图按顺序排，赢的图后面是战队图标。同一场比分改原来那条。
+<b>⚡ 比分与实时监控</b>
+• <code>/watch</code> — 开启本群比分监控（自动锁定至次日 10:00 比赛日区间，进入 LIVE 即发卡片，实时更新比分，完结后入低功耗）
+• <code>/watch off</code> — 关闭本群多场比分推送
+• <code>/bump [比赛id]</code> — 将当前进行中的比分卡片重新置顶到群聊最下方
+• <code>/stop</code> — 一键关闭本群全部比分、赛程与赛事提醒
+• <code>/follow [比赛id]</code> — 开启单场追踪（不带 id 激活本群，带 id 指定比赛）
+• <code>/unfollow [比赛id]</code> — 取消单场追踪
+• <code>/cover [赛事id]</code> — 开启整项赛事每个比赛日全部比赛追踪
+• <code>/uncover [赛事id]</code> — 关闭整项赛事追踪
+• <code>/ignore [比赛id]</code> — 屏蔽某场比赛的比分推送
+• <code>/unignore [比赛id]</code> — 恢复某场比赛的比分推送
+• <code>/track</code> — 打开赛程日报与赛事倒计时
+• <code>/untrack</code> — 关闭赛程日报与赛事倒计时
 
-一个比赛日是 UTC+8 早上 10:00 到次日 10:00，跨过凌晨，用来装国外晚上的比赛。赛程每天两次：10:00 看这一整日，20:00 看这一日里还没开的，含次日凌晨。不按比赛自己的开赛钟点。
+<b>⚙️ 群组与配置（管理员）</b>
+• <code>/allow</code> / <code>/deny</code> — 授权本群 / 移出通知白名单
+• <code>/groups</code> — 查看已授权通知群列表
+• <code>/stars [0-5]</code> — 默认比赛的最低星级门槛（默认 1）
+• <code>/digest [上午点] [晚上点]</code> — 赛程日报推送钟点（默认 10 20，UTC+8）
+• <code>/window [天数] [小时]</code> — 赛事提醒窗口（默认 7 6，开赛前 7 天至前 6 小时）
+• <code>/silent [on/off]</code> — 通知静音开关（默认开）
+• <code>/cookie</code> — 更新 Cloudflare Cookie
+• <code>/status</code> — 查看 Bot 运行状态与心跳
 
-赛事只推 Major / T1，每天 <code>09:00</code> 和 <code>18:00</code>。刚启用时的补发只给管理员。之后的钟点进通知群。
-
-<b>补充监控</b>
-• <code>/follow</code> — 本群加入单场。不带参数就是加入。<code>/follow 比赛id</code> 加上这场
-• <code>/unfollow 比赛id</code>
-• <code>/cover 赛事id</code> — 打开这一赛事每个比赛日的全部比赛
-• <code>/uncover 赛事id</code>
-• <code>/ignore 比赛id</code> — 从默认、单场、整赛事里摘掉一场
-
-<b>管理员</b>
-• <code>/groups</code> — 通知群
-• <code>/allow</code> — 把本群加入通知
-• <code>/deny</code> — 移出通知
-• <code>/follow</code> — 加入单场。不带参数就是加入本群
-• <code>/follow 比赛id</code> — 加上这场
-• <code>/unfollow 比赛id</code> — 取消单场
-• <code>/cover 赛事id</code> — 批量打开该赛事每个比赛日
-• <code>/uncover 赛事id</code> — 关闭该赛事
-• <code>/ignore 比赛id</code> — 这一场不推
-• <code>/unignore 比赛id</code> — 恢复这场
-• <code>/watch</code> — 加入多场（Major/T1 和 /cover）。不带参数就是加入
-• <code>/stop</code> — 关闭比分、赛程和赛事提醒
-• <code>/follow off</code> — 关闭单场
-• <code>/track</code> — 打开赛程和赛事提醒
-• <code>/untrack</code> — 关闭赛程和赛事提醒
-• <code>/digest 10 20</code> — 赛程提醒钟点，UTC+8
-• <code>/reminder</code> — 立刻把赛事提醒发到本对话，用来看卡片。不记入 09:00 / 18:00
-• <code>/stars 1</code> — 默认比赛的最低星级
-• <code>/silent</code> — 无声开关，默认开
-• <code>/cookie</code> — 更新 Cookie
-• <code>/status</code>
+<b>💡 机制说明</b>
+• <b>比赛日周期</b>：每日 UTC+8 10:00 至次日 10:00 为一个比赛日，完整覆盖国外跨夜赛事。
+• <b>低功耗流转</b>：开赛 (LIVE) 自动提速追踪比分；预期内比赛全部打完后自动转入低功耗休眠模式。
+• <b>自适应频控</b>：Live 期间高频采集，若触发频控或拦截自动阶梯上浮间隔并协同所有通知，安全恢复后自适应回落。
 """
 
 ADMIN_CMDS = frozenset(
@@ -138,14 +139,15 @@ ADMIN_CMDS = frozenset(
 BOT_COMMANDS = [
     {"command": "matches", "description": "比赛列表"},
     {"command": "events", "description": "Major/T1 赛事"},
-    {"command": "hltv", "description": "用法"},
+    {"command": "hltv", "description": "用法分类指南"},
     {"command": "allow", "description": "加入通知群"},
     {"command": "deny", "description": "移出通知群"},
-    {"command": "groups", "description": "通知群"},
+    {"command": "groups", "description": "通知群列表"},
     {"command": "ignore", "description": "忽略一场比赛"},
     {"command": "unignore", "description": "恢复一场比赛"},
     {"command": "stop", "description": "本群关闭比分"},
-    {"command": "watch", "description": "本群打开多场比分"},
+    {"command": "watch", "description": "开启比分监控(至次日10点)"},
+    {"command": "bump", "description": "置顶进行中的比分卡"},
     {"command": "track", "description": "打开赛程和赛事提醒"},
     {"command": "untrack", "description": "关闭赛程和赛事提醒"},
     {"command": "follow", "description": "单场加入比分监控"},
@@ -153,6 +155,7 @@ BOT_COMMANDS = [
     {"command": "cover", "description": "打开整赛事每个比赛日"},
     {"command": "uncover", "description": "关闭整赛事监控"},
     {"command": "digest", "description": "赛程提醒钟点 UTC+8"},
+    {"command": "window", "description": "赛事提醒时间窗口"},
     {"command": "reminder", "description": "立刻发赛事提醒到本对话"},
     {"command": "stars", "description": "默认比赛的最低星级"},
     {"command": "silent", "description": "无声通知 开/关"},
@@ -256,6 +259,9 @@ class HltvTelegramBot:
         self._list_next = 0.0
         self._events_next = 0.0
         self._wake = threading.Event()
+        self._backoff_hits = 0
+        self._backoff_extra = 0.0
+        self._consecutive_success = 0
 
     def can_delete_in_chat(self, chat_id: int) -> bool:
         cid = int(chat_id)
@@ -381,6 +387,8 @@ class HltvTelegramBot:
             self._cmd_stop_watch(chat_id)
         elif cmd == "/watch":
             self._cmd_watch(chat_id, arg)
+        elif cmd == "/bump":
+            self._cmd_bump(chat_id, arg)
         elif cmd == "/track":
             self._cmd_track(chat_id)
         elif cmd == "/untrack":
@@ -776,7 +784,137 @@ class HltvTelegramBot:
         self._write_score_chats(chat_id, multi=True)
         self._quiet(all_matches=True)
         self._kick()
-        self._reply(chat_id, "已加入")
+
+        now = datetime.now(CST)
+        cfg = self._cfg()
+        start_slate = slate_start(now, cfg.digest_morning)
+        end_slate = start_slate + timedelta(days=1)
+
+        matches = list(self._list_rows)
+        if not matches:
+            try:
+                matches = fetch_matches(self.session)
+                self._list_rows = matches
+            except Exception:
+                matches = []
+
+        slate_matches: list[dict] = []
+        for r in matches:
+            mid = str(r.get("id") or "")
+            if not mid or mid in cfg.ignored or not match_allowed(r, cfg):
+                continue
+            st = start_at(r)
+            is_live = r.get("live") == "1"
+            if is_live or (st and start_slate <= st < end_slate):
+                slate_matches.append(r)
+
+        slate_matches.sort(
+            key=lambda r: (
+                0 if r.get("live") == "1" else 1,
+                start_at(r) or start_slate,
+                -int(r.get("stars") or 0),
+            )
+        )
+
+        lines = [
+            "<b>✅ 已开启实时比分监控 (/watch)</b>",
+            f"📅 <b>监控区间</b>：截至次日 {cfg.digest_morning:02d}:00 (UTC+8 比赛日)",
+        ]
+        if slate_matches:
+            lines.append(f"🎯 <b>当前预期比赛（共 {len(slate_matches)} 场）</b>：")
+            for r in slate_matches[:8]:
+                t1 = h(r.get("team1") or "?")
+                t2 = h(r.get("team2") or "?")
+                ev = h(r.get("event") or "")
+                stars = int(r.get("stars") or 0)
+                stars_txt = "★" * stars
+                if r.get("live") == "1":
+                    s1 = r.get("score1") or "0"
+                    s2 = r.get("score2") or "0"
+                    lines.append(f"• 🔥 <code>[LIVE]</code> <b>{t1}</b> {s1}–{s2} <b>{t2}</b> · {ev}".rstrip())
+                else:
+                    tm = h(r.get("time") or "--:--")
+                    prefix = f"{stars_txt} " if stars_txt else ""
+                    lines.append(f"• ⏰ <code>{tm}</code> {prefix}<b>{t1}</b> vs <b>{t2}</b> · {ev}".rstrip())
+            if len(slate_matches) > 8:
+                lines.append(f"<i>... 其余 {len(slate_matches) - 8} 场详见 /matches</i>")
+        else:
+            lines.append("当前暂无进行中或待打响的 Major / T1 赛事。")
+
+        lines.append("")
+        lines.append("💡 <b>流转与功耗</b>：比赛进入 LIVE 自动提速并发卡片，实时更新比分变动；当日所有预期比赛结束后自动进入低功耗模式。")
+        self._reply(chat_id, "\n".join(lines))
+
+    def _cmd_bump(self, chat_id: int, arg: str) -> None:
+        cfg = self._cfg()
+        target_id = arg.strip()
+        current_rows = {str(r.get("id")): r for r in self._list_rows if str(r.get("id"))}
+
+        with self._state_lock:
+            snap_matches = dict(self._state.get("matches") or {})
+
+        candidate_ids: list[str] = []
+        if target_id and target_id.isdigit():
+            candidate_ids.append(target_id)
+        else:
+            for mid, snap in snap_matches.items():
+                if snap.get("live") and not snap.get("match_sent"):
+                    row = current_rows.get(mid) or snap
+                    if lane_open(row, cfg) and match_allowed(row, cfg) and mid not in cfg.ignored:
+                        candidate_ids.append(mid)
+
+        if not candidate_ids:
+            self._reply(chat_id, "当前没有正在进行的比赛，无需置顶记分卡。")
+            return
+
+        bumped = 0
+        silent = self._silent()
+        for mid in candidate_ids:
+            row = current_rows.get(mid) or snap_matches.get(mid)
+            if not row:
+                continue
+            notice = current_match_notice(row, cfg)
+            with self._state_lock:
+                slot = dict((self._state.get("score_msgs") or {}).get(mid) or {})
+                old_msg_id = slot.get(str(chat_id))
+
+            if old_msg_id and self.can_delete_in_chat(chat_id):
+                try:
+                    self.tg.delete_message(chat_id, int(old_msg_id))
+                except Exception:
+                    pass
+
+            png = None
+            if notice.card:
+                try:
+                    from hltv_bot.cards import render_card
+
+                    png = render_card(notice.card)
+                except Exception:
+                    log.exception("bump card render failed")
+
+            try:
+                if png:
+                    msg = self.tg.send_photo(chat_id, png, caption=notice.html, filename="hltv.png", silent=silent)
+                else:
+                    msg = self.tg.send_message(chat_id, notice.html, silent=silent)
+            except Exception:
+                log.exception("bump send chat=%s mid=%s", chat_id, mid)
+                continue
+
+            message_id = msg.get("message_id") if isinstance(msg, dict) else None
+            if message_id is not None:
+                with self._state_lock:
+                    book = dict(self._state.get("score_msgs") or {})
+                    slot = dict(book.get(mid) or {})
+                    slot[str(chat_id)] = int(message_id)
+                    book[mid] = slot
+                    self._state["score_msgs"] = book
+                    _save_state(self._state, self.state_path)
+                bumped += 1
+
+        if bumped == 0:
+            self._reply(chat_id, "置顶未成功，未能发送记分卡。")
 
     def _cmd_track(self, chat_id: int) -> None:
         self._write_settings({"event_watch": True})
@@ -1085,13 +1223,28 @@ class HltvTelegramBot:
         self._events_next = now + EVENTS_CACHE_TTL
         log.info("events refreshed n=%s", len(self._event_rows or []))
 
+    def _on_fetch_backoff(self, reason: str, err: Exception) -> None:
+        self._consecutive_success = 0
+        self._backoff_hits += 1
+        ladder = [4.0, 10.0, 20.0, 45.0]
+        step = min(self._backoff_hits - 1, len(ladder) - 1)
+        self._backoff_extra = ladder[step]
+        log.warning("adaptive backoff escalated (%s): hits=%s extra=+%.1fs err=%s", reason, self._backoff_hits, self._backoff_extra, err)
+
     def _refresh_list(self) -> None:
         try:
             self._list_rows = fetch_matches(self.session, fresh=True)
+            self._consecutive_success += 1
+            if self._consecutive_success >= 4 and self._backoff_hits > 0:
+                self._backoff_hits = max(0, self._backoff_hits - 1)
+                self._backoff_extra = max(0.0, self._backoff_extra - 5.0)
+                log.info("adaptive rate recovered: level=%s extra=+%.1fs", self._backoff_hits, self._backoff_extra)
         except CloudflareError as e:
+            self._on_fetch_backoff("cloudflare", e)
             self._note_cf("matches", e)
             return
         except Exception as e:
+            self._on_fetch_backoff("matches", e)
             self.last_error = f"matches: {e}"
             log.exception("fetch matches")
             return
@@ -1123,8 +1276,9 @@ class HltvTelegramBot:
         if self._list_at <= 0 or now_m >= self._list_next:
             self._refresh_list()
             if self._list_at <= 0:
-                self._list_next = now_m + 300
-                return 300
+                backoff = max(30.0, self._backoff_extra * 2)
+                self._list_next = now_m + backoff
+                return backoff
             self._plan()
         with self._state_lock:
             digests = dict(self._state.get("digests") or {})
@@ -1138,7 +1292,12 @@ class HltvTelegramBot:
             event_bells,
         )
         if wait <= 0:
-            wait = random.uniform(MATCH_PAGE_MIN, MATCH_PAGE_MAX)
+            wait = random.uniform(MATCH_PAGE_MIN, MATCH_PAGE_MAX) + self._backoff_extra
+        elif wait < 60.0 and self._backoff_extra > 0:
+            wait += self._backoff_extra
+        elif wait >= 60.0:
+            self._backoff_hits = 0
+            self._backoff_extra = 0.0
         self._list_next = time.monotonic() + wait
         return wait
 
