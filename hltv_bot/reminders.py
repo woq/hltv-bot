@@ -738,6 +738,7 @@ def _snapshot_match(
     map_winners: str = "",
     match_sent: bool = False,
     halftimes: str = "",
+    missed: int = 0,
 ) -> dict:
     held = _pair(score)
     score1 = str(held[0]) if held else (row.get("score1") or "")
@@ -772,6 +773,7 @@ def _snapshot_match(
         "map_winners": map_winners,
         "match_sent": bool(match_sent),
         "halftimes": halftimes,
+        "missed": int(missed),
         "sig": feed_sig(row),
     }
 
@@ -1346,11 +1348,23 @@ def plan_reminders(
                     map_winners=_winners_text(winners),
                     match_sent=match_sent,
                     halftimes=",".join(sorted(ht_set)),
+                    missed=0,
                 )
                 quiet.discard(mid)
             for mid, old in prev.items():
-                if mid in seen or not old.get("opened"):
+                if mid in seen:
                     continue
+                if not old.get("opened"):
+                    continue
+
+                # Anti-flapping: when matches list was fetched successfully, a missing match
+                # may be a transient scraping blip or Cloudflare cache desync between requests.
+                # Hold the match in state for up to 2 polls before evicting.
+                missed = int(old.get("missed") or 0) + 1
+                if len(matches) > 0 and missed < 3:
+                    nxt[mid] = dict(old, missed=missed)
+                    continue
+
                 row = {
                     "id": mid,
                     "team1": old.get("team1"),
@@ -1388,18 +1402,26 @@ def plan_reminders(
                         win_side = 1 if rounds[0] > rounds[1] else 2
                     else:
                         win_side = 0
-                    notes.append(
-                        _score_notice(
-                            "match",
-                            row,
-                            start_at(row),
-                            str(old.get("score") or ""),
-                            cfg,
-                            winners=winners,
-                            winner=win_side,
-                            rounds=rounds,
+
+                    old_score_str = str(old.get("score") or "").strip()
+                    # A match cannot be announced as "Match winner" if:
+                    # 1) Neither team won (win_side == 0)
+                    # 2) Score was 0-0 / unstarted / not real score and no maps won
+                    has_winner = win_side in {1, 2}
+                    has_progress = _real_score(old_score_str) or any(winners)
+                    if has_winner and has_progress:
+                        notes.append(
+                            _score_notice(
+                                "match",
+                                row,
+                                start_at(row),
+                                old_score_str,
+                                cfg,
+                                winners=winners,
+                                winner=win_side,
+                                rounds=rounds,
+                            )
                         )
-                    )
                 quiet.discard(mid)
             base["matches"] = nxt
             base["quiet_ids"] = sorted(quiet)

@@ -628,3 +628,60 @@ def test_halftime_and_map_winner_flow():
     assert notes[0].card["winner"] == 1
     assert notes[0].key == "m:101:match"
 
+
+def test_zero_zero_match_disappearing_never_triggers_match_winner():
+    now = datetime(2026, 9, 24, 18, 0, tzinfo=CST)
+    soon = int((now + timedelta(minutes=10)).timestamp() * 1000)
+    cfg = RemindConfig(min_stars=1)
+    # Seed upcoming
+    state, notes = plan_reminders(empty_state(), [_match(id="2398719", unix=str(soon))], None, now=now, cfg=cfg)
+
+    # Goes live at 0-0 -> triggers preview
+    row_0_0 = _match(id="2398719", unix=str(soon), live="1", score1="0", score2="0", format="bo3")
+    state, notes = plan_reminders(state, [row_0_0], None, now=now, cfg=cfg)
+    assert any(n.key == "m:2398719:preview" for n in notes)
+    assert state["matches"]["2398719"]["opened"] is True
+
+    # If the match drops from the list (e.g. empty or postponed), it must NEVER emit "Match winner"
+    state, notes = plan_reminders(state, [], None, now=now, cfg=cfg)
+    assert not any(n.key == "m:2398719:match" for n in notes)
+    assert "2398719" not in state["matches"]
+
+
+def test_anti_flapping_retains_missing_match_for_two_polls():
+    now = datetime(2026, 9, 24, 18, 0, tzinfo=CST)
+    soon = int((now + timedelta(minutes=10)).timestamp() * 1000)
+    cfg = RemindConfig(min_stars=1)
+
+    m1_up = _match(id="1", unix=str(soon), live="0", score1="0", score2="0", format="bo3")
+    other = _match(id="2", unix=str(soon), live="1", score1="5", score2="3", format="bo3")
+
+    # Seed
+    state, _ = plan_reminders(empty_state(), [m1_up, other], None, now=now, cfg=cfg)
+
+    # m1 goes live at 0-0
+    m1_live = _match(id="1", unix=str(soon), live="1", score1="0", score2="0", format="bo3")
+    state, notes = plan_reminders(state, [m1_live, other], None, now=now, cfg=cfg)
+    assert any(n.key == "m:1:preview" for n in notes)
+
+    # Poll 1 where match 1 temporarily vanishes from HLTV results (but list is non-empty)
+    state, notes = plan_reminders(state, [other], None, now=now, cfg=cfg)
+    assert notes == []
+    assert "1" in state["matches"]
+    assert state["matches"]["1"]["missed"] == 1
+
+    # Poll 2 where match 1 is STILL missing
+    state, notes = plan_reminders(state, [other], None, now=now, cfg=cfg)
+    assert notes == []
+    assert "1" in state["matches"]
+    assert state["matches"]["1"]["missed"] == 2
+
+    # Poll 3: match 1 returns! missed resets to 0 and state is preserved!
+    state, notes = plan_reminders(state, [m1_live, other], None, now=now, cfg=cfg)
+    assert notes == []
+    assert "1" in state["matches"]
+    assert state["matches"]["1"]["missed"] == 0
+    assert state["matches"]["1"]["opened"] is True
+
+
+
