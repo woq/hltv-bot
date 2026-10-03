@@ -576,36 +576,50 @@ def _match_caption(card: dict, row: dict) -> str:
     kind = str(card.get("kind") or "")
     pair = card.get("pair")
     winner = card.get("winner")
+
     if kind in {"map", "match"} and winner in {1, 2}:
-        name = card.get("team1") if winner == 1 else card.get("team2")
+        win_name = card.get("team1") if winner == 1 else card.get("team2")
         other = card.get("team2") if winner == 1 else card.get("team1")
-        lines = [f"<b>{h(label)}</b>", f"<b>{h(name or '?')}</b>"]
-        if pair:
-            lines.append(f"<code>{h(pair[0])}</code>–<code>{h(pair[1])}</code>")
-        lines.append(f"对 {h(other or '?')}")
+        icon = "🏆" if kind == "match" else "🗺"
+        pair_str = f"<code>{h(pair[0])}</code>–<code>{h(pair[1])}</code>" if pair else ""
+        head = f"{icon} <b>{h(label)}</b> · <b>{h(win_name or '?')}</b> {pair_str} 对 {h(other or '?')}".strip()
     else:
+        icon = "⏱" if kind == "halftime" else ("⚔️" if kind in {"preview", "soon"} else "🔴")
         t1 = h(card.get("team1") or "?")
         t2 = h(card.get("team2") or "?")
         if pair:
-            lines = [f"<b>{h(label)}</b>  {t1} <code>{h(pair[0])}</code>–<code>{h(pair[1])}</code> {t2}"]
+            head = f"{icon} <b>{h(label)}</b>  {t1} <code>{h(pair[0])}</code>–<code>{h(pair[1])}</code> {t2}"
         else:
-            lines = [f"<b>{h(label)}</b>  {t1} vs {t2}"]
+            head = f"{icon} <b>{h(label)}</b>  {t1} vs {t2}"
+
+    lines = [head]
+
+    # Blockquote for map breakdown and round details
+    quote_bits = []
     extra = (card.get("map_score") or "").strip()
     if extra:
-        lines.append(h(extra))
+        quote_bits.append(h(extra))
     note = _map_caption(list(card.get("map_rows") or []))
     if note:
-        lines.append(h(note))
+        quote_bits.append(h(note))
+    if quote_bits:
+        lines.append(f"<blockquote>{' · '.join(quote_bits)}</blockquote>")
+
+    # Meta footer line
+    footer_bits = []
     event = (card.get("event") or "").strip()
     if event:
-        lines.append(f"<b>{h(tier_label(classify_tier(event)))}</b>")
-        lines.append(f"<b>{h(event)}</b>")
+        tier = tier_label(classify_tier(event))
+        footer_bits.append(f"<b>{h(tier)}</b> {h(event)}")
     clock = card.get("clock") or ""
     if clock:
-        lines.append(f"<code>{h(clock)}</code> UTC+8")
+        footer_bits.append(f"<code>{h(clock)} UTC+8</code>")
     link = _link(str(row.get("url") or ""))
     if link:
-        lines.append(link)
+        footer_bits.append(link)
+    if footer_bits:
+        lines.append(" · ".join(footer_bits))
+
     return "\n".join(lines)
 
 

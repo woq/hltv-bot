@@ -18,31 +18,31 @@ html, body {
   font-family: "Rajdhani", "WenQuanYi Zen Hei", "Noto Sans CJK SC", "DejaVu Sans", sans-serif;
   text-rendering: geometricPrecision;
 }
-.card { position: relative; width: PAGEWpx; padding: 28px 26px 42px; }
+.card { position: relative; width: PAGEWpx; padding: 22px 20px 32px; }
 .stamp {
   position: absolute;
-  right: 22px;
-  bottom: 14px;
+  right: 18px;
+  bottom: 12px;
   font-family: "Rajdhani", "Liberation Sans", "DejaVu Sans", sans-serif;
-  font-size: 14px;
+  font-size: 13px;
   letter-spacing: 0.04em;
   color: #d2ccc2;
   font-weight: 600;
 }
 .kicker {
-  font-size: 13px;
-  letter-spacing: 0.34em;
+  font-size: 12px;
+  letter-spacing: 0.3em;
   color: #e4ddd2;
   font-weight: 600;
 }
 .kicker em { font-style: normal; color: #e8ff5a; letter-spacing: 0.18em; }
-.trow { display: flex; align-items: center; margin-top: 14px; }
-.tlogo, .tlogo-ph { width: 28px; height: 28px; margin-right: 12px; object-fit: contain; flex: 0 0 28px; }
+.trow { display: flex; align-items: center; margin-top: 10px; }
+.tlogo, .tlogo-ph { width: 24px; height: 24px; margin-right: 10px; object-fit: contain; flex: 0 0 24px; }
 .tlogo-ph, .elogo-ph { display: inline-block; background: #3a3833; }
 .name {
   flex: 1;
   min-width: 0;
-  font-size: 28px;
+  font-size: 24px;
   line-height: 1;
   font-weight: 700;
   color: #f6f3ee;
@@ -50,25 +50,25 @@ html, body {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.hero { margin-top: 18px; display: flex; align-items: center; }
-.hero .name { font-size: 34px; }
+.hero { margin-top: 14px; display: flex; align-items: center; }
+.hero .name { font-size: 28px; }
 .winner-hero {
-  margin-top: 14px;
+  margin-top: 10px;
   display: flex;
   align-items: center;
   background: linear-gradient(90deg, rgba(232, 255, 90, 0.12) 0%, rgba(255, 255, 255, 0.03) 100%);
   border: 1px solid rgba(232, 255, 90, 0.25);
   border-radius: 8px;
-  padding: 10px 14px;
+  padding: 8px 12px;
 }
 .winner-hero .tlogo {
-  width: 36px;
-  height: 36px;
-  margin-right: 12px;
+  width: 30px;
+  height: 30px;
+  margin-right: 10px;
   object-fit: contain;
 }
 .winner-hero .name {
-  font-size: 26px;
+  font-size: 22px;
   font-weight: 700;
   color: #f6f3ee;
   letter-spacing: 0.02em;
@@ -79,25 +79,25 @@ html, body {
 }
 .winner-badge {
   font-family: "Rajdhani", "Liberation Sans", "DejaVu Sans", sans-serif;
-  font-size: 13px;
+  font-size: 11px;
   font-weight: 700;
-  letter-spacing: 0.1em;
+  letter-spacing: 0.08em;
   color: #121210;
   background: #e8ff5a;
-  padding: 3px 8px;
+  padding: 2px 6px;
   border-radius: 4px;
   text-transform: uppercase;
 }
 .winner-matchup {
-  margin-top: 14px;
+  margin-top: 10px;
   text-align: center;
 }
 .matchup-teams {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 12px;
-  font-size: 16px;
+  gap: 10px;
+  font-size: 15px;
   font-weight: 600;
 }
 .m-side {
@@ -108,23 +108,23 @@ html, body {
 .m-side.win { color: #f6f3ee; }
 .m-side.lose { color: #9a948a; }
 .m-logo, .m-logo-ph {
-  width: 20px;
-  height: 20px;
+  width: 18px;
+  height: 18px;
   object-fit: contain;
   vertical-align: middle;
 }
 .m-logo-ph { display: none; }
 .m-sep {
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 700;
   color: #4a463f;
   text-transform: uppercase;
   letter-spacing: 0.08em;
 }
 .hero-score {
-  margin-top: 6px;
+  margin-top: 4px;
   font-family: "Rajdhani", "Liberation Sans", "DejaVu Sans", sans-serif;
-  font-size: 42px;
+  font-size: 36px;
   line-height: 1;
   letter-spacing: 0.06em;
   font-weight: 700;
@@ -132,7 +132,7 @@ html, body {
 .hero-score .num { color: #f6f3ee; }
 .hero-score .num.win { color: #e8ff5a; }
 .hero-score .num.lose { color: #9a948a; }
-.hero-score .dash { color: #4a463f; padding: 0 10px; }
+.hero-score .dash { color: #4a463f; padding: 0 8px; }
 .map-final-score {
   margin-top: 4px;
   font-size: 14px;
@@ -398,14 +398,14 @@ def _e(value: object) -> str:
     return escape(str(value or ""))
 
 
-_CARD_W = 520
+_CARD_W = 420
 _LIST_W = 416  # list cards are 20% narrower for a phone
 # List name column is the gap between the 22px logo and the score on a 416px card.
-# At 15px that is 22 Latin letters. The 520px match card uses 28px type, so 16.
+# At 15px that is 22 Latin letters. The 420px match card uses 24px type, so 14.
 # A CJK character counts as two letters.
 LIST_NAME_UNITS = 22
 GRID_NAME_UNITS = 16
-CARD_NAME_UNITS = 16
+CARD_NAME_UNITS = 14
 # Five or more matches are two columns. Four still fit as a single stack.
 TWO_COL_AT = 5
 
@@ -478,7 +478,7 @@ def render_card(card: dict) -> bytes:
     elif view == "guide":
         html = _guide_html(card, 760, _CARD_W)
     else:
-        height = 560 if card.get("kind") in {"map", "match"} else (500 if card.get("map_rows") else 460)
+        height = 460 if card.get("kind") in {"map", "match"} else (420 if card.get("map_rows") else 380)
         html = _match_html(card, height, _CARD_W)
     return _png(html)
 
@@ -488,16 +488,16 @@ def _png(html: str) -> bytes:
     import pypdfium2
     from PIL import Image, ImageChops
 
-    # CSS pixels are 96 per inch; PDF points are 72. scale=4 is 3 device
-    # pixels per CSS pixel, so phone screens are not enlarging a soft image.
+    # CSS pixels are 96 per inch; PDF points are 72. scale=3 is 2.25 device
+    # pixels per CSS pixel, providing a crisp, compact retina display on phones.
     pdf = weasyprint.HTML(string=html).write_pdf()
     doc = pypdfium2.PdfDocument(pdf)
-    image = doc[0].render(scale=4).to_pil().convert("RGB")
+    image = doc[0].render(scale=3).to_pil().convert("RGB")
     bg = Image.new("RGB", image.size, _BG)
     diff = ImageChops.difference(image, bg)
     box = diff.getbbox()
     if box:
-        image = image.crop((0, 0, image.width, min(image.height, box[3] + 28)))
+        image = image.crop((0, 0, image.width, min(image.height, box[3] + 24)))
     out = io.BytesIO()
     image.save(out, format="PNG", optimize=True)
     return out.getvalue()
