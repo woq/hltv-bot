@@ -50,7 +50,10 @@ from hltv_bot.telegram_api import Telegram
 log = logging.getLogger("hltv_bot")
 
 DEFAULT_ADMIN_ID = 1442477170
-MSG_TTL = 30.0
+TTL_SHORT = 30.0       # 30秒: 临时交互指令与卡片 (/matches, /events, /status, /help 等)
+TTL_MEDIUM = 300.0     # 5分钟: 半场结果卡片 (halftime)
+TTL_LONG = 900.0       # 15分钟: 单图结束/图胜卡片 (map winner)
+MSG_TTL = TTL_SHORT    # 兼容历史引用
 GET_UPDATES_FAIL_SLEEP = 3.0
 TG_COMMANDS_GAP = 0.4
 # One /matches fetch covers every live BO1/BO3/BO5. That is the score clock.
@@ -233,6 +236,9 @@ class HltvTelegramBot:
         self._await_cookie: set[int] = set()
         self._cool = Cooldown()
         self.msg_ttl = MSG_TTL
+        self.ttl_short = TTL_SHORT
+        self.ttl_medium = TTL_MEDIUM
+        self.ttl_long = TTL_LONG
         self._can_delete_cache: dict[int, tuple[float, bool]] = {}
         self.started_at = time.time()
         self._stop = threading.Event()
@@ -1048,9 +1054,9 @@ class HltvTelegramBot:
         if self.can_setup_chat(int(cid), from_id, chat.get("type") or ""):
             self._reply(int(cid), f"<b>已进群</b>\n<b>{h(chat.get('title') or '')}</b>\n发 /allow 加入通知")
 
-    def _schedule_delete(self, chat_id: int, message_id: int) -> None:
-        delay = float(self.msg_ttl or 0)
-        if delay <= 0 or not message_id:
+    def _schedule_delete(self, chat_id: int, message_id: int, delay: float | None = None) -> None:
+        secs = float(self.msg_ttl if delay is None else delay)
+        if secs <= 0 or not message_id:
             return
 
         def _run() -> None:
@@ -1059,7 +1065,7 @@ class HltvTelegramBot:
             except Exception:
                 log.debug("delete_message chat=%s msg=%s failed", chat_id, message_id)
 
-        threading.Timer(delay, _run).start()
+        threading.Timer(secs, _run).start()
 
     def _reply_card(self, chat_id: int, card: dict, caption: str, fallback: str, *, keep: bool = False) -> None:
         try:
@@ -1205,7 +1211,10 @@ class HltvTelegramBot:
                     except Exception:
                         log.exception("halftime bump send chat=%s", gid)
                 try:
-                    self._send_score(gid, png, caption, silent=silent, previous=None)
+                    ht_msg = self._send_score(gid, png, caption, silent=silent, previous=None)
+                    ht_id = ht_msg.get("message_id") if isinstance(ht_msg, dict) else None
+                    if ht_id is not None:
+                        self._schedule_delete(gid, int(ht_id), delay=self.ttl_medium)
                 except Exception:
                     log.exception("halftime send chat=%s", gid)
                 continue
@@ -1218,13 +1227,16 @@ class HltvTelegramBot:
                     except Exception:
                         pass
                 try:
-                    self._send_score(
+                    res_msg = self._send_score(
                         gid,
                         png,
                         caption,
                         silent=silent,
                         previous=None,
                     )
+                    res_id = res_msg.get("message_id") if isinstance(res_msg, dict) else None
+                    if res_id is not None and kind == "map":
+                        self._schedule_delete(gid, int(res_id), delay=self.ttl_long)
                 except Exception:
                     log.exception("score chat=%s", gid)
                 continue

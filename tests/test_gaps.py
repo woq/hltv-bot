@@ -7,6 +7,9 @@ from hltv_bot.bot import (
     DEFAULT_CMD_COOLDOWN,
     GET_UPDATES_FAIL_SLEEP,
     MSG_TTL,
+    TTL_SHORT,
+    TTL_MEDIUM,
+    TTL_LONG,
     MATCH_PAGE_MAX,
     MATCH_PAGE_MIN,
     TG_COMMANDS_GAP,
@@ -44,6 +47,9 @@ def test_delay_floors():
     assert MAX_EDITS_PER_MINUTE == 19
     assert MAX_EDITS_PER_MINUTE < 20
     assert MSG_TTL >= 30.0
+    assert TTL_SHORT == 30.0
+    assert TTL_MEDIUM == 300.0
+    assert TTL_LONG == 900.0
     assert GET_UPDATES_FAIL_SLEEP >= 3.0
     assert TG_COMMANDS_GAP >= 0.3
     assert MATCH_PAGE_MIN >= 3.0

@@ -321,7 +321,13 @@ def test_halftime_and_map_winner_send_photo_and_manage_slots(tmp_path, monkeypat
         return {"message_id": seq["n"]}
 
     tg.send_photo = send_photo
-    monkeypatch.setattr("hltv_bot.bot.threading.Timer", lambda *a, **k: type("T", (), {"start": lambda self: None})())
+    timers = []
+
+    def fake_timer(delay, fn, *args, **kwargs):
+        timers.append((delay, fn))
+        return type("T", (), {"start": lambda self: None})()
+
+    monkeypatch.setattr("hltv_bot.bot.threading.Timer", fake_timer)
     monkeypatch.setattr("hltv_bot.cards.render_card", lambda card: b"png")
     monkeypatch.setattr("hltv_bot.bot.group_ids", lambda: [-100])
     bot = HltvTelegramBot(
@@ -348,12 +354,15 @@ def test_halftime_and_map_winner_send_photo_and_manage_slots(tmp_path, monkeypat
     assert tg.edited[-1] == (-100, 601, "<b>比分 6-5</b>")
 
     # 3. Halftime (7-5) -> bumps live card (deletes 601, sends 602), then sends halftime photo (603)!
+    # Halftime photo (603) should be auto-deleted with medium TTL (300s).
+    timers.clear()
     note_ht = Notice("m:101:halftime:0", "<b>半场 7-5</b>", {"view": "match", "kind": "halftime"}, "101", "multi")
     bot._broadcast(note_ht)
     assert 601 in tg.deleted
     assert len(tg.sent) == 3
     # slot holds the bumped live card (602), NOT the halftime photo (603)
     assert bot._state["score_msgs"]["101"]["-100"] == 602
+    assert any(delay == 300.0 for delay, _ in timers)
 
     # 4. Next round (8-5) -> edits the bumped live card (602), leaving halftime photo intact!
     note_edit2 = Notice("m:101:score:8-5|bo3", "<b>比分 8-5</b>", {"view": "match", "kind": "score"}, "101", "multi")
@@ -362,11 +371,14 @@ def test_halftime_and_map_winner_send_photo_and_manage_slots(tmp_path, monkeypat
     assert tg.edited[-1] == (-100, 602, "<b>比分 8-5</b>")
 
     # 5. Map winner -> deletes old live card (602), sends NEW photo (604), slot cleared!
+    # Map winner photo (604) should be auto-deleted with long TTL (900s).
+    timers.clear()
     note_map = Notice("m:101:map:0", "<b>Map winner 13-10</b>", {"view": "match", "kind": "map"}, "101", "multi")
     bot._broadcast(note_map)
     assert 602 in tg.deleted
     assert len(tg.sent) == 4
     assert "-100" not in bot._state.get("score_msgs", {}).get("101", {})
+    assert any(delay == 900.0 for delay, _ in timers)
 
     # 6. Map 2 round 1 (1-0) -> sends NEW photo (605) for Map 2!
     note_m2 = Notice("m:101:score:1-0_m2", "<b>比分 1-0</b>", {"view": "match", "kind": "score"}, "101", "multi")
