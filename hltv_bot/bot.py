@@ -271,7 +271,11 @@ class HltvTelegramBot:
         cached = self._can_delete_cache.get(cid)
         if cached and now - cached[0] < 300.0:
             return cached[1]
-        can = self.tg.bot_can_delete_messages(cid)
+        can = False
+        if hasattr(self.tg, "bot_can_delete_messages"):
+            can = bool(self.tg.bot_can_delete_messages(cid))
+        elif hasattr(self.tg, "delete_message"):
+            can = True
         self._can_delete_cache[cid] = (now, can)
         return can
 
@@ -1139,10 +1143,68 @@ class HltvTelegramBot:
         kind = card.get("kind") if isinstance(card, dict) else ""
         is_milestone = kind in {"halftime", "map", "match"}
 
+        live_png = None
+        live_caption = ""
+        if kind == "halftime":
+            from hltv_bot.reminders import current_match_notice
+
+            row = getattr(note, "row", None)
+            if not row:
+                with self._state_lock:
+                    row = (self._state.get("matches") or {}).get(mid)
+            if not row and isinstance(card, dict):
+                row = {
+                    "id": mid,
+                    "team1": card.get("team1") or "?",
+                    "team2": card.get("team2") or "?",
+                    "team1_logo": card.get("logo1") or "",
+                    "team2_logo": card.get("logo2") or "",
+                    "team1_id": card.get("team1_id") or "",
+                    "team2_id": card.get("team2_id") or "",
+                    "event": card.get("event") or "",
+                    "event_id": card.get("event_id") or "",
+                    "event_logo": card.get("event_logo") or "",
+                    "score1": str(card.get("pair", [0, 0])[0]) if card.get("pair") else "",
+                    "score2": str(card.get("pair", [0, 0])[1]) if card.get("pair") else "",
+                    "time": "LIVE",
+                    "live": "1",
+                }
+            if row:
+                try:
+                    live_note = current_match_notice(row, self._cfg())
+                    live_caption = live_note.html
+                    if live_note.card:
+                        from hltv_bot.cards import render_card
+
+                        live_png = render_card(live_note.card)
+                except Exception:
+                    log.exception("halftime bump card render")
+
         with self._state_lock:
             book = dict(self._state.get("score_msgs") or {})
             slot = dict(book.get(mid) or {})
         for gid in ids:
+            if kind == "halftime":
+                old_msg_id = slot.get(str(gid))
+                if old_msg_id and self.can_delete_in_chat(gid):
+                    try:
+                        self.tg.delete_message(gid, int(old_msg_id))
+                    except Exception:
+                        pass
+                if live_caption or live_png:
+                    try:
+                        bump_msg = self._send_score(gid, live_png, live_caption, silent=silent, previous=None)
+                        b_id = bump_msg.get("message_id") if isinstance(bump_msg, dict) else None
+                        if b_id is not None:
+                            slot[str(gid)] = int(b_id)
+                    except Exception:
+                        log.exception("halftime bump send chat=%s", gid)
+                try:
+                    self._send_score(gid, png, caption, silent=silent, previous=None)
+                except Exception:
+                    log.exception("halftime send chat=%s", gid)
+                continue
+
             previous = None if is_milestone else slot.get(str(gid))
             try:
                 msg = self._send_score(

@@ -610,6 +610,15 @@ def test_halftime_and_map_winner_flow():
     assert notes[0].card["pair"] == ("13", "10")
     assert notes[0].key == "m:101:map:0"
 
+    # 6b. Cloudflare returns stale edge cache (e.g. 12-10 with won1=0, won2=0) -> MUST be ignored!
+    stale_cf = {**row, "score1": "12", "score2": "10", "won1": "0", "won2": "0"}
+    state, notes = plan_reminders(state, [stale_cf], None, now=now)
+    assert notes == []
+    assert state["matches"]["101"]["map_rounds"] == "13-10"
+    assert state["matches"]["101"]["score"] == "13-10"
+    assert state["matches"]["101"]["map_index"] == "0"
+    assert state["matches"]["101"]["won1"] == "1"
+
     # 7. Map 2 starts, advances to 6-6 (Halftime on Map 2!)
     map2_row = {**row, "score1": "6", "score2": "6", "won1": "1", "won2": "0", "map_index": "1"}
     state, notes = plan_reminders(state, [map2_row], None, now=now)
@@ -682,6 +691,63 @@ def test_anti_flapping_retains_missing_match_for_two_polls():
     assert "1" in state["matches"]
     assert state["matches"]["1"]["missed"] == 0
     assert state["matches"]["1"]["opened"] is True
+
+
+def test_map_winner_followed_by_stale_round_score_cloudflare_cache_does_not_retrigger():
+    """Reproduces the exact production bug:
+    Spirit vs ShindeN: Map 1 finishes 11-13 (ShindeN wins Map 1, won=(0, 1)).
+    Next poll 12s later: Cloudflare returns stale cached page with 11-12 and won=(0, 0).
+    Must NOT emit 11-12 or contaminate Map 2 with Map 1's stale score.
+    """
+    now = datetime(2026, 10, 3, 21, 5, tzinfo=CST)
+    base_row = dict(
+        id="2398720",
+        title="Spirit vs ShindeN",
+        team1="Spirit",
+        team2="ShindeN",
+        event="ESL Pro League Season 24",
+        stars="1",
+        live="1",
+        format="bo3",
+        maps="Dust2 · Nuke · Mirage",
+    )
+    # Match is at 11-12 in Map 1
+    state, _ = plan_reminders(
+        empty_state(),
+        [{**base_row, "score1": "11", "score2": "12", "won1": "0", "won2": "0", "map_index": "0"}],
+        None,
+        now=now,
+    )
+
+    # Map 1 ends 11-13 -> Map winner emitted for ShindeN (winner=2)
+    state, notes = plan_reminders(
+        state,
+        [{**base_row, "score1": "11", "score2": "13", "won1": "0", "won2": "1", "map_index": "0"}],
+        None,
+        now=now,
+    )
+    assert len(notes) == 1
+    assert notes[0].card["kind"] == "map"
+    assert notes[0].card["label"] == "Map winner"
+    assert notes[0].card["winner"] == 2
+    assert notes[0].card["pair"] == ("11", "13")
+
+    # Cloudflare serves 12-second stale cache from edge (11-12, won1=0, won2=0)
+    stale_poll = {**base_row, "score1": "11", "score2": "12", "won1": "0", "won2": "0"}
+    state, stale_notes = plan_reminders(state, [stale_poll], None, now=now)
+    assert stale_notes == [], f"Expected no stale notes, but got: {[n.key for n in stale_notes]}"
+    assert state["matches"]["2398720"]["score"] == "11-13"
+    assert state["matches"]["2398720"]["map_rounds"] == "11-13"
+    assert state["matches"]["2398720"]["map_index"] == "0"
+    assert state["matches"]["2398720"]["won2"] == "1"
+
+    # Cloudflare serves another stale cache without won1/won2
+    stale_poll2 = {**base_row, "score1": "11", "score2": "12", "won1": "", "won2": ""}
+    state, stale_notes2 = plan_reminders(state, [stale_poll2], None, now=now)
+    assert stale_notes2 == []
+    assert state["matches"]["2398720"]["score"] == "11-13"
+    assert state["matches"]["2398720"]["map_rounds"] == "11-13"
+
 
 
 

@@ -21,6 +21,7 @@ class Notice:
     match_id: str = ""
     lane: str = ""
     admins_only: bool = False
+    row: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -220,7 +221,8 @@ def cache_match_score(old: dict, row: dict) -> dict:
     n_maps = len(_map_names(row) or _map_names(old))
     stored = _stored_rounds(old)
     old_won = _won_pair(old)
-    won = _forward_pair(old_won, _won_pair(row))
+    row_won = _won_pair(row)
+    won = _forward_pair(old_won, row_won)
     incoming = _pair(score_text(row))
     if incoming is not None:
         won_now = won if won is not None else (0, 0)
@@ -231,10 +233,31 @@ def cache_match_score(old: dict, row: dict) -> dict:
             and won[1] >= old_won[1]
             and (won[0] + won[1]) > (old_won[0] + old_won[1])
         )
-        slot = _map_slot(won_now, incoming, n_maps)
+        stale_series = (
+            old_won is not None
+            and row_won is not None
+            and (row_won[0] < old_won[0] or row_won[1] < old_won[1])
+            and max(incoming) > 5
+        )
+        if stale_series and row_won is not None:
+            slot = _map_slot(row_won, incoming, n_maps)
+        else:
+            slot = _map_slot(won_now, incoming, n_maps)
+            row_idx = str(row.get("map_index") or "")
+            if (
+                slot > 0
+                and (slot >= len(stored) or stored[slot] is None)
+                and stored[slot - 1] is not None
+                and map_is_over(*stored[slot - 1])
+                and max(incoming) > 5
+                and incoming[0] <= stored[slot - 1][0]
+                and incoming[1] <= stored[slot - 1][1]
+                and (not row_idx.isdigit() or int(row_idx) < slot)
+            ):
+                slot = slot - 1
         while len(stored) <= slot:
             stored.append(None)
-        if stored[slot] is not None and _low_reset(stored[slot], incoming) and not grew:
+        if stored[slot] is not None and _low_reset(stored[slot], incoming) and not grew and not stale_series:
             previous = stored[slot]
             if previous is not None and previous[0] != previous[1] and (won_now[0] + won_now[1]) <= slot:
                 bumped = [won_now[0], won_now[1]]
@@ -647,7 +670,7 @@ def _score_notice(
     else:
         key = f"m:{mid}:score:{feed_sig(row)}"
     card = _match_card(kind, row, when, score, winners=winners, winner=winner, rounds=rounds)
-    return Notice(key, _match_caption(card, row), card, mid, score_lane(row, cfg))
+    return Notice(key, _match_caption(card, row), card, mid, score_lane(row, cfg), row=row)
 
 
 def current_match_notice(row: dict, cfg: RemindConfig) -> Notice:
