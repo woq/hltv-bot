@@ -18,7 +18,13 @@ html, body {
   font-family: "Rajdhani", "WenQuanYi Zen Hei", "Noto Sans CJK SC", "DejaVu Sans", sans-serif;
   text-rendering: geometricPrecision;
 }
-.card { position: relative; width: PAGEWpx; padding: 22px 20px 32px; }
+.card {
+  position: relative;
+  width: PAGEWpx;
+  padding: 22px 20px 32px;
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
 .stamp {
   position: absolute;
   right: 18px;
@@ -272,7 +278,7 @@ td.body { padding: 8px 0 8px; border-top: 1px solid #4a463f; }
 .mbody .name { font-size: 15px; }
 .mbody .sc { width: 28px; font-size: 16px; }
 .mbody .tlogo, .mbody .tlogo-ph { width: 22px; height: 22px; flex-basis: 22px; margin-right: 8px; }
-.tlogo svg, .mbody .tlogo svg { width: 100%; height: 100%; display: block; }
+.tlogo svg, .mbody .tlogo svg, .m-logo svg, .mplogo svg, .winner-hero .tlogo svg, svg.logo-svg { width: 100%; height: 100%; display: block; }
 .sub {
   display: flex;
   align-items: center;
@@ -478,12 +484,13 @@ def render_card(card: dict) -> bytes:
     elif view == "guide":
         html = _guide_html(card, 760, _CARD_W)
     else:
-        height = 460 if card.get("kind") in {"map", "match"} else (420 if card.get("map_rows") else 380)
+        height = 480 if card.get("kind") in {"map", "match"} else (420 if card.get("map_rows") else 380)
         html = _match_html(card, height, _CARD_W)
     return _png(html)
 
 
 def _png(html: str) -> bytes:
+    import logging
     import weasyprint
     import pypdfium2
     from PIL import Image, ImageChops
@@ -492,6 +499,8 @@ def _png(html: str) -> bytes:
     # pixels per CSS pixel, providing a crisp, compact retina display on phones.
     pdf = weasyprint.HTML(string=html).write_pdf()
     doc = pypdfium2.PdfDocument(pdf)
+    if len(doc) > 1:
+        logging.getLogger(__name__).warning("card rendered with %d pages, only first page captured", len(doc))
     image = doc[0].render(scale=3).to_pil().convert("RGB")
     bg = Image.new("RGB", image.size, _BG)
     diff = ImageChops.difference(image, bg)
@@ -539,10 +548,6 @@ def _page(body: str, height: int, width: int) -> str:
 
 
 def _img(uri: str, cls: str) -> str:
-    if uri.startswith("data:image/svg"):
-        svg = _svg_markup(uri)
-        if svg:
-            return f'<span class="{cls}">{svg}</span>'
     if uri.startswith("data:image"):
         return f'<img class="{cls}" src="{uri}" />'
     return f'<span class="{cls}-ph"></span>'

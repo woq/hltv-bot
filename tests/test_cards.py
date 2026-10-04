@@ -208,3 +208,39 @@ def test_events_card_html_and_render():
 
     png = render_card(card)
     assert png.startswith(b"\x89PNG")
+
+
+def test_match_winner_card_with_large_svg_logo_single_page():
+    import base64
+    import weasyprint
+    import pypdfium2
+    from hltv_bot.cards import _match_html, render_card
+
+    svg_data = '<svg xmlns="http://www.w3.org/2000/svg" width="800px" height="800px" viewBox="0 0 100 100"><circle cx="50" cy="50" r="40" fill="red"/></svg>'
+    b64_svg = f"data:image/svg+xml;base64,{base64.b64encode(svg_data.encode()).decode()}"
+    card = {
+        "view": "match",
+        "kind": "match",
+        "label": "Match winner",
+        "team1": "9z",
+        "team2": "TYLOO",
+        "logo1": "",
+        "logo2": b64_svg,
+        "pair": ("2", "0"),
+        "winner": 1,
+        "map_rows": [
+            {"name": "Nuke", "winner": 1, "score": "13-10", "loser_logo": b64_svg},
+            {"name": "Mirage", "winner": 1, "score": "13-2", "loser_logo": b64_svg},
+            {"name": "Inferno", "winner": 0, "score": ""},
+        ],
+        "map_score": "本图 13–2",
+        "event": "ESL Pro League Season 24",
+    }
+    html = _match_html(card, 480, 420)
+    assert f'<img class="m-logo" src="{b64_svg}"' in html
+    pdf = weasyprint.HTML(string=html).write_pdf()
+    doc = pypdfium2.PdfDocument(pdf)
+    assert len(doc) == 1
+    png = render_card(card)
+    assert png.startswith(b"\x89PNG")
+
