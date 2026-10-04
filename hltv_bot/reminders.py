@@ -630,8 +630,13 @@ def _match_caption(card: dict, row: dict) -> str:
         icon = "🏆" if kind == "match" else "🗺"
         pair_str = f"<code>{h(pair[0])}</code>–<code>{h(pair[1])}</code>" if pair else ""
         head = f"{icon} <b>{h(label)}</b> · <b>{h(win_name or '?')}</b> {pair_str} 对 {h(other or '?')}".strip()
+    elif kind == "halftime":
+        t1 = h(card.get("team1") or "?")
+        t2 = h(card.get("team2") or "?")
+        score_str = f" <code>{h(pair[0])}</code>–<code>{h(pair[1])}</code>" if pair else ""
+        head = f"⏱ <b>【半场换边】</b> {t1}{score_str} {t2}".strip()
     else:
-        icon = "⏱" if kind == "halftime" else ("⚔️" if kind in {"preview", "soon"} else "🔴")
+        icon = "⚔️" if kind in {"preview", "soon"} else "🔴"
         t1 = h(card.get("team1") or "?")
         t2 = h(card.get("team2") or "?")
         if pair:
@@ -643,6 +648,11 @@ def _match_caption(card: dict, row: dict) -> str:
 
     # Blockquote for map breakdown and round details
     quote_bits = []
+    if kind == "halftime":
+        if pair:
+            quote_bits.append(f"<b>上半场战罢 ({h(pair[0])}–{h(pair[1])}) 双方换边</b>")
+        else:
+            quote_bits.append("<b>上半场战罢 · 双方换边</b>")
     extra = (card.get("map_score") or "").strip()
     if extra:
         quote_bits.append(h(extra))

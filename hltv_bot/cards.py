@@ -42,6 +42,29 @@ html, body {
   font-weight: 600;
 }
 .kicker em { font-style: normal; color: #e8ff5a; letter-spacing: 0.18em; }
+.kicker-ht {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  letter-spacing: normal;
+}
+.badge-ht {
+  font-family: "Rajdhani", "Liberation Sans", "DejaVu Sans", sans-serif;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  color: #121210;
+  background: #ffaa00;
+  padding: 2px 7px;
+  border-radius: 4px;
+  text-transform: uppercase;
+}
+.ht-desc {
+  font-size: 13px;
+  font-weight: 700;
+  color: #ffaa00;
+  letter-spacing: 0.08em;
+}
 .trow { display: flex; align-items: center; margin-top: 10px; }
 .tlogo, .tlogo-ph { width: 24px; height: 24px; margin-right: 10px; object-fit: contain; flex: 0 0 24px; }
 .tlogo-ph, .elogo-ph { display: inline-block; background: #3a3833; }
@@ -181,6 +204,7 @@ html, body {
 .sc.live { color: #ff6a45; }
 .sc.final { color: #f6f3ee; }
 .sc.soon { color: #d2ccc2; }
+.sc.halftime { color: #ffaa00; }
 .elogo { height: 16px; width: auto; max-width: 48px; object-fit: contain; margin-right: 8px; vertical-align: middle; }
 .elogo-ph { display: none; }
 .eventline { display: flex; align-items: center; }
@@ -689,15 +713,24 @@ def _winner_block(card: dict) -> str:
 
 def _match_html(card: dict, height: int, width: int) -> str:
     kind = card.get("kind") or "score"
-    accent = {"preview": "live", "final": "final", "soon": "soon"}.get(kind, "")
+    accent = {"preview": "live", "final": "final", "soon": "soon", "halftime": "halftime"}.get(kind, "")
     pair = card.get("pair") or ("", "")
     left = pair[0] if pair and pair[0] else ""
     right = pair[1] if pair and len(pair) > 1 else ""
     if kind in {"map", "match"}:
         head = _winner_block(card)
     else:
+        if kind == "halftime":
+            kicker_html = (
+                "<div class='kicker kicker-ht'>"
+                "<span class='badge-ht'>HALFTIME</span>"
+                "<span class='ht-desc'>半场结束 · 双方换边</span>"
+                "</div>"
+            )
+        else:
+            kicker_html = f"<div class='kicker'>{_e(card.get('label'))}</div>"
         head = (
-            f"<div class='kicker'>{_e(card.get('label'))}</div>"
+            kicker_html
             + _team_row(
                 card.get("team1") or "?",
                 left,

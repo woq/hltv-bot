@@ -353,38 +353,42 @@ def test_halftime_and_map_winner_send_photo_and_manage_slots(tmp_path, monkeypat
     assert len(tg.sent) == 1  # No new message sent
     assert tg.edited[-1] == (-100, 601, "<b>比分 6-5</b>")
 
-    # 3. Halftime (7-5) -> bumps live card (deletes 601, sends 602), then sends halftime photo (603)!
-    # Halftime photo (603) should be auto-deleted with medium TTL (300s).
+    # 3. Halftime (7-5) -> bumps live card directly (deletes 601, sends 602 with halftime info)
+    # Does not publish a separate duplicate halftime photo.
     timers.clear()
     note_ht = Notice("m:101:halftime:0", "<b>半场 7-5</b>", {"view": "match", "kind": "halftime"}, "101", "multi")
     bot._broadcast(note_ht)
     assert 601 in tg.deleted
-    assert len(tg.sent) == 3
-    # slot holds the bumped live card (602), NOT the halftime photo (603)
+    assert len(tg.sent) == 2
+    # slot holds the bumped live card (602)
     assert bot._state["score_msgs"]["101"]["-100"] == 602
-    assert any(delay == 300.0 for delay, _ in timers)
 
-    # 4. Next round (8-5) -> edits the bumped live card (602), leaving halftime photo intact!
+    # 4. Next round (8-5) -> edits the bumped live card (602)
     note_edit2 = Notice("m:101:score:8-5|bo3", "<b>比分 8-5</b>", {"view": "match", "kind": "score"}, "101", "multi")
     bot._broadcast(note_edit2)
-    assert len(tg.sent) == 3
+    assert len(tg.sent) == 2
     assert tg.edited[-1] == (-100, 602, "<b>比分 8-5</b>")
 
-    # 5. Map winner -> deletes old live card (602), sends NEW photo (604), slot cleared!
-    # Map winner photo (604) should be auto-deleted with long TTL (900s).
-    timers.clear()
+    # 5. Map winner -> bumps live card (deletes 602, sends 603 with map winner info), saved in slot!
     note_map = Notice("m:101:map:0", "<b>Map winner 13-10</b>", {"view": "match", "kind": "map"}, "101", "multi")
     bot._broadcast(note_map)
     assert 602 in tg.deleted
-    assert len(tg.sent) == 4
-    assert "-100" not in bot._state.get("score_msgs", {}).get("101", {})
-    assert any(delay == 900.0 for delay, _ in timers)
+    assert len(tg.sent) == 3
+    assert bot._state["score_msgs"]["101"]["-100"] == 603
 
-    # 6. Map 2 round 1 (1-0) -> sends NEW photo (605) for Map 2!
+    # 6. Map 2 round 1 (1-0) -> edits the bumped map winner card (603)!
     note_m2 = Notice("m:101:score:1-0_m2", "<b>比分 1-0</b>", {"view": "match", "kind": "score"}, "101", "multi")
     bot._broadcast(note_m2)
-    assert len(tg.sent) == 5
-    assert bot._state["score_msgs"]["101"]["-100"] == 605
+    assert len(tg.sent) == 3
+    assert tg.edited[-1] == (-100, 603, "<b>比分 1-0</b>")
+    assert bot._state["score_msgs"]["101"]["-100"] == 603
+
+    # 7. Match winner -> deletes old live card (603), sends final result photo (604), history cleared!
+    note_match = Notice("m:101:match", "<b>Match winner 2-0</b>", {"view": "match", "kind": "match"}, "101", "multi")
+    bot._broadcast(note_match)
+    assert 603 in tg.deleted
+    assert len(tg.sent) == 4
+    assert "-100" not in bot._state.get("score_msgs", {}).get("101", {})
 
 
 def test_deletes_own_score_message_even_when_not_admin_in_group(tmp_path, monkeypatch):
@@ -427,10 +431,16 @@ def test_deletes_own_score_message_even_when_not_admin_in_group(tmp_path, monkey
     assert 701 in tg.deleted
     assert bot._state["score_msgs"]["201"]["-100"] == 702
 
-    # 3. Map winner MUST delete bumped live card (702) even without admin permissions
+    # 3. Map winner bumps and MUST delete bumped live card (702) even without admin permissions
     note_map = Notice("m:201:map:0", "<b>Map winner 13-10</b>", {"view": "match", "kind": "map"}, "201", "multi")
     bot._broadcast(note_map)
     assert 702 in tg.deleted
+    assert bot._state["score_msgs"]["201"]["-100"] == 703
+
+    # 4. Match winner MUST delete old card (703) and clear slot even without admin permissions
+    note_match = Notice("m:201:match", "<b>Match winner 2-0</b>", {"view": "match", "kind": "match"}, "201", "multi")
+    bot._broadcast(note_match)
+    assert 703 in tg.deleted
     assert "-100" not in bot._state.get("score_msgs", {}).get("201", {})
 
 
