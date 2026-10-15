@@ -472,7 +472,8 @@ class HltvTelegramBot:
             self._reply(chat_id, f"Cloudflare 拦了列表页：{e}\n发 /cookie 更新 Cookie")
             return
         rows = prepare_match_list(rows, datetime.now(CST))
-        min_stars = self._cfg().min_stars
+        cfg = self._cfg()
+        min_stars = cfg.min_stars
 
         def _stars_of(row: dict) -> int:
             try:
@@ -480,17 +481,36 @@ class HltvTelegramBot:
             except (TypeError, ValueError):
                 return 0
 
-        rows = [row for row in rows if _stars_of(row) >= min_stars]
+        def _is_explicit(row: dict) -> bool:
+            mid = str(row.get("id") or "")
+            eid = str(row.get("event_id") or "")
+            return bool((mid and mid in cfg.followed) or (eid and eid in cfg.covered))
+
         if tier != "Other":
             floor = tier_rank(tier)
-            rows = [
-                r
-                for r in rows
-                if tier_rank(classify_event_tier(r.get("event") or "", int(r.get("stars") or 0))) <= floor
-            ]
+            filtered = []
+            for r in rows:
+                if _is_explicit(r):
+                    r_copy = dict(r)
+                    r_copy["covered"] = True
+                    filtered.append(r_copy)
+                elif _stars_of(r) >= min_stars and tier_rank(classify_event_tier(r.get("event") or "", _stars_of(r))) <= floor:
+                    filtered.append(r)
+            rows = filtered
+        else:
+            filtered = []
+            for r in rows:
+                if _is_explicit(r):
+                    r_copy = dict(r)
+                    r_copy["covered"] = True
+                    filtered.append(r_copy)
+                else:
+                    filtered.append(r)
+            rows = filtered
+
         if not rows:
             hint = "发 /matches all 看其他赛事。" if tier != "Other" else ""
-            self._reply(chat_id, f"暂无 {min_stars} 星及以上的比赛。{hint}".strip())
+            self._reply(chat_id, f"暂无符合条件的比赛。{hint}".strip())
             return
         if "text" in raw or "txt" in raw:
             self._reply(chat_id, format_match_list(rows, starred_only=False))

@@ -244,3 +244,36 @@ def test_match_winner_card_with_large_svg_logo_single_page():
     png = render_card(card)
     assert png.startswith(b"\x89PNG")
 
+
+def test_matches_card_modern_style_and_covered():
+    import weasyprint
+    import pypdfium2
+
+    card = {
+        "view": "matches",
+        "rows": [
+            {
+                "id": "2399408",
+                "team1": "Aurora",
+                "team2": "Ninjas in Pyjamas",
+                "time": "16:35",
+                "event": "Thunderpick World Championship 2026",
+                "stars": "1",
+                "live": "0",
+                "format": "bo3",
+                "covered": True,
+            }
+        ],
+    }
+    html = _matches_html(card, 300, 416)
+    assert "data-covered='1'" in html
+    assert "mfmt'>BO3" in html
+    assert "mcovered'>★" in html
+    assert "class='mcard mbody'" in html
+    pdf = weasyprint.HTML(string=html).write_pdf()
+    doc = pypdfium2.PdfDocument(pdf)
+    assert len(doc) == 1
+    png = render_card(card)
+    assert png.startswith(b"\x89PNG")
+
+

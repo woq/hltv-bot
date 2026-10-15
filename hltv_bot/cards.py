@@ -6,15 +6,15 @@ import io
 from html import escape
 from pathlib import Path
 
-_BG = (20, 19, 17)
+_BG = (12, 14, 20)
 
 _CSS = """
 @page { size: PAGEWpx PAGEHpx; margin: 0; }
 * { box-sizing: border-box; }
 html, body {
   margin: 0; padding: 0;
-  background: #141311;
-  color: #f6f3ee;
+  background: #0c0e14;
+  color: #f4f6fa;
   font-family: "Rajdhani", "WenQuanYi Zen Hei", "Noto Sans CJK SC", "DejaVu Sans", sans-serif;
   text-rendering: geometricPrecision;
 }
@@ -22,6 +22,7 @@ html, body {
   position: relative;
   width: PAGEWpx;
   padding: 22px 20px 32px;
+  background: radial-gradient(circle at 50% -10%, #171b26 0%, #0c0e14 100%);
   break-inside: avoid;
   page-break-inside: avoid;
 }
@@ -234,45 +235,91 @@ html, body {
 .place { margin-top: 10px; font-size: 16px; color: #e4ddd2; font-weight: 600; }
 .flag { font-family: "Noto Color Emoji", "DejaVu Sans", sans-serif; }
 .remain { margin-top: 14px; font-size: 22px; }
-.sheet-title { font-size: 14px; letter-spacing: 0.16em; color: #e4ddd2; font-weight: 700; }
-.mcard {
-  margin-top: 14px;
-  padding: 12px 12px 12px;
-  background: #32302b;
-  border-radius: 12px;
+.sheet-title {
+  font-size: 13px;
+  letter-spacing: 0.18em;
+  color: #8fa0b5;
+  font-weight: 700;
+  text-transform: uppercase;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  padding-bottom: 8px;
+  margin-bottom: 6px;
 }
-.sheet-sub { margin-top: 4px; font-size: 14px; font-weight: 600; color: #e4ddd2; }
+.mcard {
+  margin-top: 10px;
+  padding: 12px 14px;
+  background: rgba(22, 26, 38, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+}
+.mcard[data-live="1"] {
+  border-color: rgba(255, 70, 85, 0.5);
+  background: linear-gradient(135deg, rgba(38, 18, 24, 0.9) 0%, rgba(22, 26, 38, 0.85) 100%);
+}
+.mcard[data-covered="1"] {
+  border-color: rgba(245, 166, 35, 0.45);
+}
+.sheet-sub { margin-top: 4px; font-size: 14px; font-weight: 700; color: #f5a623; letter-spacing: 0.04em; }
 table.mgrid { width: 100%; border-collapse: separate; border-spacing: 8px 8px; margin-top: 6px; }
 table.mgrid td { width: 50%; vertical-align: top; }
-table.mgrid .mcard { margin-top: 0; padding: 8px; }
-table.mgrid .mtag { width: 28px; font-size: 8px; }
-table.mgrid .mtime { font-size: 12px; }
+table.mgrid .mcard { margin-top: 0; padding: 10px 10px; }
+table.mgrid .mtag { font-size: 8px; padding: 1px 4px; }
+table.mgrid .mtime { font-size: 13px; margin-left: 4px; }
 table.mgrid .mbody .name { font-size: 13px; }
 table.mgrid .mevent {
   margin-top: 6px;
   font-size: 11px;
   line-height: 1.2;
-  color: #9a948a;
+  color: #7f91a6;
   font-weight: 600;
 }
 .mhead { display: flex; align-items: center; }
 .mtag {
-  width: 38px;
+  display: inline-block;
+  padding: 1px 5px;
+  border-radius: 3px;
   font-size: 9px;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.08em;
   color: transparent;
+  background: transparent;
   font-family: "Rajdhani", "Liberation Sans", "DejaVu Sans", sans-serif;
 }
-.mtag.on { color: #ff6a45; font-weight: 700; }
+.mtag.on {
+  color: #ffffff;
+  background: #ff4655;
+  font-weight: 800;
+}
 .mtime {
   flex: 1;
   font-size: 14px;
-  letter-spacing: 0.02em;
-  color: #e4ddd2;
-  font-weight: 600;
+  letter-spacing: 0.03em;
+  color: #c0ccdb;
+  font-weight: 700;
+  margin-left: 6px;
   font-family: "Rajdhani", "Liberation Sans", "DejaVu Sans", sans-serif;
 }
-.mstars { color: #e8ff5a; font-size: 14px; letter-spacing: 0.08em; }
+.mfmt {
+  font-size: 10px;
+  font-weight: 700;
+  color: #7f91a6;
+  background: rgba(255, 255, 255, 0.07);
+  padding: 1px 5px;
+  border-radius: 3px;
+  margin-right: 6px;
+  letter-spacing: 0.05em;
+  font-family: "Rajdhani", sans-serif;
+}
+.mcovered {
+  font-size: 10px;
+  font-weight: 700;
+  color: #12141a;
+  background: #f5a623;
+  padding: 1px 4px;
+  border-radius: 3px;
+  margin-right: 6px;
+  letter-spacing: 0.04em;
+}
+.mstars { color: #f5a623; font-size: 14px; letter-spacing: 0.08em; }
 .mmap {
   margin-top: 8px;
   font-size: 15px;
@@ -496,9 +543,9 @@ def render_card(card: dict) -> bytes:
     if view == "matches":
         n = max(1, min(len(card.get("rows") or []), 12))
         if n >= TWO_COL_AT:
-            height = 80 + 150 * ((n + 1) // 2)
+            height = 100 + 175 * ((n + 1) // 2) + 60
         else:
-            height = 56 + 220 * n
+            height = 80 + 245 * n + 60
         html = _matches_html(card, height, _LIST_W)
     elif view == "events":
         height = 64 + 132 * max(1, min(len(card.get("rows") or []), 8))
@@ -887,12 +934,19 @@ def _match_cell(row: dict, *, compact: bool, event_line: bool) -> str:
     stars = "★" * _stars(row)
     sc_accent = "live" if live else ("final" if (a or b) else "soon")
     limit = GRID_NAME_UNITS if compact else LIST_NAME_UNITS
+    is_cov = bool(row.get("covered"))
+    fmt = str(row.get("format") or "").strip().upper()
+    fmt_badge = f"<span class='mfmt'>{_e(fmt)}</span>" if fmt else ""
+    cov_badge = "<span class='mcovered'>★</span>" if is_cov else ""
+    data_attrs = f" data-live='{'1' if live else '0'}'" + (" data-covered='1'" if is_cov else "")
     body = (
-        "<div class='mcard mbody'>"
+        f"<div class='mcard mbody'{data_attrs}>"
         "<div class='mhead'>"
         f"<span class='mtag{' on' if live else ''}'>LIVE</span>"
         f"<span class='mtime'>{_e(clock)}</span>"
-        f"<span class='mstars'>{_e(stars)}</span>"
+        + fmt_badge
+        + cov_badge
+        + f"<span class='mstars'>{_e(stars)}</span>"
         "</div>"
         + _team_row(
             row.get("team1") or "?",
