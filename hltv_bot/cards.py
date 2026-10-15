@@ -82,14 +82,29 @@ html, body {
 }
 .hero { margin-top: 14px; display: flex; align-items: center; }
 .hero .name { font-size: 28px; }
+.match-island {
+  padding: 14px 16px;
+  background: radial-gradient(120% 100% at 50% 0%, #1a2436 0%, #101520 100%);
+  border: 1.5px solid #28374d;
+  border-top: 1.5px solid #3d4f6b;
+  border-radius: 12px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+}
+.match-island.is-live {
+  background: radial-gradient(120% 100% at 50% 0%, #361f28 0%, #161a26 100%);
+  border: 1.5px solid #ff4655;
+  box-shadow: 0 0 16px rgba(255, 70, 85, 0.25);
+}
 .winner-hero {
   margin-top: 10px;
   display: flex;
   align-items: center;
-  background: linear-gradient(90deg, rgba(232, 255, 90, 0.12) 0%, rgba(255, 255, 255, 0.03) 100%);
-  border: 1px solid rgba(232, 255, 90, 0.25);
-  border-radius: 8px;
-  padding: 8px 12px;
+  background: radial-gradient(120% 100% at 50% 0%, #2a2015 0%, #17151f 100%);
+  border: 1.5px solid #d4952c;
+  border-top: 1.5px solid #ffbe4d;
+  border-radius: 12px;
+  padding: 10px 14px;
+  box-shadow: 0 6px 20px rgba(212, 149, 44, 0.2);
 }
 .winner-hero .tlogo {
   width: 30px;
@@ -110,16 +125,22 @@ html, body {
 .winner-badge {
   font-family: "Rajdhani", "Liberation Sans", "DejaVu Sans", sans-serif;
   font-size: 11px;
-  font-weight: 700;
+  font-weight: 800;
   letter-spacing: 0.08em;
   color: #121210;
-  background: #e8ff5a;
-  padding: 2px 6px;
+  background: #f5a623;
+  padding: 2px 7px;
   border-radius: 4px;
   text-transform: uppercase;
 }
 .winner-matchup {
   margin-top: 10px;
+  padding: 12px 14px;
+  background: radial-gradient(120% 100% at 50% 0%, #1a2436 0%, #101520 100%);
+  border: 1.5px solid #28374d;
+  border-top: 1.5px solid #3d4f6b;
+  border-radius: 12px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
   text-align: center;
 }
 .matchup-teams {
@@ -170,11 +191,11 @@ html, body {
   font-weight: 600;
 }
 .opp { margin-top: 8px; font-size: 16px; color: #e4ddd2; font-weight: 600; }
-.mapline { margin-top: 14px; display: flex; flex-wrap: wrap; gap: 8px 12px; }
+.mapline { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 8px 12px; justify-content: center; }
 .mp {
   display: inline-flex;
   align-items: center;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
   color: #9a948a;
   background: rgba(255, 255, 255, 0.04);
@@ -188,7 +209,7 @@ html, body {
 .mplogo-ph { display: none; }
 .mpscore {
   font-family: "Rajdhani", "Liberation Sans", "DejaVu Sans", sans-serif;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 700;
   color: #f6f3ee;
   margin: 0 2px;
@@ -209,20 +230,28 @@ html, body {
 .elogo { height: 16px; width: auto; max-width: 48px; object-fit: contain; margin-right: 8px; vertical-align: middle; }
 .elogo-ph { display: none; }
 .eventline { display: flex; align-items: center; }
-.rule { height: 1px; background: #4a463f; margin: 22px 0 16px; }
+.rule { height: 1px; background: rgba(255, 255, 255, 0.06); margin: 12px 0 10px; }
 .event { font-size: 16px; color: #e4ddd2; font-weight: 600; }
 .note {
-  margin-top: 12px;
-  font-size: 15px;
-  letter-spacing: 0.08em;
+  margin-top: 10px;
+  font-size: 14px;
+  letter-spacing: 0.06em;
   color: #e8ff5a;
   font-weight: 600;
 }
 .g-title { font-size: 22px; font-weight: 700; letter-spacing: 0.04em; color: #f6f3ee; }
 .g-sub { margin-top: 6px; color: #e4ddd2; font-size: 14px; font-weight: 600; }
-.g-block { margin-top: 16px; }
+.g-block {
+  margin-top: 8px;
+  padding: 10px 12px;
+  background: radial-gradient(120% 100% at 50% 0%, #1a2436 0%, #101520 100%);
+  border: 1.5px solid #28374d;
+  border-top: 1.5px solid #3d4f6b;
+  border-radius: 10px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+}
 .g-k { color: #e8ff5a; font-size: 13px; letter-spacing: 0.16em; font-weight: 700; }
-.g-line { margin-top: 4px; font-size: 16px; line-height: 1.45; color: #f6f3ee; font-weight: 600; }
+.g-line { margin-top: 4px; font-size: 15px; line-height: 1.45; color: #f6f3ee; font-weight: 600; }
 .when {
   margin-top: 8px;
   font-family: "Rajdhani", "Liberation Sans", "DejaVu Sans", sans-serif;
@@ -373,85 +402,111 @@ td.body { padding: 8px 0 8px; border-top: 1px solid #4a463f; }
   font-weight: 600;
 }
 .event-card { position: relative; overflow: hidden; }
-.event-bg {
-  position: absolute;
-  background-repeat: no-repeat;
-  background-position: center;
-  background-size: contain;
-}
-.event-shade { position: absolute; inset: 0; }
+.event-bg, .event-shade { display: none !important; }
 .event-copy { position: relative; }
-.event-solo { min-height: 188px; }
-.event-solo .event-bg { width: 176px; height: 176px; right: 4px; top: 18px; }
-.event-solo .event-shade {
-  background: linear-gradient(90deg, #0a0d14 0%, #0a0d14 48%, rgba(10,13,20,0) 64%);
+.event-solo {
+  margin-top: 4px;
+  padding: 18px 20px;
+  background: radial-gradient(120% 100% at 50% 0%, #1a2436 0%, #101520 100%);
+  border: 1.5px solid #28374d;
+  border-top: 1.5px solid #3d4f6b;
+  border-radius: 14px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+  min-height: 180px;
 }
 .event-solo .event-copy {
   display: flex;
   flex-direction: column;
-  padding-right: 156px;
-  min-height: 176px;
+  padding-right: 0;
+  min-height: 160px;
 }
 .event-solo .name {
   margin-top: 0;
-  font-size: 36px;
-  line-height: 1.05;
+  font-size: 26px;
+  line-height: 1.15;
   font-weight: 700;
+  color: #f6f3ee;
   white-space: normal;
 }
 .event-solo .remain {
-  margin-top: 12px;
-  font-size: 22px;
+  margin-top: 14px;
+  font-size: 26px;
   line-height: 1.15;
-  font-weight: 600;
+  font-weight: 700;
+  color: #f5a623;
 }
-.event-solo .remain.final { font-size: 22px; letter-spacing: 0; }
+.event-solo .remain.final { font-size: 24px; letter-spacing: 0; color: #ff6a45; }
 .event-solo .foot {
   margin-top: auto;
-  padding-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
   font-size: 13px;
   line-height: 1.4;
   font-weight: 600;
-  color: #9a948a;
+  color: #8da6c4;
 }
-.event-row { min-height: 112px; margin-top: 14px; padding-top: 10px; border-top: 1px solid rgba(255, 255, 255, 0.08); }
-.event-row .event-bg { width: 92px; height: 92px; right: 0; top: 14px; }
-.event-row .event-shade {
-  background: linear-gradient(90deg, #0a0d14 0%, #0a0d14 52%, rgba(10,13,20,0) 74%);
+.event-row {
+  margin-top: 10px;
+  padding: 12px 14px;
+  background: radial-gradient(120% 100% at 50% 0%, #1a2436 0%, #101520 100%);
+  border: 1.5px solid #28374d;
+  border-top: 1.5px solid #3d4f6b;
+  border-radius: 12px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+  min-height: 90px;
 }
-.event-row .event-copy { padding-right: 100px; }
-.event-row .name { margin-top: 4px; font-size: 18px; line-height: 1.15; white-space: normal; }
-.event-chip { min-height: 76px; margin-top: 10px; }
-.event-chip .event-bg { width: 72px; height: 72px; right: 0; top: 2px; }
-.event-chip .event-shade {
-  background: linear-gradient(90deg, #0a0d14 0%, #0a0d14 56%, rgba(10,13,20,0) 78%);
+.event-row .event-copy { padding-right: 0; }
+.event-row .tier {
+  margin-top: 0;
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  display: inline-block;
+  font-weight: 800;
+  letter-spacing: 0.08em;
 }
-.mcard .event-chip {
+.event-row .name {
+  margin-top: 6px;
+  font-size: 16px;
+  line-height: 1.25;
+  font-weight: 700;
+  color: #f6f3ee;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+}
+.event-row .place,
+.event-row .when,
+.event-row .prize {
+  margin-top: 4px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #8da6c4;
+}
+.event-chip {
   min-height: auto;
-  margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
-  background: transparent;
+  margin-top: 10px;
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 8px;
 }
-.mcard .event-chip .event-bg,
-.mcard .event-chip .event-shade {
-  display: none !important;
-}
-.mcard .event-chip .event-copy {
+.event-chip .event-copy {
   padding-right: 0;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
 }
-.mcard .event-chip .tier {
+.event-chip .tier {
   margin-top: 0;
   font-size: 9px;
-  padding: 1px 4px;
-  border-radius: 2px;
+  padding: 1px 5px;
+  border-radius: 3px;
   background: rgba(255, 255, 255, 0.06);
   flex-shrink: 0;
+  letter-spacing: 0.06em;
 }
-.mcard .event-chip .name {
+.event-chip .name {
   margin-top: 0;
   font-size: 12px;
   color: #8da6c4 !important;
@@ -462,13 +517,12 @@ td.body { padding: 8px 0 8px; border-top: 1px solid #4a463f; }
   flex: 1;
   min-width: 0;
 }
-.mcard .event-chip .sub {
+.event-chip .sub {
   margin-top: 0;
   font-size: 11px;
   color: #55667d;
   flex-shrink: 0;
 }
-.event-chip .tier { margin-top: 0; }
 .event-copy.tier-major .name,
 .event-copy.tier-major .place,
 .event-copy.tier-major .when,
@@ -599,14 +653,14 @@ def render_card(card: dict) -> bytes:
             height = 80 + 245 * n + 60
         html = _matches_html(card, height, _LIST_W)
     elif view == "events":
-        height = 64 + 132 * max(1, min(len(card.get("rows") or []), 8))
+        height = 80 + 160 * max(1, min(len(card.get("rows") or []), 8)) + 60
         html = _events_html(card, height, _LIST_W)
     elif view == "event":
-        html = _event_html(card, 420, _CARD_W)
+        html = _event_html(card, 480, _CARD_W)
     elif view == "guide":
-        html = _guide_html(card, 760, _CARD_W)
+        html = _guide_html(card, 860, _CARD_W)
     else:
-        height = 480 if card.get("kind") in {"map", "match"} else (420 if card.get("map_rows") else 380)
+        height = 560 if card.get("kind") in {"map", "match"} else (480 if card.get("map_rows") else 420)
         html = _match_html(card, height, _CARD_W)
     return _png(html)
 
@@ -804,8 +858,8 @@ def _winner_block(card: dict) -> str:
     if extra:
         bits.append(f"<div class='map-final-score'>{_e(extra)}</div>")
 
-    bits.append("</div>")
     bits.append(_map_strip(list(card.get("map_rows") or [])))
+    bits.append("</div>")
     return "".join(bits)
 
 
@@ -827,8 +881,10 @@ def _match_html(card: dict, height: int, width: int) -> str:
             )
         else:
             kicker_html = f"<div class='kicker'>{_e(card.get('label'))}</div>"
+        live_cls = " is-live" if accent == "live" else ""
         head = (
-            kicker_html
+            f"<div class='match-island{live_cls}'>"
+            + kicker_html
             + _team_row(
                 card.get("team1") or "?",
                 left,
@@ -844,10 +900,10 @@ def _match_html(card: dict, height: int, width: int) -> str:
                 team_id=str(card.get("team2_id") or ""),
             )
             + _map_strip(list(card.get("map_rows") or []))
+            + "</div>"
         )
     bits = [
         head,
-        "<div class='rule'></div>",
         _event_block(
             str(card.get("event") or ""),
             str(card.get("tier") or ""),
