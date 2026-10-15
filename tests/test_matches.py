@@ -371,9 +371,20 @@ def test_parse_match_list_fallback_time_text():
 
 def test_format_start_time_clock():
     import re
+    from datetime import datetime
 
     assert re.search(r"\d{2}:\d{2}", format_start_time(1787923200))
     assert re.search(r"\d{2}:\d{2}", format_start_time(1787923200000))
+
+    # 自然比赛日（10-15 10:00 至 10-16 10:00）：跨午夜比赛 00:00 与 21:30 保持相同 5 字符格式
+    sim_now = datetime(2026, 10, 15, 20, 0, tzinfo=CST)
+    t_2130 = int(datetime(2026, 10, 15, 21, 30, tzinfo=CST).timestamp())
+    t_midnight = int(datetime(2026, 10, 16, 0, 0, tzinfo=CST).timestamp())
+    t_next_day = int(datetime(2026, 10, 16, 18, 0, tzinfo=CST).timestamp())
+
+    assert format_start_time(t_2130, now=sim_now) == "21:30"
+    assert format_start_time(t_midnight, now=sim_now) == "00:00"
+    assert format_start_time(t_next_day, now=sim_now) == "10/16 18:00"
 
 
 def test_pretty_name_acronyms():

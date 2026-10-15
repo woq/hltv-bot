@@ -180,7 +180,7 @@ def prepare_match_list(rows: list[dict], now: datetime | None = None) -> list[di
     return kept
 
 
-def format_start_time(unix_raw: str | int | None, *, live: bool = False) -> str:
+def format_start_time(unix_raw: str | int | None, *, live: bool = False, now: datetime | None = None) -> str:
     if unix_raw in (None, ""):
         return "LIVE" if live else ""
     try:
@@ -190,11 +190,23 @@ def format_start_time(unix_raw: str | int | None, *, live: bool = False) -> str:
     if n > 10_000_000_000:
         n //= 1000
     dt = datetime.fromtimestamp(n, CST)
-    now = datetime.now(CST)
+    now = now or datetime.now(CST)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=CST)
+    else:
+        now = now.astimezone(CST)
+
     clock = dt.strftime("%H:%M")
-    if dt.date() != now.date():
-        return dt.strftime("%m/%d ") + clock
-    return clock
+
+    # 自然比赛日周期：每日 UTC+8 10:00 至次日 10:00 为一个比赛日
+    slate_start = now.replace(hour=10, minute=0, second=0, microsecond=0)
+    if now < slate_start:
+        slate_start -= timedelta(days=1)
+    slate_end = slate_start + timedelta(days=1)
+
+    if slate_start <= dt < slate_end:
+        return clock
+    return dt.strftime("%m/%d ") + clock
 
 
 def _wide(ch: str) -> bool:

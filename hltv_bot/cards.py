@@ -302,7 +302,7 @@ table.mgrid .mcard {
   border-radius: 10px;
 }
 table.mgrid .mtag { font-size: 8px; padding: 1px 4px; }
-table.mgrid .mtime { font-size: 12px; margin-left: 4px; }
+table.mgrid .mtime { font-size: 12px; margin-left: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 table.mgrid .mbody .name { font-size: 13px; }
 table.mgrid .mevent {
   margin-top: 6px;
@@ -335,6 +335,9 @@ table.mgrid .mevent {
   font-weight: 600;
   margin-left: 6px;
   font-family: "Rajdhani", "Liberation Sans", "DejaVu Sans", sans-serif;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .mfmt {
   font-size: 9px;
