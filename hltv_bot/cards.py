@@ -6,15 +6,15 @@ import io
 from html import escape
 from pathlib import Path
 
-_BG = (12, 14, 20)
+_BG = (10, 13, 20)
 
 _CSS = """
 @page { size: PAGEWpx PAGEHpx; margin: 0; }
 * { box-sizing: border-box; }
 html, body {
   margin: 0; padding: 0;
-  background: #0c0e14;
-  color: #f4f6fa;
+  background: #0a0d14;
+  color: #f5f8fc;
   font-family: "Rajdhani", "WenQuanYi Zen Hei", "Noto Sans CJK SC", "DejaVu Sans", sans-serif;
   text-rendering: geometricPrecision;
 }
@@ -22,7 +22,7 @@ html, body {
   position: relative;
   width: PAGEWpx;
   padding: 22px 20px 32px;
-  background: radial-gradient(circle at 50% -10%, #171b26 0%, #0c0e14 100%);
+  background: #0a0d14;
   break-inside: avoid;
   page-break-inside: avoid;
 }
@@ -238,7 +238,7 @@ html, body {
 .sheet-title {
   font-size: 13px;
   letter-spacing: 0.18em;
-  color: #8fa0b5;
+  color: #8da6c4;
   font-weight: 700;
   text-transform: uppercase;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
@@ -248,21 +248,23 @@ html, body {
 .mcard {
   margin-top: 10px;
   padding: 12px 14px;
-  background: rgba(22, 26, 38, 0.85);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 10px;
+  background: radial-gradient(120% 100% at 50% 0%, #1e283c 0%, #121824 100%);
+  border: 1px solid rgba(130, 180, 255, 0.16);
+  border-radius: 14px;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.15);
 }
 .mcard[data-live="1"] {
-  border-color: rgba(255, 70, 85, 0.5);
-  background: linear-gradient(135deg, rgba(38, 18, 24, 0.9) 0%, rgba(22, 26, 38, 0.85) 100%);
+  background: radial-gradient(120% 100% at 50% 0%, #361f28 0%, #161a26 100%);
+  border: 1px solid rgba(255, 70, 85, 0.5);
+  box-shadow: 0 8px 30px rgba(255, 70, 85, 0.15), inset 0 1px 0 rgba(255, 120, 140, 0.3);
 }
 .mcard[data-covered="1"] {
-  border-color: rgba(245, 166, 35, 0.45);
+  border-color: rgba(245, 166, 35, 0.5);
 }
 .sheet-sub { margin-top: 4px; font-size: 14px; font-weight: 700; color: #f5a623; letter-spacing: 0.04em; }
 table.mgrid { width: 100%; border-collapse: separate; border-spacing: 8px 8px; margin-top: 6px; }
 table.mgrid td { width: 50%; vertical-align: top; }
-table.mgrid .mcard { margin-top: 0; padding: 10px 10px; }
+table.mgrid .mcard { margin-top: 0; padding: 10px 10px; border-radius: 10px; }
 table.mgrid .mtag { font-size: 8px; padding: 1px 4px; }
 table.mgrid .mtime { font-size: 13px; margin-left: 4px; }
 table.mgrid .mbody .name { font-size: 13px; }
@@ -301,8 +303,9 @@ table.mgrid .mevent {
 .mfmt {
   font-size: 10px;
   font-weight: 700;
-  color: #7f91a6;
-  background: rgba(255, 255, 255, 0.07);
+  color: #90c2ff;
+  background: rgba(130, 180, 255, 0.12);
+  border: 1px solid rgba(130, 180, 255, 0.25);
   padding: 1px 5px;
   border-radius: 3px;
   margin-right: 6px;
@@ -319,7 +322,12 @@ table.mgrid .mevent {
   margin-right: 6px;
   letter-spacing: 0.04em;
 }
-.mstars { color: #f5a623; font-size: 14px; letter-spacing: 0.08em; }
+.mstars {
+  color: #ffc233;
+  font-size: 14px;
+  letter-spacing: 0.08em;
+  text-shadow: 0 0 8px rgba(255, 194, 51, 0.5);
+}
 .mmap {
   margin-top: 8px;
   font-size: 15px;
@@ -370,7 +378,7 @@ td.body { padding: 8px 0 8px; border-top: 1px solid #4a463f; }
 .event-solo { min-height: 188px; }
 .event-solo .event-bg { width: 176px; height: 176px; right: 4px; top: 18px; }
 .event-solo .event-shade {
-  background: linear-gradient(90deg, #141311 0%, #141311 48%, rgba(20,19,17,0) 64%);
+  background: linear-gradient(90deg, #0a0d14 0%, #0a0d14 48%, rgba(10,13,20,0) 64%);
 }
 .event-solo .event-copy {
   display: flex;
@@ -400,23 +408,38 @@ td.body { padding: 8px 0 8px; border-top: 1px solid #4a463f; }
   font-weight: 600;
   color: #9a948a;
 }
-.event-row { min-height: 112px; margin-top: 14px; padding-top: 10px; border-top: 1px solid #4a463f; }
+.event-row { min-height: 112px; margin-top: 14px; padding-top: 10px; border-top: 1px solid rgba(255, 255, 255, 0.08); }
 .event-row .event-bg { width: 92px; height: 92px; right: 0; top: 14px; }
 .event-row .event-shade {
-  background: linear-gradient(90deg, #141311 0%, #141311 52%, rgba(20,19,17,0) 74%);
+  background: linear-gradient(90deg, #0a0d14 0%, #0a0d14 52%, rgba(10,13,20,0) 74%);
 }
 .event-row .event-copy { padding-right: 100px; }
 .event-row .name { margin-top: 4px; font-size: 18px; line-height: 1.15; white-space: normal; }
 .event-chip { min-height: 76px; margin-top: 10px; }
 .event-chip .event-bg { width: 72px; height: 72px; right: 0; top: 2px; }
 .event-chip .event-shade {
-  background: linear-gradient(90deg, #141311 0%, #141311 56%, rgba(20,19,17,0) 78%);
+  background: linear-gradient(90deg, #0a0d14 0%, #0a0d14 56%, rgba(10,13,20,0) 78%);
 }
+.mcard .event-chip {
+  min-height: auto;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  background: transparent;
+}
+.mcard .event-chip .event-bg,
 .mcard .event-chip .event-shade {
-  background: linear-gradient(90deg, #32302b 0%, #32302b 56%, rgba(50,48,43,0) 78%);
+  display: none !important;
 }
-.event-chip .event-copy { padding-right: 80px; }
-.event-chip .name { margin-top: 2px; font-size: 16px; line-height: 1.15; white-space: normal; }
+.mcard .event-chip .event-copy {
+  padding-right: 0;
+}
+.mcard .event-chip .name {
+  margin-top: 2px;
+  font-size: 13px;
+  color: #8da6c4;
+  font-weight: 600;
+}
 .event-chip .tier { margin-top: 0; }
 .event-copy.tier-major .name,
 .event-copy.tier-major .place,
