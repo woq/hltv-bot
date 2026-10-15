@@ -248,25 +248,32 @@ html, body {
 .mcard {
   margin-top: 10px;
   padding: 12px 14px;
-  background: radial-gradient(120% 100% at 50% 0%, #1e283c 0%, #121824 100%);
-  border: 1px solid rgba(130, 180, 255, 0.16);
-  border-radius: 14px;
-  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.15);
+  background: radial-gradient(120% 100% at 50% 0%, #1a2436 0%, #101520 100%);
+  border: 1.5px solid #28374d;
+  border-top: 1.5px solid #3d4f6b;
+  border-radius: 12px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
 }
 .mcard[data-live="1"] {
   background: radial-gradient(120% 100% at 50% 0%, #361f28 0%, #161a26 100%);
-  border: 1px solid rgba(255, 70, 85, 0.5);
-  box-shadow: 0 8px 30px rgba(255, 70, 85, 0.15), inset 0 1px 0 rgba(255, 120, 140, 0.3);
+  border: 1.5px solid #ff4655;
+  box-shadow: 0 0 16px rgba(255, 70, 85, 0.25);
 }
 .mcard[data-covered="1"] {
-  border-color: rgba(245, 166, 35, 0.5);
+  border: 1.5px solid #e5a020;
 }
 .sheet-sub { margin-top: 4px; font-size: 14px; font-weight: 700; color: #f5a623; letter-spacing: 0.04em; }
 table.mgrid { width: 100%; border-collapse: separate; border-spacing: 8px 8px; margin-top: 6px; }
 table.mgrid td { width: 50%; vertical-align: top; }
-table.mgrid .mcard { margin-top: 0; padding: 10px 10px; border-radius: 10px; }
+table.mgrid .mcard {
+  margin-top: 0;
+  padding: 10px 10px;
+  border: 1.5px solid #28374d;
+  border-top: 1.5px solid #3d4f6b;
+  border-radius: 10px;
+}
 table.mgrid .mtag { font-size: 8px; padding: 1px 4px; }
-table.mgrid .mtime { font-size: 13px; margin-left: 4px; }
+table.mgrid .mtime { font-size: 12px; margin-left: 4px; }
 table.mgrid .mbody .name { font-size: 13px; }
 table.mgrid .mevent {
   margin-top: 6px;
@@ -293,40 +300,39 @@ table.mgrid .mevent {
 }
 .mtime {
   flex: 1;
-  font-size: 14px;
-  letter-spacing: 0.03em;
-  color: #c0ccdb;
-  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: 0.02em;
+  color: #b0c0d4;
+  font-weight: 600;
   margin-left: 6px;
   font-family: "Rajdhani", "Liberation Sans", "DejaVu Sans", sans-serif;
 }
 .mfmt {
-  font-size: 10px;
+  font-size: 9px;
   font-weight: 700;
-  color: #90c2ff;
-  background: rgba(130, 180, 255, 0.12);
-  border: 1px solid rgba(130, 180, 255, 0.25);
-  padding: 1px 5px;
+  color: #7ab2f0;
+  background: rgba(100, 160, 255, 0.12);
+  border: 1px solid rgba(100, 160, 255, 0.25);
+  padding: 0 4px;
   border-radius: 3px;
   margin-right: 6px;
   letter-spacing: 0.05em;
   font-family: "Rajdhani", sans-serif;
 }
 .mcovered {
-  font-size: 10px;
+  font-size: 9px;
   font-weight: 700;
   color: #12141a;
   background: #f5a623;
-  padding: 1px 4px;
+  padding: 0 4px;
   border-radius: 3px;
   margin-right: 6px;
   letter-spacing: 0.04em;
 }
 .mstars {
   color: #ffc233;
-  font-size: 14px;
-  letter-spacing: 0.08em;
-  text-shadow: 0 0 8px rgba(255, 194, 51, 0.5);
+  font-size: 13px;
+  letter-spacing: 0.06em;
 }
 .mmap {
   margin-top: 8px;
@@ -422,7 +428,7 @@ td.body { padding: 8px 0 8px; border-top: 1px solid #4a463f; }
 }
 .mcard .event-chip {
   min-height: auto;
-  margin-top: 10px;
+  margin-top: 8px;
   padding-top: 8px;
   border-top: 1px solid rgba(255, 255, 255, 0.08);
   background: transparent;
@@ -433,12 +439,34 @@ td.body { padding: 8px 0 8px; border-top: 1px solid #4a463f; }
 }
 .mcard .event-chip .event-copy {
   padding-right: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.mcard .event-chip .tier {
+  margin-top: 0;
+  font-size: 9px;
+  padding: 1px 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.06);
+  flex-shrink: 0;
 }
 .mcard .event-chip .name {
-  margin-top: 2px;
-  font-size: 13px;
-  color: #8da6c4;
+  margin-top: 0;
+  font-size: 12px;
+  color: #8da6c4 !important;
   font-weight: 600;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  flex: 1;
+  min-width: 0;
+}
+.mcard .event-chip .sub {
+  margin-top: 0;
+  font-size: 11px;
+  color: #55667d;
+  flex-shrink: 0;
 }
 .event-chip .tier { margin-top: 0; }
 .event-copy.tier-major .name,
