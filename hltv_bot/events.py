@@ -356,7 +356,7 @@ def classify_event_tier(event_name: str, stars: int = 0) -> str:
     for kw in _TIER_KEYWORDS["T1"]:
         if kw in ev:
             if is_qualifier:
-                return "T1" if stars >= 1 else "T3"
+                return "T3"
             return "T1"
 
     if stars >= 2:
