@@ -577,10 +577,17 @@ def _shown_pair(kind: str, row: dict, score: str, winners: list[int]) -> tuple[s
     return _score_pair(score if kind in {"preview", "score", "halftime", "map", "match"} else "")
 
 
-def _map_score_line(kind: str, row: dict, rounds: tuple[int, int] | None) -> str:
+def _map_score_line(
+    kind: str,
+    row: dict,
+    rounds: tuple[int, int] | None,
+    winner: int = 0,
+) -> str:
     if kind != "match" or _fmt(row) not in {"bo3", "bo5"} or not rounds or rounds == (0, 0):
         return ""
-    return f"本图 {rounds[0]}–{rounds[1]}"
+    # Caption is winner-first; rounds stay team1–team2, so flip when team2 won.
+    left, right = (rounds[1], rounds[0]) if winner == 2 else (rounds[0], rounds[1])
+    return f"本图 {left}–{right}"
 
 
 def _match_card(
@@ -611,7 +618,7 @@ def _match_card(
         "pair": pair,
         "winner": winner if winner in {1, 2} else 0,
         "map_rows": rows,
-        "map_score": _map_score_line(kind, row, rounds),
+        "map_score": _map_score_line(kind, row, rounds, winner),
         "event": row.get("event") or "",
         "note": "",
         "clock": _clock(when, str(row.get("time") or "")),
@@ -628,7 +635,12 @@ def _match_caption(card: dict, row: dict) -> str:
         win_name = card.get("team1") if winner == 1 else card.get("team2")
         other = card.get("team2") if winner == 1 else card.get("team1")
         icon = "🏆" if kind == "match" else "🗺"
-        pair_str = f"<code>{h(pair[0])}</code>–<code>{h(pair[1])}</code>" if pair else ""
+        # card["pair"] is always team1–team2; caption names are winner-first.
+        if pair:
+            win_score, lose_score = (pair[0], pair[1]) if winner == 1 else (pair[1], pair[0])
+            pair_str = f"<code>{h(win_score)}</code>–<code>{h(lose_score)}</code>"
+        else:
+            pair_str = ""
         head = f"{icon} <b>{h(label)}</b> · <b>{h(win_name or '?')}</b> {pair_str} 对 {h(other or '?')}".strip()
     elif kind == "halftime":
         t1 = h(card.get("team1") or "?")

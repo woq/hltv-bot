@@ -638,6 +638,37 @@ def test_halftime_and_map_winner_flow():
     assert notes[0].key == "m:101:match"
 
 
+def test_match_winner_caption_puts_winner_score_first_when_team2_wins():
+    """Caption is 'Winner X–Y 对 Loser'; pair on card stays team1–team2."""
+    from hltv_bot.reminders import _match_card, _match_caption
+
+    row = _match(
+        team1="Nemiga",
+        team2="FURIA",
+        format="bo5",
+        won1="2",
+        won2="3",
+        maps="Ancient · Dust2 · Cache · Mirage · Nuke",
+        event="PGL Masters Bucharest 2026",
+    )
+    winners = [2, 1, 1, 2, 1]
+    card = _match_card(
+        "match",
+        row,
+        None,
+        "6-13",
+        winners=winners,
+        winner=2,
+        rounds=(6, 13),
+    )
+    assert card["pair"] == ("2", "3")  # image matchup stays team1–team2
+    assert card["map_score"] == "本图 13–6"
+    html = _match_caption(card, row)
+    assert "FURIA" in html and "Nemiga" in html
+    assert "<code>3</code>–<code>2</code>" in html
+    assert "<code>2</code>–<code>3</code>" not in html
+
+
 def test_zero_zero_match_disappearing_never_triggers_match_winner():
     now = datetime(2026, 9, 24, 18, 0, tzinfo=CST)
     soon = int((now + timedelta(minutes=10)).timestamp() * 1000)
