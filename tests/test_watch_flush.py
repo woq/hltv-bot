@@ -145,6 +145,13 @@ def test_cmd_watch_summary_and_off(tmp_path, monkeypatch):
         state_path=tmp_path / "state.json",
         settings_path=tmp_path / "settings.json",
     )
+    from datetime import datetime, timedelta, timezone
+
+    from hltv_bot.reminders import slate_start
+
+    cst = timezone(timedelta(hours=8))
+    # Keep the upcoming match inside the current UTC+8 slate (10:00→次日 10:00).
+    mouz_unix = int((slate_start(datetime.now(cst), 10) + timedelta(hours=12)).timestamp())
     bot._list_rows = [
         {
             "id": "101",
@@ -165,7 +172,7 @@ def test_cmd_watch_summary_and_off(tmp_path, monkeypatch):
             "stars": 3,
             "live": "0",
             "time": "20:30",
-            "unix": int(time.time()) + 3600,
+            "unix": mouz_unix,
         },
     ]
     # Test turning on

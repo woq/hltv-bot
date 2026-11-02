@@ -40,6 +40,70 @@ def country_code_to_emoji(cc: str) -> str:
     return ""
 
 
+def is_hltv_calendar_stamp(ts: int | float | None) -> bool:
+    """HLTV event-list dates are calendar days stamped near 10–11:00 UTC, not first-match times."""
+    try:
+        n = int(ts or 0)
+    except (TypeError, ValueError):
+        return False
+    if n <= 0:
+        return False
+    utc = datetime.fromtimestamp(n, timezone.utc)
+    return utc.minute == 0 and utc.second == 0 and utc.hour in {10, 11}
+
+
+def event_clock(ev: dict | int | float | None) -> str:
+    """Format start for cards. Calendar stamps stay date-only; first-match times keep HH:MM."""
+    precise = False
+    if isinstance(ev, dict):
+        precise = bool(ev.get("start_precise"))
+        ts = ev.get("start_ts")
+    else:
+        ts = ev
+    try:
+        n = int(ts or 0)
+    except (TypeError, ValueError):
+        return ""
+    if n <= 0:
+        return ""
+    dt = datetime.fromtimestamp(n, CST)
+    if precise or not is_hltv_calendar_stamp(n):
+        return dt.strftime("%m-%d %H:%M")
+    return dt.strftime("%m-%d")
+
+
+def refine_event_starts(events: Sequence[dict], matches: Sequence[dict] | None) -> list[dict]:
+    """Replace calendar-day stamps with the earliest listed match start for that event."""
+    earliest: dict[str, int] = {}
+    for row in matches or ():
+        eid = str(row.get("event_id") or "").strip()
+        raw = str(row.get("unix") or "").strip()
+        if not eid or not raw.isdigit():
+            continue
+        n = int(raw)
+        if n > 10_000_000_000:
+            n //= 1000
+        if n <= 0:
+            continue
+        prev = earliest.get(eid)
+        if prev is None or n < prev:
+            earliest[eid] = n
+    out: list[dict] = []
+    for ev in events:
+        item = dict(ev)
+        eid = str(item.get("id") or "").strip()
+        first = earliest.get(eid)
+        if not first:
+            out.append(item)
+            continue
+        listed = int(item.get("start_ts") or 0)
+        if listed <= 0 or is_hltv_calendar_stamp(listed) or first < listed:
+            item["start_ts"] = first
+            item["start_precise"] = True
+        out.append(item)
+    return out
+
+
 def format_event_date_range(
     start_ts: int | float | None,
     end_ts: int | float | None = 0,

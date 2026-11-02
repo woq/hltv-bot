@@ -106,6 +106,25 @@ def test_filter_and_sort_events():
     assert filtered[1]["days_left"] > filtered[0]["days_left"]
 
 
+def test_event_clock_hides_hltv_calendar_stamp_time():
+    from hltv_bot.events import event_clock, is_hltv_calendar_stamp, refine_event_starts
+
+    # HLTV events list: Nov 2 stamped at 11:00 UTC → 19:00 CST
+    stamp = int(datetime(2026, 11, 2, 11, 0, tzinfo=timezone.utc).timestamp())
+    assert is_hltv_calendar_stamp(stamp)
+    assert event_clock(stamp) == "11-02"
+    assert event_clock({"start_ts": stamp}) == "11-02"
+
+    first_match = int(datetime(2026, 11, 2, 10, 0, tzinfo=CST).timestamp())
+    refined = refine_event_starts(
+        [{"id": "8245", "name": "IEM Beijing 2026", "start_ts": stamp}],
+        [{"event_id": "8245", "unix": str(first_match * 1000)}],
+    )
+    assert refined[0]["start_ts"] == first_match
+    assert refined[0]["start_precise"] is True
+    assert event_clock(refined[0]) == "11-02 10:00"
+
+
 def test_format_event_date_range_omits_year_unless_cross_year():
     from hltv_bot.events import format_event_date_range
 

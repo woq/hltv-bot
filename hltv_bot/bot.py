@@ -561,7 +561,9 @@ class HltvTelegramBot:
     def _cmd_reminder(self, chat_id: int) -> None:
         """Send the current event cards to this chat only. Does not mark a bell sent."""
         try:
-            events = fetch_events(self.session)
+            from hltv_bot.events import refine_event_starts
+
+            events = refine_event_starts(fetch_events(self.session), self._list_rows)
         except CloudflareError as e:
             self._reply(chat_id, f"Cloudflare 拦了赛事页：{e}\n发 /cookie 更新 Cookie", keep=True)
             return

@@ -6,7 +6,14 @@ import copy
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from hltv_bot.events import classify_tier, country_code_to_emoji, remain_text, tier_label
+from hltv_bot.events import (
+    classify_tier,
+    country_code_to_emoji,
+    event_clock,
+    refine_event_starts,
+    remain_text,
+    tier_label,
+)
 from hltv_bot.format import h
 
 CST = timezone(timedelta(hours=8))
@@ -784,10 +791,6 @@ def _event_html(ev: dict, now: datetime, stage: str) -> str:
 
 def _event_card(ev: dict, now: datetime, stage: str) -> dict:
     hours = _hours_left(ev, now) or 0
-    start_ts = int(ev.get("start_ts") or 0)
-    clock = ""
-    if start_ts:
-        clock = datetime.fromtimestamp(start_ts, CST).strftime("%m-%d %H:%M")
     return {
         "view": "event",
         "tier": classify_tier(str(ev.get("name") or "")),
@@ -797,7 +800,7 @@ def _event_card(ev: dict, now: datetime, stage: str) -> dict:
         "logo_small_url": ev.get("logo_small_url") or "",
         "flag": country_code_to_emoji(str(ev.get("country_code") or "")),
         "location": (ev.get("location") or "").strip(),
-        "clock": clock,
+        "clock": event_clock(ev),
         "remain": remain_text(hours),
         "final": stage == "hours",
     }
@@ -1085,10 +1088,16 @@ def _apply_event_bells(
             )
 
 
-def _event_boundary_wait(events: list[dict] | None, cfg: RemindConfig, now: datetime) -> float | None:
+def _event_boundary_wait(
+    events: list[dict] | None,
+    cfg: RemindConfig,
+    now: datetime,
+    matches: list[dict] | None = None,
+) -> float | None:
     """Seconds until the next Major/T1 stage: enter window, 1 day, then N hours."""
     if not cfg.event_watch or not events:
         return None
+    events = refine_event_starts(events, matches)
     marks = [float(cfg.event_days * 24)]
     if cfg.event_days * 24 > DAY_LEFT_HOURS:
         marks.append(DAY_LEFT_HOURS)
@@ -1187,7 +1196,7 @@ def choose_poll_wait(
             wakes.append(until_bell)
         elif until_bell > DIGEST_LEAD:
             wakes.append(until_bell - DIGEST_LEAD)
-        boundary = _event_boundary_wait(events, cfg, now)
+        boundary = _event_boundary_wait(events, cfg, now, rows)
         if boundary is not None and boundary > 0:
             wakes.append(boundary)
     if soon:
@@ -1512,6 +1521,7 @@ def plan_reminders(
             _apply_digest(base, matches, now, cfg, notes, seed=False)
 
     if events is not None:
+        events = refine_event_starts(events, matches)
         stages: dict[str, str] = {}
         for ev in events:
             eid = str(ev.get("id") or "")
