@@ -49,7 +49,7 @@ from hltv_bot.telegram_api import Telegram
 
 log = logging.getLogger("hltv_bot")
 
-DEFAULT_ADMIN_ID = 1442477170
+DEFAULT_ADMIN_ID = 0
 TTL_SHORT = 30.0       # 30秒: 临时交互指令与卡片 (/matches, /events, /status, /help 等)
 TTL_MEDIUM = 300.0     # 5分钟: 半场结果卡片 (halftime)
 TTL_LONG = 900.0       # 15分钟: 单图结束/图胜卡片 (map winner)

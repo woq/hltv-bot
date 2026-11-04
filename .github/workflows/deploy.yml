@@ -18,13 +18,14 @@ jobs:
       - name: rsync to VPS and restart
         env:
           SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
         run: |
           set -euo pipefail
           mkdir -p ~/.ssh
           printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
-          ssh-keyscan -p 2233 -H 191.96.243.105 >> ~/.ssh/known_hosts 2>/dev/null
-          HOST=root@191.96.243.105
+          ssh-keyscan -p 2233 -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          HOST="root@$DEPLOY_HOST"
           SSH="ssh -p 2233 -o IdentitiesOnly=yes"
           $SSH "$HOST" 'mkdir -p /opt/hltv-bot/data; command -v rsync >/dev/null || (export DEBIAN_FRONTEND=noninteractive; apt-get update -qq && apt-get install -y -qq rsync)'
           rsync -az -e "$SSH" \

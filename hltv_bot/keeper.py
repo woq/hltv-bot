@@ -54,7 +54,7 @@ def _alert_challenge(bot: Any, snap: Any) -> None:
     body = (
         caption
         + "\nDo not restart Chrome. SSH tunnel noVNC, pass Turnstile, then wait for next export.\n"
-        "<code>ssh -L 6080:127.0.0.1:6080 root@191.96.243.105</code>"
+        "<code>ssh -L 6080:127.0.0.1:6080 root@YOUR_SERVER_IP</code>"
     )
     if snap.screenshot_png:
         bot._notify_admins_photo(snap.screenshot_png, caption=caption, filename="cf-challenge.png")

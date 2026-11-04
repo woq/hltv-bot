@@ -26,7 +26,7 @@ python3 -m pytest tests/test_rich_message.py tests/test_format.py tests/test_wat
 
 ## 部署与服务器
 
-- **主部署服务器**：`191.96.243.105`（通过系统 proxy 连接 / SSH `root@191.96.243.105`）。
+- **主部署服务器**：`<YOUR_SERVER_IP>`（通过系统 proxy 连接 / SSH `root@<YOUR_SERVER_IP>`）。
 - 代码 push 到 GitHub `main` 分支后会自动部署到该服务器。
 
 ## 其它文档

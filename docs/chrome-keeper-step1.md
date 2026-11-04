@@ -20,7 +20,7 @@ hltv-bot 用 `curl_cffi` TLS impersonate + `data/session.json` 里烤好的 Cook
 
 **本设计只做 Step 1：** VPS 上常驻 1 个 headed Chrome（Xvfb `:99`），idle keeper tab 挂 `https://www.hltv.org/matches`，让页内自己打 `/cdn-cgi/challenge-platform/` 续 `__cf_bm`。Bot **只 attach** `http://127.0.0.1:9222`，用 CDP `Network.getAllCookies` 按现有 `format_cookie_header` 顺序 merge 进 `data/session.json`（`impersonate` / `user_agent` / `sec-ch-ua*` 不动）。首次 Turnstile 走 localhost VNC + SSH 隧道（**只转 6080**，9222 留在机器上）。之后 Chrome **`Restart=no`**，禁止 `Restart=always` / 周期性 on-failure 拉起。Python 采集路径不变。
 
-目标机器：`191.96.243.105`，2G RAM、无 GPU、闲时 ~208M、Swap 0（运维加 1G swapfile，`swappiness=10`）。bot `MemoryMax=400M` 不动；Chrome `MemoryMax=900M` 是 **cgroup RAM 杀进程上限，不是 swap 气球**。RSS 目标 &lt;700M：keeper-only 过夜 `smem` 达标后才算 Step 1 完成。
+目标机器：`<YOUR_VPS_IP>`，2G RAM、无 GPU、闲时 ~208M、Swap 0（运维加 1G swapfile，`swappiness=10`）。bot `MemoryMax=400M` 不动；Chrome `MemoryMax=900M` 是 **cgroup RAM 杀进程上限，不是 swap 气球**。RSS 目标 &lt;700M：keeper-only 过夜 `smem` 达标后才算 Step 1 完成。
 
 ---
 
@@ -122,7 +122,7 @@ hltv-bot 用 `curl_cffi` TLS impersonate + `data/session.json` 里烤好的 Cook
 
 ```mermaid
 flowchart LR
-  subgraph vps["VPS 191.96.243.105  2G + 1G swap"]
+  subgraph vps["VPS <YOUR_VPS_IP>  2G + 1G swap"]
     subgraph chrome_cgroup["hltv-chrome.service  MemoryMax=900M  root --no-sandbox  Restart=no"]
       Xvfb["Xvfb :99  800x600x16"]
       Chrome["google-chrome-stable\nuser-data-dir profile\nCDP 127.0.0.1:9222"]
@@ -624,7 +624,7 @@ title=<code>Just a moment...</code>
 cf_clearance=NO
 tab=<code>https://www.hltv.org/matches</code>
 Do not restart Chrome. SSH tunnel noVNC, pass Turnstile, then wait for next export.
-ssh -L 6080:127.0.0.1:6080 root@191.96.243.105
+ssh -L 6080:127.0.0.1:6080 root@<YOUR_VPS_IP>
 ```
 
 注意：隧道 **只有 6080**，没有 9222。
@@ -808,10 +808,10 @@ systemctl start x11vnc@99 novnc
 本机（**只转 6080**）：
 
 ```bash
-ssh -L 6080:127.0.0.1:6080 root@191.96.243.105
+ssh -L 6080:127.0.0.1:6080 root@<YOUR_VPS_IP>
 # http://127.0.0.1:6080/vnc.html 过 Turnstile
 # 9222 留在箱子上：
-ssh root@191.96.243.105 'curl -sS http://127.0.0.1:9222/json/list'
+ssh root@<YOUR_VPS_IP> 'curl -sS http://127.0.0.1:9222/json/list'
 ```
 
 过完：`systemctl stop novnc x11vnc@99`。不要 disable xvfb/chrome。

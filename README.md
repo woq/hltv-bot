@@ -42,15 +42,15 @@ python3 -m hltv_bot import-cookie -o data/session.json
 
 ## GitHub Actions 部署
 
-推到 `main` 会在 Actions 里 **checkout + rsync（SSH）** 到 **191.96.243.105:/opt/hltv-bot**，再 `uv sync` 并 **只** 重启 `hltv-bot`。VPS **不需要 git**。  
+推到 `main` 会在 Actions 里 **checkout + rsync（SSH）** 到 **<YOUR_VPS_IP>:/opt/hltv-bot**，再 `uv sync` 并 **只** 重启 `hltv-bot`。VPS **不需要 git**。  
 `.env` / `data/session.json` 已存在则不覆盖。Chrome keeper（`hltv-chrome.service`）不跟 bot 重启；bootstrap 见 [deploy/chrome-session/README.md](deploy/chrome-session/README.md)。
 
 本机生成部署密钥并写入 GitHub Secret（**私钥不要进仓库**）：
 
 ```bash
 ssh-keygen -t ed25519 -C "github-hltv-bot-deploy" -f ./hltv-bot-deploy -N ""
-ssh-copy-id -i ./hltv-bot-deploy.pub -p 2233 root@191.96.243.105
-gh secret set DEPLOY_SSH_KEY --repo woq/hltv-bot < ./hltv-bot-deploy
+ssh-copy-id -i ./hltv-bot-deploy.pub -p 2233 root@<YOUR_VPS_IP>
+gh secret set DEPLOY_SSH_KEY --repo <username>/hltv-bot < ./hltv-bot-deploy
 shred -u ./hltv-bot-deploy
 # 公钥可留着：./hltv-bot-deploy.pub
 ```
@@ -62,7 +62,7 @@ Secret 名必须是 `DEPLOY_SSH_KEY`。VPS 上 `uv` 需在 `/root/.local/bin/uv`
 用 **systemd**，别用 tmux。
 
 ```bash
-git clone https://github.com/woq/hltv-bot.git /opt/hltv-bot
+git clone https://github.com/<username>/hltv-bot.git /opt/hltv-bot
 cd /opt/hltv-bot
 uv sync
 cp .env.example .env          # 填 token
@@ -115,7 +115,7 @@ python3 -m hltv_bot bot
 | | `/status` | 查看 Bot 运行状态与心跳 |
 | | `/hltv` | 显示用法分类完整指南 |
 
-默认管理员 Telegram user id：`1442477170`（`.env` 里 `TELEGRAM_ADMIN_IDS`，逗号分隔可加多个）。
+管理员 Telegram user id 通过 `.env` 里 `TELEGRAM_ADMIN_IDS` 设置（逗号分隔可加多个）。
 
 ### 核心工作流与功耗机制
 
