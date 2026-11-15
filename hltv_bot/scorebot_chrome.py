@@ -1,0 +1,389 @@
+"""Engine.IO scorebot inside the live Chrome match tab.
+
+Python does not Upgrade. The page's WebSocket carries Origin
+https://www.hltv.org and the CF-bound Chrome process.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+import time
+from typing import Any, Iterator
+from urllib.parse import urlparse
+
+from hltv_bot.cdp import (
+    DEFAULT_CDP,
+    CdpError,
+    CdpUnavailable,
+    _connect_ws,
+    _http_json,
+    _list_pages,
+)
+from hltv_bot.debuglog import clip
+
+log = logging.getLogger("hltv_bot.scorebot_chrome")
+
+_SCOREBOT_JS = r"""
+(function(listId, httpBase) {
+  if (window.__hltvBotScorebot && window.__hltvBotScorebot.stop) {
+    window.__hltvBotScorebot.stop();
+  }
+  const pending = [];
+  let flushTimer = null;
+  function flush() {
+    flushTimer = null;
+    const batch = pending.splice(0, pending.length);
+    for (let i = 0; i < batch.length; i++) {
+      try { hltvBotEvent(JSON.stringify({name: batch[i][0], payload: batch[i][1]})); } catch (e) {}
+    }
+  }
+  const emit = (name, payload) => {
+    let copy = payload;
+    try { copy = JSON.parse(JSON.stringify(payload)); } catch (e) {}
+    pending.push([name, copy]);
+    if (!flushTimer) flushTimer = setTimeout(flush, 0);
+  };
+  let ws = null;
+  let stopped = false;
+  let reconnectTimer = null;
+  let pingTimer = null;
+  let keepaliveTimer = null;
+  let handshakeBusy = false;
+  let pingInterval = 25000;
+  let pingTimeout = 60000;
+  let lastPkt = "";
+  let pingCount = 0;
+  let evCount = 0;
+  let openedAt = 0;
+  let lastBoard = "";
+  let readySent = false;
+  window.__hltvBotScorebot = { stop: function() {
+    stopped = true;
+    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+    if (pingTimer) { clearTimeout(pingTimer); pingTimer = null; }
+    if (keepaliveTimer) { clearInterval(keepaliveTimer); keepaliveTimer = null; }
+    try { if (ws) ws.close(); } catch (e) {}
+  } };
+
+  function clip(s, n) {
+    s = String(s || "");
+    return s.length > n ? s.slice(0, n) : s;
+  }
+  function packets(text) {
+    if (!text) return [];
+    if (text.indexOf("\x1e") >= 0) return text.split("\x1e").filter(Boolean);
+    if (/^\d+:/.test(text)) {
+      const out = [];
+      let s = text;
+      while (s.length) {
+        const i = s.indexOf(":");
+        if (i < 0) { out.push(s); break; }
+        const n = parseInt(s.slice(0, i), 10);
+        s = s.slice(i + 1);
+        out.push(s.slice(0, n));
+        s = s.slice(n);
+      }
+      return out;
+    }
+    return [text];
+  }
+  function parseEvent(pkt) {
+    if (!pkt || pkt.slice(0, 2) !== "42") return null;
+    try {
+      const arr = JSON.parse(pkt.slice(2));
+      if (!arr || !arr.length) return null;
+      let payload = arr[1];
+      if (typeof payload === "string") {
+        try { payload = JSON.parse(payload); } catch (e) {}
+      }
+      return {name: arr[0], payload: payload};
+    } catch (e) { return null; }
+  }
+  function readyPkt() {
+    const inner = JSON.stringify({token: "", listId: String(listId)});
+    return "42" + JSON.stringify(["readyForMatch", inner]);
+  }
+  function sendReady() {
+    if (readySent) return;
+    readySent = true;
+    try { ws.send(readyPkt()); } catch (e) {}
+    emit("trace", {text: "readyForMatch listId=" + listId});
+  }
+  function armPing() {
+    if (pingTimer) clearTimeout(pingTimer);
+    pingTimer = setTimeout(function() {
+      emit("trace", {text: "ws ping timeout interval=" + pingInterval + " timeout=" + pingTimeout});
+      try { if (ws) ws.close(); } catch (e) {}
+    }, pingInterval + pingTimeout);
+  }
+  function scheduleReconnect(detail, delaySec) {
+    if (stopped || reconnectTimer) return;
+    const wait = 3;
+    const actualWait = typeof delaySec === "number" ? delaySec : wait;
+    if (actualWait > 0) {
+      emit("status", {state: "reconnect", detail: detail, wait: actualWait});
+    }
+    reconnectTimer = setTimeout(function() {
+      reconnectTimer = null;
+      if (!stopped) handshake();
+    }, actualWait * 1000);
+  }
+  function handlePkt(d, via) {
+    d = String(d || "");
+    const t = d.trim();
+    lastPkt = clip(t, 24);
+    armPing();
+    if (t === "3probe") {
+      try { ws.send("5"); } catch (e) {}
+      try { ws.send("40"); } catch (e) {}
+      return;
+    }
+    if (t === "2" || t === "2probe") {
+      pingCount += 1;
+      try { ws.send(t === "2probe" ? "3probe" : "3"); } catch (e) {}
+      if (pingCount === 1 || pingCount % 10 === 0) {
+        emit("trace", {text: "ws ping n=" + pingCount + " pong"});
+      }
+      return;
+    }
+    if (t === "1" || t === "41") {
+      emit("trace", {text: "eio disconnect pkt=" + t + " via=" + via});
+      if (ws) {
+        try { ws.onclose = null; ws.onerror = null; ws.close(); } catch (e) {}
+        ws = null;
+      }
+      if (!stopped) scheduleReconnect("server rotation", 0);
+      return;
+    }
+    if (t.charAt(0) === "0") {
+      try {
+        const o = JSON.parse(t.slice(1));
+        if (o.pingInterval) pingInterval = o.pingInterval;
+        if (o.pingTimeout) pingTimeout = o.pingTimeout;
+        emit("trace", {text: "ws open sid=" + (o.sid || "") + " ping=" + pingInterval + "/" + pingTimeout});
+      } catch (e) {}
+      try { ws.send("40"); } catch (e) {}
+      sendReady();
+      emit("status", {state: "connected", transport: "ws"});
+      return;
+    }
+    if (t === "40") {
+      sendReady();
+      emit("status", {state: "connected", transport: "ws"});
+      return;
+    }
+    const evp = parseEvent(t);
+    if (evp) {
+      evCount += 1;
+      if (evp.name === "scoreboard") {
+        let raw = "";
+        try { raw = JSON.stringify(evp.payload); } catch (e) {}
+        if (raw && raw === lastBoard) return;
+        lastBoard = raw;
+        const o = evp.payload || {};
+        const hist = (o.ctMatchHistory && o.ctMatchHistory.firstHalf) || [];
+        emit("trace", {text: "board r=" + o.currentRound + " " + o.counterTerroristScore + "-" + o.terroristScore
+          + " " + o.currentRoundState + " hist=" + (Array.isArray(hist) ? hist.length : 0)});
+      }
+      emit(evp.name, evp.payload);
+      return;
+    }
+    if (t && t !== "3" && t !== "6") {
+      emit("trace", {text: "ws pkt via=" + via + " " + clip(t, 40)});
+    }
+  }
+  function openWs() {
+    if (ws) {
+      try { ws.onclose = null; ws.onerror = null; ws.onmessage = null; ws.close(); } catch (e) {}
+      ws = null;
+    }
+    if (keepaliveTimer) { clearInterval(keepaliveTimer); keepaliveTimer = null; }
+    const wsBase = httpBase.replace(/^http/i, "ws");
+    const u = wsBase.replace(/\/$/, "") + "/socket.io/?EIO=3&transport=websocket";
+    const sock = new WebSocket(u);
+    ws = sock;
+    openedAt = Date.now();
+    pingCount = 0;
+    evCount = 0;
+    lastBoard = "";
+    readySent = false;
+    keepaliveTimer = setInterval(function() {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        try { ws.send("3"); } catch (e) {}
+      }
+    }, 20000);
+    sock.onopen = function() { emit("trace", {text: "ws tcp open"}); };
+    sock.onmessage = function(ev) {
+      let raw = ev.data;
+      if (typeof raw !== "string") {
+        try {
+          if (raw && raw.buffer) raw = raw.buffer;
+          raw = new TextDecoder().decode(raw);
+        } catch (e) {
+          const kind = (ev.data && ev.data.constructor && ev.data.constructor.name) || typeof ev.data;
+          emit("trace", {text: "ws non-text " + kind});
+          return;
+        }
+      }
+      const parts = packets(raw);
+      for (let i = 0; i < parts.length; i++) handlePkt(parts[i], "ws");
+    };
+    sock.onerror = function(ev) {
+      emit("trace", {text: "ws error " + clip(ev && (ev.message || ev.type), 60)});
+    };
+    sock.onclose = function(ev) {
+      if (pingTimer) { clearTimeout(pingTimer); pingTimer = null; }
+      if (keepaliveTimer) { clearInterval(keepaliveTimer); keepaliveTimer = null; }
+      const up = openedAt ? Math.round((Date.now() - openedAt) / 1000) : 0;
+      const detail = "ws close code=" + (ev && ev.code) + " clean=" + !!(ev && ev.wasClean)
+        + " reason=" + clip(ev && ev.reason, 40);
+      emit("trace", {text: detail + " last=" + lastPkt + " pings=" + pingCount + " ev=" + evCount + " up=" + up + "s"});
+      if (!stopped) scheduleReconnect("ws close code=" + (ev && ev.code));
+    };
+  }
+  function handshake() {
+    if (stopped || handshakeBusy) return;
+    handshakeBusy = true;
+    emit("status", {state: "connecting", transport: "chrome"});
+    handshakeBusy = false;
+    if (stopped) return;
+    openWs();
+  }
+  handshake();
+})(__LIST_ID__, __HTTP_BASE__);
+"""
+
+
+def scorebot_js(list_id: str | int, http_base: str) -> str:
+    """Fill the page script. Do not use % formatting — JS has modulo."""
+    js = _SCOREBOT_JS
+    if "__LIST_ID__" not in js or "__HTTP_BASE__" not in js:
+        raise RuntimeError("scorebot js missing inject marks")
+    return js.replace("__LIST_ID__", json.dumps(str(list_id)), 1).replace(
+        "__HTTP_BASE__", json.dumps(http_base.rstrip("/")), 1
+    )
+
+
+def chrome_scorebot_enabled() -> bool:
+    mode = (os.environ.get("HLTV_SCOREBOT") or "chrome").strip().lower()
+    if mode in {"curl", "cffi", "off", "0"}:
+        return False
+    from hltv_bot.cdp import port_open
+
+    return port_open(9222)
+
+
+def _pick_match_page(pages: list[dict], match_url: str, list_id: str) -> dict | None:
+    needle = f"/{list_id}/" if list_id else ""
+    want = (match_url or "").split("?")[0].rstrip("/")
+    for p in pages:
+        if p.get("type") != "page":
+            continue
+        url = str(p.get("url") or "")
+        if "hltv.org" not in url or "/matches/" not in url:
+            continue
+        if "/matches" == urlparse(url).path.rstrip("/"):
+            continue
+        if want and url.rstrip("/").startswith(want):
+            return p
+        if needle and needle in url:
+            return p
+        if list_id and str(list_id) in url:
+            return p
+    return None
+
+
+def _ensure_match_tab(
+    cdp: str,
+    match_url: str,
+    list_id: str,
+    *,
+    timeout: float = 5.0,
+) -> dict:
+    pages = _list_pages(cdp, timeout)
+    page = _pick_match_page(pages, match_url, list_id)
+    if page is not None:
+        return page
+    if not match_url:
+        raise CdpUnavailable("no match url for chrome scorebot")
+    new_url = f"{cdp.rstrip('/')}/json/new?{match_url}"
+    try:
+        _http_json("PUT", new_url, timeout)
+    except CdpError:
+        _http_json("GET", new_url, timeout)
+    time.sleep(2.0)
+    pages = _list_pages(cdp, timeout)
+    page = _pick_match_page(pages, match_url, list_id)
+    if page is None:
+        raise CdpUnavailable("failed to open match tab")
+    return page
+
+
+def iter_scorebot_chrome(
+    list_id: str | int,
+    *,
+    base: str,
+    match_url: str | None = None,
+    cdp: str = DEFAULT_CDP,
+    timeout: float = 25.0,
+) -> Iterator[tuple[str, Any]]:
+    list_id = str(list_id)
+    match_url = (match_url or "").strip() or f"https://www.hltv.org/matches/{list_id}/x"
+    log.info("scorebot chrome listId=%s tab=%s base=%s", list_id, match_url, base)
+    page = _ensure_match_tab(cdp, match_url, list_id)
+    ws_url = str(page.get("webSocketDebuggerUrl") or "")
+    if not ws_url:
+        raise CdpUnavailable("match tab has no debugger url")
+    client = _connect_ws(ws_url, timeout)
+    yield ("status", {"state": "connecting", "transport": "chrome"})
+    yield ("trace", {"text": f"chrome tab {page.get('url')}"})
+    try:
+        for method in ("Runtime.enable", "Page.enable"):
+            try:
+                client.call(method, timeout=5.0)
+            except CdpError:
+                pass
+        client.call("Runtime.addBinding", {"name": "hltvBotEvent"}, timeout=5.0)
+        expr = scorebot_js(list_id, base)
+        ev = client.call(
+            "Runtime.evaluate",
+            {"expression": expr, "returnByValue": True},
+            timeout=timeout,
+        )
+        if ev.get("exceptionDetails"):
+            raise CdpError(str(ev.get("exceptionDetails")))
+        while True:
+            msg = client.recv_msg(0.4)
+            if msg is None:
+                yield ("tick", None)
+                continue
+            if msg.get("method") != "Runtime.bindingCalled":
+                continue
+            params = msg.get("params") if isinstance(msg.get("params"), dict) else {}
+            if params.get("name") != "hltvBotEvent":
+                continue
+            try:
+                data = json.loads(str(params.get("payload") or ""))
+            except json.JSONDecodeError:
+                continue
+            name = data.get("name")
+            payload = data.get("payload")
+            if not name:
+                continue
+            yield (str(name), payload)
+    finally:
+        try:
+            client.call(
+                "Runtime.evaluate",
+                {"expression": "window.__hltvBotScorebot && window.__hltvBotScorebot.stop()", "returnByValue": True},
+                timeout=3.0,
+            )
+        except Exception:
+            pass
+        try:
+            client.ws.close()
+        except Exception:
+            pass
+        log.info("scorebot chrome stopped listId=%s", list_id)

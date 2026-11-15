@@ -1,0 +1,66 @@
+name: deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-vps
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: rsync to VPS and restart
+        env:
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -p 2233 -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          HOST="root@$DEPLOY_HOST"
+          SSH="ssh -p 2233 -o IdentitiesOnly=yes"
+          $SSH "$HOST" 'mkdir -p /opt/hltv-bot/data; command -v rsync >/dev/null || (export DEBIAN_FRONTEND=noninteractive; apt-get update -qq && apt-get install -y -qq rsync)'
+          rsync -az -e "$SSH" \
+            --exclude '.git/' \
+            --exclude '.github/' \
+            --exclude '.venv/' \
+            --exclude '__pycache__/' \
+            --exclude '*.pyc' \
+            --exclude '.env' \
+            --exclude 'data/session.json' \
+            --exclude 'data/chats.json' \
+            --exclude 'data/settings.json' \
+            --exclude 'data/reminders.json' \
+            ./ "$HOST:/opt/hltv-bot/"
+          $SSH "$HOST" bash -s <<'REMOTE'
+          set -euo pipefail
+          export PATH="/root/.local/bin:/usr/local/bin:$PATH"
+          export DEBIAN_FRONTEND=noninteractive
+          if ! command -v uv >/dev/null; then
+            curl -LsSf https://astral.sh/uv/install.sh | sh
+            export PATH="/root/.local/bin:$PATH"
+          fi
+          cd /opt/hltv-bot
+          test -f .env || cp .env.example .env
+          test -f data/session.json || cp data/session.example.json data/session.json
+          apt-get install -y -qq libpango-1.0-0 libpangocairo-1.0-0 libcairo2 libgdk-pixbuf-2.0-0 fonts-dejavu-core fonts-wqy-zenhei fonts-noto-color-emoji
+          uv sync
+          install -m 644 deploy/hltv-bot.service /etc/systemd/system/hltv-bot.service
+          install -m 644 deploy/chrome-session/hltv-chrome.service /etc/systemd/system/hltv-chrome.service
+          install -m 644 deploy/chrome-session/xvfb@.service /etc/systemd/system/xvfb@.service
+          install -m 644 deploy/chrome-session/x11vnc@.service /etc/systemd/system/x11vnc@.service
+          install -m 644 deploy/chrome-session/novnc.service /etc/systemd/system/novnc.service
+          systemctl daemon-reload
+          systemctl enable hltv-bot
+          # Chrome/Xvfb units are installed above; do not enable or start them here.
+          systemctl restart hltv-bot
+          systemctl is-active hltv-bot
+          REMOTE

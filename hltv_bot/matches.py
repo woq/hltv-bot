@@ -1,0 +1,918 @@
+from __future__ import annotations
+
+import logging
+import re
+from datetime import datetime, timedelta, timezone
+from html import unescape
+
+from hltv_bot.http import request
+from hltv_bot.session import BrowserSession
+
+log = logging.getLogger("hltv_bot.matches")
+
+MATCHES_URL = "https://www.hltv.org/matches"
+_MATCH_CACHE: dict = {"at": 0.0, "rows": []}
+MATCH_CACHE_TTL = 45.0
+_MATCH_CACHE_TTL = MATCH_CACHE_TTL
+MATCH_HREF = re.compile(r'href="(/matches/(\d+)/([^"]+))"')
+MATCH_TEAMS_BLOCK = re.compile(r'<a[^>]*class="[^"]*match-teams[^"]*"[^>]*>([\s\S]*?)</a>', re.I)
+TEAM_NAME = re.compile(
+    r'class="[^"]*(?:match-?teamname|matchTeamName|\bteam\b)[^"]*"[^>]*>(?:<[^>]+>)*\s*([^<]+)',
+    re.I,
+)
+EVENT_ATTR = re.compile(r'data-event-headline="([^"]+)"', re.I)
+EVENT_NAME = re.compile(
+    r'class="[^"]*match-?event(?:name)?[^"]*"[^>]*>(?:<[^>]+>)*\s*([^<]+)',
+    re.I,
+)
+DATA_STARS = re.compile(r'data-(?:stars|star-rating|rating)="(\d)"', re.I)
+DATA_UNIX = re.compile(r'data-unix="(\d{10,13})"')
+TEAM_SCORE = re.compile(r'class="[^"]*matchTeamScore[^"]*"[^>]*>\s*([^<]*?)\s*<', re.I)
+MATCH_TIME_TEXT = re.compile(r'class="[^"]*(?:matchTime|time)[^"]*"[^>]*>\s*(\d{1,2}:\d{2})\s*<', re.I)
+_IMG_TAG = re.compile(r"<img\b([^>]*)>", re.I)
+_ATTR = re.compile(r"""([\w:-]+)\s*=\s*["']([^"']*)["']""")
+CST = timezone(timedelta(hours=8))
+
+
+def _abs(href: str) -> str:
+    if href.startswith("http"):
+        return href
+    return "https://www.hltv.org" + href
+
+
+def _clean(text: str) -> str:
+    return re.sub(r"\s+", " ", unescape(text)).strip()
+
+
+_ACRONYMS = {
+    "g2": "G2",
+    "navi": "NaVi",
+    "natus": "Natus",
+    "vincere": "Vincere",
+    "m80": "M80",
+    "esl": "ESL",
+    "cct": "CCT",
+    "iem": "IEM",
+    "blast": "BLAST",
+    "pgl": "PGL",
+    "faze": "FaZe",
+    "mouz": "MOUZ",
+    "furia": "FURIA",
+    "pain": "paiN",
+    "mibr": "MIBR",
+    "og": "OG",
+    "c9": "C9",
+    "nip": "NiP",
+    "saw": "SAW",
+    "ap": "AP",
+    "eu": "EU",
+    "na": "NA",
+    "sa": "SA",
+    "asia": "Asia",
+    "europe": "Europe",
+    "pacific": "Pacific",
+    "series": "Series",
+    "closed": "Closed",
+    "open": "Open",
+    "qualifier": "Qualifier",
+    "challenger": "Challenger",
+    "league": "League",
+    "season": "Season",
+    "cup": "Cup",
+    "academy": "Academy",
+    "ex": "ex",
+}
+
+
+_OPEN_SIDE = {"", "?", "TBD", "TBA"}
+LIST_DAYS = 3
+
+
+def row_start(row: dict) -> datetime | None:
+    raw = str(row.get("unix") or "").strip()
+    if not raw.isdigit():
+        return None
+    n = int(raw)
+    if n > 10_000_000_000:
+        n //= 1000
+    try:
+        return datetime.fromtimestamp(n, CST)
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+def both_sides_open(row: dict) -> bool:
+    def blank(value: object) -> bool:
+        return str(value or "").strip().upper() in _OPEN_SIDE
+    return blank(row.get("team1")) and blank(row.get("team2"))
+
+
+def show_on_list(row: dict, now: datetime | None = None, *, days: int = LIST_DAYS) -> bool:
+    """Live rows stay. Upcoming rows are the next `days` calendar dates, UTC+8.
+
+    A match with both sides still TBD is omitted. Anything further out than
+    today plus two more days stays off the list.
+    """
+    if both_sides_open(row):
+        return False
+    if str(row.get("live") or "") == "1":
+        return True
+    now = now or datetime.now(CST)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=CST)
+    else:
+        now = now.astimezone(CST)
+    start = row_start(row)
+    if start is None:
+        return False
+    begin = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    return begin <= start < begin + timedelta(days=days)
+
+
+def map_is_over(left: int, right: int) -> bool:
+    """CS2 map is done: first to 13, or overtime first to 16, 19, 22, … by two."""
+    hi, lo = max(left, right), min(left, right)
+    if hi < 13 or hi - lo < 2:
+        return False
+    if lo <= 11:
+        return True
+    return hi >= 16 and (hi - 16) % 3 == 0
+
+
+def map_order(row: dict) -> tuple[str, list[str]]:
+    """Current map first, then the others in series order.
+
+    ``data-maps`` is the series order. The live map is the one after the maps
+    already won. When that count is missing on a live series, the first map
+    is the current one.
+    """
+    names = [part.strip() for part in re.split(r"\s*·\s*", row.get("maps") or "") if part.strip()]
+    if not names:
+        one = (row.get("map") or "").strip()
+        return (one, []) if one else ("", [])
+    idx = row.get("map_index")
+    try:
+        current_i = int(idx) if str(idx).strip() != "" else -1
+    except (TypeError, ValueError):
+        current_i = -1
+    if current_i < 0 or current_i >= len(names):
+        return "", names
+    current = names[current_i]
+    rest = [name for i, name in enumerate(names) if i != current_i]
+    return current, rest
+
+
+def match_meta_line(row: dict) -> str:
+    fmt = (row.get("format") or "").strip().lower()
+    current, rest = map_order(row)
+    parts = [current] if current else []
+    parts.extend(rest)
+    label = " · ".join(parts)
+    if label and fmt:
+        return f"{label} · {fmt}"
+    return label or fmt
+
+
+def prepare_match_list(rows: list[dict], now: datetime | None = None) -> list[dict]:
+    now = now or datetime.now(CST)
+    kept = [row for row in rows if show_on_list(row, now)]
+    kept.sort(key=lambda row: (0 if str(row.get("live") or "") == "1" else 1, row_start(row) or now))
+    return kept
+
+
+def format_start_time(unix_raw: str | int | None, *, live: bool = False, now: datetime | None = None) -> str:
+    if unix_raw in (None, ""):
+        return "LIVE" if live else ""
+    try:
+        n = int(unix_raw)
+    except (TypeError, ValueError):
+        return "LIVE" if live else ""
+    if n > 10_000_000_000:
+        n //= 1000
+    dt = datetime.fromtimestamp(n, CST)
+    now = now or datetime.now(CST)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=CST)
+    else:
+        now = now.astimezone(CST)
+
+    clock = dt.strftime("%H:%M")
+
+    # 自然比赛日周期：每日 UTC+8 10:00 至次日 10:00 为一个比赛日
+    slate_start = now.replace(hour=10, minute=0, second=0, microsecond=0)
+    if now < slate_start:
+        slate_start -= timedelta(days=1)
+    slate_end = slate_start + timedelta(days=1)
+
+    if slate_start <= dt < slate_end:
+        return clock
+    return dt.strftime("%m/%d ") + clock
+
+
+def _wide(ch: str) -> bool:
+    import unicodedata
+
+    return unicodedata.east_asian_width(ch) in {"W", "F"}
+
+
+def name_units(text: str) -> int:
+    """Latin letters count as 1. Wide characters, mostly CJK, count as 2."""
+    return sum(2 if _wide(ch) else 1 for ch in text)
+
+
+_NAME_FILLER = {"esports", "esport", "e-sports", "gaming", "club"}
+_NAME_SKIP = {"of", "the", "and"}
+
+
+def short_team(name: str, limit: int) -> str:
+    """Fit a team name into `limit` width units.
+
+    The list card fits 22 Latin letters between the logo and the score.
+    The single match card fits 16. Wide characters count as two.
+    """
+    text = " ".join((name or "").split())
+    if not text or name_units(text) <= limit:
+        return text
+    words = [word for word in text.split(" ") if word.lower() not in _NAME_FILLER]
+    trimmed = " ".join(words) or text
+    if name_units(trimmed) <= limit:
+        return trimmed
+    if len(words) >= 3 and all(word.isascii() for word in words):
+        letters = [word[0] for word in words if word.lower() not in _NAME_SKIP and word]
+        if 2 <= len(letters) <= limit:
+            return "".join(letters)
+    if len(words) >= 2 and 4 <= name_units(words[0]) <= limit:
+        return words[0]
+    kept: list[str] = []
+    used = 0
+    for ch in trimmed:
+        width = 2 if _wide(ch) else 1
+        if used + width > limit - 1:
+            break
+        kept.append(ch)
+        used += width
+    return "".join(kept).rstrip() + "…"
+
+
+def pretty_name(text: str) -> str:
+    s = _clean(text)
+    if not s:
+        return s
+    if any(c.isupper() for c in s) and not s.islower():
+        return s
+    out: list[str] = []
+    for w in s.split(" "):
+        k = w.lower()
+        if k in _ACRONYMS:
+            out.append(_ACRONYMS[k])
+        elif k.isdigit():
+            out.append(w)
+        else:
+            out.append(w[:1].upper() + w[1:].lower() if w else w)
+    return " ".join(out)
+
+
+def _img_attr(attrs: str, name: str) -> str:
+    want = name.lower()
+    for key, val in _ATTR.findall(attrs):
+        if key.lower() == want:
+            return unescape(val).strip()
+    return ""
+
+
+def _abs_logo(src: str) -> str:
+    src = unescape(src).strip()
+    if src.startswith("//"):
+        return "https:" + src
+    if src.startswith("/"):
+        return "https://www.hltv.org" + src
+    return src
+
+
+def _is_placeholder_logo(src: str) -> bool:
+    low = src.lower()
+    if "teamplaceholder" in low:
+        return False
+    return any(tok in low for tok in ("placeholder", "nologo", "blank", "defaultlogo"))
+
+
+_EVENT_ID = re.compile(r'(?:data-event-id="|/events/)(\d+)', re.I)
+
+
+def _event_id_from(chunk: str) -> str:
+    m = _EVENT_ID.search(chunk)
+    return m.group(1) if m else ""
+
+
+def _event_logo_url(chunk: str) -> str:
+    """Event logo on the matches row. Night art wins on the dark card."""
+    night = ""
+    day = ""
+    any_logo = ""
+    for m in _IMG_TAG.finditer(chunk):
+        attrs = m.group(1)
+        src = _abs_logo(_img_attr(attrs, "src"))
+        cls = _img_attr(attrs, "class").lower()
+        if not src or _is_placeholder_logo(src):
+            continue
+        if "matchteamlogo" in cls or "teamlogo" in src.lower():
+            continue
+        if "eventlogo" not in src.lower() and "matcheventlogo" not in cls and "event-logo" not in cls:
+            continue
+        if "night-only" in cls:
+            night = night or src
+        elif "day-only" in cls:
+            day = day or src
+        else:
+            any_logo = any_logo or src
+    return night or any_logo or day
+
+
+def _team_logo_urls(chunk: str) -> tuple[str, str]:
+    """Night logo from each team on the matches row. Day logo is the fallback."""
+    block = MATCH_TEAMS_BLOCK.search(chunk)
+    scope = block.group(1) if block else chunk
+    slots: list[dict[str, str]] = []
+    for m in _IMG_TAG.finditer(scope):
+        attrs = m.group(1)
+        src = _abs_logo(_img_attr(attrs, "src"))
+        cls = _img_attr(attrs, "class").lower()
+        if not src or _is_placeholder_logo(src):
+            continue
+        if (
+            "team-logo" not in cls
+            and "teamlogo" not in cls
+            and "teamlogo" not in src.lower()
+            and "/team/" not in src.lower()
+            and "teamplaceholder" not in src.lower()
+        ):
+            continue
+        alt = _img_attr(attrs, "alt") or _img_attr(attrs, "title")
+        if "night-only" in cls:
+            variant = "night"
+        elif "day-only" in cls:
+            variant = "day"
+        else:
+            variant = "any"
+        if slots:
+            prev = slots[-1]
+            prev_alt = prev.get("alt") or ""
+            prev_variant = prev.get("variant") or ""
+            same_alt = bool(prev_alt and alt and prev_alt == alt)
+            day_night_pair = (
+                (not prev_alt or not alt)
+                and variant in ("day", "night")
+                and prev_variant in ("day", "night")
+                and variant != prev_variant
+            )
+            same_team = same_alt or day_night_pair
+            if same_team and (not src or not prev.get("src") or variant in ("day", "night")):
+                if not prev.get("src") or variant == "night":
+                    prev["src"] = src or prev.get("src") or ""
+                if variant == "night":
+                    prev["variant"] = "night"
+                if alt and not prev_alt:
+                    prev["alt"] = alt
+                continue
+        slots.append({"src": src, "alt": alt, "variant": variant})
+        if len(slots) >= 2 and all(s.get("src") for s in slots[:2]):
+            break
+    logos = [(s.get("src") or "") for s in slots[:2]]
+    while len(logos) < 2:
+        logos.append("")
+    return logos[0], logos[1]
+
+
+def _stars_in(chunk: str) -> int:
+    m = DATA_STARS.search(chunk)
+    if m:
+        return max(0, min(5, int(m.group(1))))
+    all_s = len(re.findall(r"fa-star", chunk, re.I))
+    empty = len(re.findall(r"fa-star-o|fa-star empty", chunk, re.I))
+    n = all_s - empty
+    if n <= 0:
+        n = len(re.findall(r"★", chunk))
+    return max(0, min(5, n))
+
+
+def _teams_event_from_slug(slug: str) -> tuple[str, str, str]:
+    slug = unescape(slug)
+    if "-vs-" not in slug:
+        pretty = slug.replace("-", " ")
+        return "TBD", "TBD", pretty
+    left, right = slug.split("-vs-", 1)
+    t1 = left.replace("-", " ")
+    # event tokens often start at known series names
+    parts = right.split("-")
+    event_i = None
+    keys = {
+        "cct",
+        "esl",
+        "blast",
+        "iem",
+        "major",
+        "pgl",
+        "starladder",
+        "nodwin",
+        "exort",
+        "gluck",
+        "logitech",
+        "kibertochka",
+        "fiesta",
+        "challenger",
+        "qualifier",
+    }
+    for i, p in enumerate(parts):
+        if p.lower() in keys:
+            event_i = i
+            break
+    if event_i is None and len(parts) >= 3:
+        event_i = max(1, len(parts) - 4)
+    if event_i is None:
+        return t1, right.replace("-", " "), ""
+    t2 = " ".join(parts[:event_i])
+    event = " ".join(parts[event_i:])
+    return t1, t2, event
+
+
+def _team_scores(chunk: str) -> tuple[str, str]:
+    found: list[str] = []
+    for m in TEAM_SCORE.finditer(chunk):
+        raw = _clean(m.group(1))
+        if raw in {"-", "–", "—"}:
+            raw = ""
+        found.append(raw)
+        if len(found) >= 2:
+            break
+    while len(found) < 2:
+        found.append("")
+    return found[0], found[1]
+
+
+def _chunk_around(html: str, pos: int, span: int = 1800) -> str:
+    start = max(0, pos - span)
+    end = min(len(html), pos + span)
+    return html[start:end]
+
+
+_WRAPPER_OPEN = re.compile(r'<div class="match-wrapper\b', re.I)
+_BO_META = re.compile(r'<div class="match-meta">\s*(bo\d)\s*</div>', re.I)
+_TEAM_LINE = re.compile(r'class="[^"]*match-teamname[^"]*"[^>]*>\s*([^<]+)', re.I)
+_CURRENT_MAP_SCORE = re.compile(r'data-livescore-current-map-score="(\d+)"', re.I)
+_MAP_POOL = re.compile(r'data-maps="([^"]*)"', re.I)
+_WON_TEXT = re.compile(r'data-livescore-maps-won-for="[^"]*"[^>]*>\s*(\d+)', re.I)
+_LIVE_TEAM = re.compile(r'data-livescore-team="(\d+)"', re.I)
+
+
+def _livescore_slots(chunk: str, rx: re.Pattern[str]) -> list[tuple[str, str]]:
+    """(team slot, number) in document order. Slot is ``1`` / ``2`` when present."""
+    found: list[tuple[str, str]] = []
+    for match in rx.finditer(chunk):
+        start = chunk.rfind("<", 0, match.start())
+        end = chunk.find(">", match.start())
+        if start < 0:
+            start = match.start()
+        if end < 0:
+            end = match.end()
+        else:
+            end += 1
+        tag = chunk[start:end]
+        slot_m = _LIVE_TEAM.search(tag)
+        found.append((slot_m.group(1) if slot_m else "", match.group(1)))
+    return found
+
+
+def _pair_by_slot(pairs: list[tuple[str, str]]) -> tuple[str, str]:
+    """Team 1 then team 2. Without slot attributes, keep document order."""
+    if not pairs:
+        return "", ""
+    by_slot = {slot: value for slot, value in pairs if slot in {"1", "2"}}
+    if "1" in by_slot and "2" in by_slot:
+        return by_slot["1"], by_slot["2"]
+    values = [value for _slot, value in pairs]
+    first = values[0] if values else ""
+    second = values[1] if len(values) > 1 else ""
+    return first, second
+
+
+def _series_index(map_names: list[str], won: list[int], score1: str, score2: str, *, live: bool, fmt: str) -> str:
+    """Which pool entry is on screen.
+
+    Maps-won text already counts a map once it has ended, while the round
+    score can still be that map's final. The next map is the one after the
+    wins, until the round score itself is a finished map.
+    """
+    if len(won) >= 2 and map_names:
+        played = won[0] + won[1]
+        try:
+            finished = map_is_over(int(score1), int(score2))
+        except (TypeError, ValueError):
+            finished = False
+        idx = played - 1 if finished and played > 0 else played
+        if idx < 0:
+            idx = 0
+        if idx >= len(map_names):
+            idx = len(map_names) - 1
+        return str(idx)
+    if live and fmt in {"bo3", "bo5"} and map_names:
+        return "0"
+    return ""
+
+
+def _parse_wrappers(html: str, *, limit: int = 100, exclude_tbd: bool = False) -> list[dict[str, str]]:
+    """Current HLTV /matches rows. One ``match-wrapper`` is one match.
+
+    ``match-meta`` is ``bo1`` / ``bo3`` / ``bo5``. The number next to each team
+    is the current map's round score (``data-livescore-current-map-score``).
+    Maps won are filled by page script and are empty in this HTML.
+    """
+    starts = [m.start() for m in _WRAPPER_OPEN.finditer(html)]
+    rows: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for i, start in enumerate(starts):
+        end = starts[i + 1] if i + 1 < len(starts) else len(html)
+        chunk = html[start:end]
+        id_m = re.search(r'data-match-id="(\d+)"', chunk)
+        href_m = MATCH_HREF.search(chunk)
+        if not id_m or not href_m:
+            continue
+        mid, href, slug = id_m.group(1), href_m.group(1), href_m.group(3)
+        if mid in seen:
+            continue
+        seen.add(mid)
+        head = chunk[:800]
+        live = 'live="true"' in head or "live-match-container" in head
+        t1_id_m = re.search(r'\bteam1="(\d+)"', head)
+        t2_id_m = re.search(r'\bteam2="(\d+)"', head)
+        team1_id = t1_id_m.group(1) if t1_id_m else ""
+        team2_id = t2_id_m.group(1) if t2_id_m else ""
+        names = [_clean(x) for x in _TEAM_LINE.findall(chunk) if _clean(x)]
+        t1, t2, event = _teams_event_from_slug(slug)
+        if len(names) >= 2:
+            t1, t2 = names[0], names[1]
+        elif len(names) == 1:
+            t1 = names[0]
+        ev_attr = EVENT_ATTR.search(chunk)
+        if ev_attr:
+            event = _clean(ev_attr.group(1))
+        t1, t2, event = pretty_name(t1), pretty_name(t2), pretty_name(event)
+        bo = _BO_META.search(chunk)
+        fmt = bo.group(1).lower() if bo else ""
+        pool = _MAP_POOL.search(chunk)
+        map_names = [pretty_name(part.strip()) for part in (pool.group(1).split(",") if pool else []) if part.strip()]
+        maps = " · ".join(map_names)
+        won1, won2 = _pair_by_slot(_livescore_slots(chunk, _WON_TEXT))
+        score1, score2 = _pair_by_slot(_livescore_slots(chunk, _CURRENT_MAP_SCORE))
+        if not score1 and not score2:
+            score1, score2 = _team_scores(chunk)
+        won_nums = [int(won1), int(won2)] if won1.isdigit() and won2.isdigit() else []
+        map_index = _series_index(map_names, won_nums, score1, score2, live=live, fmt=fmt)
+        stars_m = re.search(r'data-stars="(\d)"', head)
+        stars = int(stars_m.group(1)) if stars_m else _stars_in(chunk)
+        unix_m = DATA_UNIX.search(chunk)
+        unix = unix_m.group(1) if unix_m else ""
+        _u1, _u2 = t1.strip().upper(), t2.strip().upper()
+        if exclude_tbd and (not _u1 or _u1 in ("?", "TBD")) and (not _u2 or _u2 in ("?", "TBD")):
+            continue
+        logo1, logo2 = _team_logo_urls(chunk)
+        rows.append(
+            {
+                "id": mid,
+                "url": _abs(href),
+                "team1": t1,
+                "team2": t2,
+                "team1_id": team1_id,
+                "team2_id": team2_id,
+                "team1_logo": logo1,
+                "team2_logo": logo2,
+                "event": event,
+                "event_id": _event_id_from(chunk),
+                "event_logo": _event_logo_url(chunk),
+                "title": f"{t1} vs {t2}".strip(),
+                "live": "1" if live else "0",
+                "stars": str(max(0, min(5, stars))),
+                "format": fmt,
+                "maps": maps,
+                "map_index": map_index,
+                "won1": won1,
+                "won2": won2,
+                "score1": score1,
+                "score2": score2,
+                "time": format_start_time(unix, live=live),
+                "unix": str(unix or ""),
+            }
+        )
+    rows.sort(key=_match_sort_key)
+    if limit:
+        return rows[:limit]
+    return rows
+
+
+def _match_sort_key(r: dict) -> tuple:
+    live = 0 if r.get("live") == "1" else 1
+    t1 = (r.get("team1") or "").strip().upper()
+    t2 = (r.get("team2") or "").strip().upper()
+    has_tbd = 1 if (not t1 or not t2 or t1 in ("?", "TBD") or t2 in ("?", "TBD")) else 0
+    stars = int(r.get("stars") or 0)
+    return (live, has_tbd, -stars)
+
+
+def parse_match_list(html: str, *, limit: int = 100, exclude_tbd: bool = False) -> list[dict[str, str]]:
+    if 'data-match-id="' in html and "match-wrapper" in html:
+        return _parse_wrappers(html, limit=limit, exclude_tbd=exclude_tbd)
+    seen: set[str] = set()
+    rows: list[dict[str, str]] = []
+    for m in MATCH_HREF.finditer(html):
+        href, mid, slug = m.group(1), m.group(2), m.group(3)
+        if mid in seen:
+            continue
+        seen.add(mid)
+        # Locate match container boundary instead of broad 3600-char window
+        before_pos = html.rfind('<div class="upcomingMatch', 0, m.start())
+        live_pos = html.rfind('<div class="liveMatch', 0, m.start())
+        c_start = max(before_pos, live_pos)
+        if c_start == -1 or (m.start() - c_start > 1500):
+            c_start = max(0, m.start() - 400)
+
+        next_up = html.find('<div class="upcomingMatch', m.end())
+        next_live = html.find('<div class="liveMatch', m.end())
+        candidates_end = [x for x in (next_up, next_live) if x != -1]
+        c_end = min(candidates_end) if candidates_end else min(len(html), m.end() + 1000)
+        chunk = html[c_start:c_end]
+
+        prefix = html[c_start:m.start()]
+        live = "liveMatch" in html[c_start:m.start() + 100] or "matchLive" in html[c_start:m.start() + 100]
+
+        teams: list[str] = []
+        mt = MATCH_TEAMS_BLOCK.search(chunk)
+        if mt:
+            teams = [_clean(x) for x in TEAM_NAME.findall(mt.group(1)) if _clean(x)]
+        if len(teams) < 2:
+            teams = [_clean(x) for x in TEAM_NAME.findall(chunk) if _clean(x)]
+
+        t1, t2, event = _teams_event_from_slug(slug)
+        if len(teams) >= 2:
+            t1, t2 = teams[0], teams[1]
+        elif len(teams) == 1:
+            t1 = teams[0]
+            if not t2 or t2 == "TBD":
+                t2 = "TBD"
+
+        ev_attr = EVENT_ATTR.search(chunk)
+        if ev_attr:
+            event = _clean(ev_attr.group(1))
+        else:
+            ev = EVENT_NAME.search(chunk)
+            if ev:
+                event = _clean(ev.group(1)) or event
+        t1, t2, event = pretty_name(t1), pretty_name(t2), pretty_name(event)
+        logo1, logo2 = _team_logo_urls(chunk)
+        event_id = _event_id_from(chunk)
+        event_logo = _event_logo_url(chunk)
+        stars = _stars_in(chunk)
+        score1, score2 = _team_scores(chunk)
+        unix = None
+        for um in DATA_UNIX.finditer(prefix):
+            unix = um.group(1)
+        if unix is None:
+            um = DATA_UNIX.search(chunk)
+            unix = um.group(1) if um else None
+        if unix is None:
+            # Look backwards up to 3000 chars for the parent date/time container
+            wide_before = html[max(0, m.start() - 3000):m.start()]
+            for um in DATA_UNIX.finditer(wide_before):
+                unix = um.group(1)
+
+        time_s = format_start_time(unix, live=live)
+        if not time_s and not live:
+            tm = MATCH_TIME_TEXT.search(chunk)
+            if tm:
+                time_s = tm.group(1)
+        # If both teams are TBD / placeholder, optionally exclude
+        _u1, _u2 = t1.strip().upper(), t2.strip().upper()
+        if exclude_tbd and (not _u1 or _u1 in ("?", "TBD")) and (not _u2 or _u2 in ("?", "TBD")):
+            continue
+
+        rows.append(
+            {
+                "id": mid,
+                "url": _abs(href),
+                "team1": t1,
+                "team2": t2,
+                "team1_logo": logo1,
+                "team2_logo": logo2,
+                "event": event,
+                "event_id": event_id,
+                "event_logo": event_logo,
+                "title": f"{t1} vs {t2}".strip() or pretty_name(slug.replace("-", " ")),
+                "live": "1" if live else "0",
+                "stars": str(stars),
+                "score1": score1,
+                "score2": score2,
+                "time": time_s,
+                "unix": str(unix or ""),
+            }
+        )
+        if limit and len(rows) >= limit:
+            break
+
+    rows.sort(key=_match_sort_key)
+    return rows
+
+
+_HISTORY_TAG = re.compile(r"<img\b[^>]*>|<div\b[^>]*round-history-bar[^>]*>", re.I)
+_TEAM_NAME = re.compile(r'class="[^"]*results-teamname[^"]*"[^>]*>\s*([^<]+)', re.I)
+_MAP_NAME = re.compile(r'class="[^"]*mapname[^"]*"[^>]*>\s*([^<]+)', re.I)
+_MAP_SCORE = re.compile(r'class="[^"]*results-team-score[^"]*"[^>]*>\s*(\d+)\s*<', re.I)
+
+
+def _map_blocks(html: str) -> list[str]:
+    starts = [m.start() for m in re.finditer(r'class="[^"]*\bmapholder\b', html, re.I)]
+    blocks: list[str] = []
+    for i, start in enumerate(starts):
+        end = starts[i + 1] if i + 1 < len(starts) else len(html)
+        blocks.append(html[start:end])
+    return blocks
+
+
+def _history_sides(block: str) -> list[list[bool]]:
+    marks = [m.start() for m in re.finditer(r'class="[^"]*round-history-team\b', block, re.I)]
+    sides: list[list[bool]] = []
+    for i, start in enumerate(marks[:2]):
+        end = marks[i + 1] if i + 1 < len(marks) else len(block)
+        wins: list[bool] = []
+        for tok in _HISTORY_TAG.finditer(block[start:end]):
+            tag = tok.group(0).lower()
+            if tag.startswith("<img") and "round-history-outcome" in tag:
+                wins.append(True)
+            elif "round-history-bar" in tag and "empty" in tag:
+                wins.append(False)
+        sides.append(wins)
+    return sides
+
+
+def _streak(winners: list[str]) -> tuple[str, int]:
+    if not winners:
+        return "", 0
+    last = winners[-1]
+    n = 0
+    for name in reversed(winners):
+        if name != last:
+            break
+        n += 1
+    return last, n
+
+
+_LOG_START = re.compile(r">\s*((?:round\s+)?start)\s*<", re.I)
+_LOG_START_JSON = re.compile(r'"(?:text|type)"\s*:\s*"start"', re.I)
+
+
+def live_log_started(html: str) -> bool:
+    """True when the match page live log has a start line.
+
+    The matches list marks a row LIVE as soon as the broadcast slot opens.
+    The match itself starts when that page's log records ``start``.
+    """
+    for m in _LOG_START.finditer(html):
+        word = re.sub(r"\s+", " ", m.group(1).lower())
+        if word not in {"start", "round start"}:
+            continue
+        window = html[max(0, m.start() - 400) : m.end() + 40].lower()
+        if any(k in window for k in ("log", "livescore", "scorebot", "round")):
+            return True
+    return _LOG_START_JSON.search(html) is not None
+
+
+def parse_match_board(html: str) -> dict[str, str | int]:
+    """Current map score and trailing round-win streak from a match page.
+
+    Round cells are paired across the two ``round-history-team`` rows.
+    A streak is only the current map, and only the run at the end.
+    """
+    blocks = _map_blocks(html)
+    block = blocks[-1] if blocks else html
+    names = [_clean(m.group(1)) for m in _TEAM_NAME.finditer(block)]
+    team1 = names[0] if names else ""
+    team2 = names[1] if len(names) > 1 else ""
+    scores = [m.group(1) for m in _MAP_SCORE.finditer(block)]
+    map_name = ""
+    found = _MAP_NAME.search(block)
+    if found:
+        map_name = _clean(found.group(1))
+    map_score = f"{scores[0]}-{scores[1]}" if len(scores) >= 2 else ""
+    sides = _history_sides(block)
+    winners: list[str] = []
+    if len(sides) >= 2 and team1 and team2:
+        for left, right in zip(sides[0], sides[1]):
+            if left and not right:
+                winners.append(team1)
+            elif right and not left:
+                winners.append(team2)
+    who, n = _streak(winners)
+    return {
+        "map": map_name,
+        "map_score": map_score,
+        "streak": n,
+        "streak_team": who if n else "",
+        "started": 1 if live_log_started(html) else 0,
+    }
+
+
+def fetch_match_board(sess: BrowserSession, url: str, timeout: float = 20.0) -> dict[str, str | int]:
+    if url.isdigit():
+        url = f"https://www.hltv.org/matches/{url}/x"
+    _st, body, _ = request(
+        sess,
+        "GET",
+        url,
+        timeout=timeout,
+        headers={
+            "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "sec-fetch-dest": "document",
+            "sec-fetch-mode": "navigate",
+            "sec-fetch-site": "same-origin",
+        },
+    )
+    board = parse_match_board(body.decode("utf-8", "replace"))
+    log.info(
+        "match board url=%s map=%s score=%s streak=%s team=%s",
+        url,
+        board.get("map"),
+        board.get("map_score"),
+        board.get("streak"),
+        board.get("streak_team"),
+    )
+    return board
+
+
+def parse_match_meta(html: str, url: str = "") -> dict[str, str | None]:
+    def g(rx: re.Pattern[str]) -> str | None:
+        m = rx.search(html)
+        return unescape(m.group(1)) if m else None
+
+    countdown = g(re.compile(r'<div class="countdown"[^>]*>([\s\S]*?)</div>', re.I))
+    status = _clean(countdown) if countdown else ""
+    return {
+        "url": url or None,
+        "scorebotId": g(re.compile(r'data-scorebot-id="(\d+)"')),
+        "scorebotUrl": g(re.compile(r'data-scorebot-url="([^"]+)"')),
+        "team1": g(re.compile(r'data-team1-name="([^"]*)"')),
+        "team2": g(re.compile(r'data-team2-name="([^"]*)"')),
+        "status": status,
+        "live": "1" if status.upper() == "LIVE" else ("0" if status else None),
+    }
+
+
+def fetch_matches(sess: BrowserSession, timeout: float = 20.0, *, fresh: bool = False) -> list[dict[str, str]]:
+    import time as _time
+
+    now = _time.monotonic()
+    if not fresh and _MATCH_CACHE["rows"] and now - _MATCH_CACHE["at"] < _MATCH_CACHE_TTL:
+        log.debug("matches cache hit n=%s age=%.1fs", len(_MATCH_CACHE["rows"]), now - _MATCH_CACHE["at"])
+        return list(_MATCH_CACHE["rows"])
+    _st, body, _ = request(
+        sess,
+        "GET",
+        MATCHES_URL,
+        timeout=timeout,
+        headers={
+            "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "sec-fetch-dest": "document",
+            "sec-fetch-mode": "navigate",
+            "sec-fetch-site": "none",
+        },
+    )
+    rows = parse_match_list(body.decode("utf-8", "replace"), limit=0)
+    live_n = sum(1 for r in rows if r.get("live") == "1")
+    log.info("matches fetched n=%s live=%s bytes=%s", len(rows), live_n, len(body))
+    _MATCH_CACHE["at"] = now
+    _MATCH_CACHE["rows"] = rows
+    return list(rows)
+
+
+def fetch_match_meta(sess: BrowserSession, url: str, timeout: float = 20.0) -> dict[str, str | None]:
+    if url.isdigit():
+        url = f"https://www.hltv.org/matches/{url}/x"
+    _st, body, _ = request(
+        sess,
+        "GET",
+        url,
+        timeout=timeout,
+        headers={
+            "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "sec-fetch-dest": "document",
+            "sec-fetch-mode": "navigate",
+            "sec-fetch-site": "same-origin",
+        },
+    )
+    meta = parse_match_meta(body.decode("utf-8", "replace"), url=url)
+    log.info(
+        "match meta url=%s scorebotId=%s scorebotUrl=%s team1=%s team2=%s bytes=%s",
+        meta.get("url"),
+        meta.get("scorebotId"),
+        meta.get("scorebotUrl"),
+        meta.get("team1"),
+        meta.get("team2"),
+        len(body),
+    )
+    return meta

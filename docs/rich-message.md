@@ -1,0 +1,38 @@
+# Telegram Rich Message
+
+官方：<https://core.telegram.org/bots/api#rich-message-formatting-options>（Bot API 10.1，2026-06-11）
+
+## 解决什么问题
+
+普通 `sendMessage` 是**一条字符串 + 有限 entity**（粗体、链接、`pre`）。做不了表、标题层级、折叠块、公式、文内插图，也不能边生成边推草稿。
+
+Rich Message 把一条消息当成**小文档**：标题、表格、列表、引用、脚注、数学、媒体块、地图、collage / slideshow。另有 `sendRichMessageDraft` + thinking 块，给 AI 流式打字。
+
+本项目只用它做 **`/watch` 记分板**（要表、要原地 `edit`）。命令、状态、错误要能划选复制，走普通消息。`/matches` 和 `/events` 默认是图片。
+
+## 本仓库分流
+
+| 场景 | 通道 | 原因 |
+|---|---|---|
+| `/watch` 记分板、`/bump` 新卡片 | Rich：`sendRichMessage` / `editMessageText` + `rich_message` | 原生表，一条消息反复改 |
+| `/matches`、`/events` | 默认 `sendPhoto`；参数带 `text`/`txt`，或渲染失败，才 `sendMessage` + HTML | 图片好扫；文本回退好复制 `/watch id`。都 30s 后删 |
+| 帮助、状态、错误、授权、其它短通知 | 普通：`sendMessage` + `parse_mode=HTML` | 好划选；30s 后自动删 |
+
+**不要检查普通消息是不是 Rich。** 提交前测试只约束 watch 路径：编辑失败不得改成连发新卡片。
+
+Watch 规则不变：默认只 edit 同一条；`not modified` 当成功；新卡片只有 `/bump`。卡片只发给发过 `/watch` 的群，不广播全部授权群。普通消息和 rich **不能互相 edit 变形**。
+
+## Watch 记分板怎么排
+
+Rich **没有 CSS**。单元格只能行内标签。不要用 h3/ul/footer 文章壳。
+
+每群 **单条** Rich（`/watch` / `/bump` 发送单条，`/stop` 删除）：
+
+- **整合卡片**：比分条 `table bordered compact` → 回合历史 → 名单表 CT / T → Log 表（两列：选手 / 事件；无 Who 表头；文案英语）→ 最下一行链接状态（手机约 68 字）：`connected · freeze · bomb · 3v5 · R19 · Inferno · 18:32:05`；异常时带 notice / next。
+- **频控与防抖**：最小 edit 间隔 3s，滑动窗口每分钟最多 19 次（群配额约 20，留 1）。超出则 coalesce。429 按 `retry_after` 冻结 edit（封顶 60s），scorebot 继续收包。`/bump` 走 `sendRichMessage`，不占这条的 edit 窗口。alive `NvN` 画在状态行，但不单独触发 edit。
+
+未出分用 `–`，不要 0-0。
+
+拿不到可用记分板时（从未出分、或 60s 无 scorebot）改成 DEBUG：`pre` 里最近运输层痕迹。瞬时 5xx 时有新数据就留记分板，只在底栏带 notice / next。有过比分后断开则 LIVE 改 SCORE 结算，不另发新消息。
+
+限制（官方）：正文 ≤ 32768；块 ≤ 500；表 ≤ 20 列；嵌套 ≤ 16。

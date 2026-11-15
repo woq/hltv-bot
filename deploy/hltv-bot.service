@@ -1,0 +1,23 @@
+[Unit]
+Description=HLTV Telegram bot
+After=network-online.target hltv-chrome.service
+Wants=network-online.target
+# After= chrome only: wait if Chrome is already starting. Do NOT Wants=/Requires=
+# chrome — restart hltv-bot (deploy) must not start Chrome.
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/hltv-bot
+EnvironmentFile=/opt/hltv-bot/.env
+Environment=PYTHONUNBUFFERED=1
+# which uv  → 改成实际路径（root 常见 /root/.local/bin/uv）
+ExecStart=/root/.local/bin/uv run python -m hltv_bot bot
+Restart=always
+RestartSec=5
+SuccessExitStatus=143
+StandardOutput=journal
+StandardError=journal
+MemoryMax=400M
+
+[Install]
+WantedBy=multi-user.target

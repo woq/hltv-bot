@@ -1,0 +1,449 @@
+from datetime import datetime, timedelta
+
+from hltv_bot.matches import CST, format_start_time, parse_match_list, parse_match_meta, pretty_name, show_on_list
+
+
+def test_wrapper_list_reads_bo_and_current_map_score():
+    html = """
+    <div class="match-wrapper live-match-container" data-match-id="2398241" data-stars="1" live="true">
+      <a href="/matches/2398241/k27-vs-sinners-1win-private-club-season-1">
+        <div data-event-headline="1win Private Club Season 1"></div>
+        <div class="match-meta match-meta-live">Live</div>
+        <div class="match-meta">bo3</div>
+        <div class="match-teamname">K27</div>
+        <div class="match-teamname">SINNERS</div>
+        <span data-livescore-current-map-score="3"></span>
+        <span data-livescore-current-map-score="5"></span>
+        <div data-maps="Nuke,Ancient,Mirage"></div>
+      </a>
+    </div>
+    <div class="match-wrapper" data-match-id="2398758" data-stars="0" live="false">
+      <a href="/matches/2398758/depo-vs-paqt-1xbet-frag-season-18">
+        <div data-event-headline="1xBet FRAG Season 18"></div>
+        <div class="match-time" data-unix="1790665200000">09:00</div>
+        <div class="match-meta">bo1</div>
+        <div class="match-teamname">DEPO</div>
+        <div class="match-teamname">PAQT</div>
+      </a>
+    </div>
+    """
+    rows = parse_match_list(html, limit=0)
+    live = rows[0]
+    assert live["id"] == "2398241"
+    assert live["team1"] == "K27"
+    assert live["team2"] == "SINNERS"
+    assert live["format"] == "bo3"
+    assert live["score1"] == "3"
+    assert live["score2"] == "5"
+    assert live["maps"] == "Nuke · Ancient · Mirage"
+    assert live["map_index"] == "0"
+    assert live["live"] == "1"
+    assert live["event"] == "1win Private Club Season 1"
+    bo1 = next(r for r in rows if r["id"] == "2398758")
+    assert bo1["format"] == "bo1"
+    assert bo1["team1"] == "DEPO"
+    assert bo1["team2"] == "PAQT"
+    assert bo1["score1"] == ""
+    assert bo1["live"] == "0"
+
+
+def test_list_row_names_the_map_from_series_wins():
+    html = """
+    <div class="match-wrapper live-match-container" data-match-id="9" live="true" team1="1" team2="2">
+      <a href="/matches/9/a-vs-b-cup">
+        <div class="match-meta">bo3</div>
+        <div class="match-teamname">A</div>
+        <div class="match-teamname">B</div>
+        <span class="current-map-score" data-livescore-current-map-score="13" data-livescore-team="1">13</span>
+        <span class="map-score">(<span data-livescore-maps-won-for="" data-livescore-team="1">1</span>)</span>
+        <span class="current-map-score" data-livescore-current-map-score="11" data-livescore-team="2">11</span>
+        <span class="map-score">(<span data-livescore-maps-won-for="" data-livescore-team="2">0</span>)</span>
+        <div data-maps="Ancient,Nuke,Inferno"></div>
+      </a>
+    </div>
+    """
+    row = parse_match_list(html, limit=0)[0]
+    assert row["score1"] == "13"
+    assert row["won1"] == "1"
+    assert row["won2"] == "0"
+    assert row["map_index"] == "0"
+    assert row["maps"] == "Ancient · Nuke · Inferno"
+
+    html = html.replace('data-livescore-current-map-score="13"', 'data-livescore-current-map-score="2"', 1)
+    html = html.replace(">13<", ">2<")
+    html = html.replace('data-livescore-current-map-score="11"', 'data-livescore-current-map-score="1"')
+    live = parse_match_list(html, limit=0)[0]
+    assert live["map_index"] == "1"
+    assert live["score1"] == "2"
+
+
+def test_livescore_follows_team_slot_not_document_order():
+    html = """
+    <div class="match-wrapper live-match-container" data-match-id="9" live="true">
+      <a href="/matches/9/a-vs-b-cup">
+        <div class="match-meta">bo3</div>
+        <div class="match-teamname">A</div>
+        <div class="match-teamname">B</div>
+        <span data-livescore-current-map-score="4" data-livescore-team="2"></span>
+        <span data-livescore-maps-won-for="" data-livescore-team="2">0</span>
+        <span data-livescore-current-map-score="11" data-livescore-team="1"></span>
+        <span data-livescore-maps-won-for="" data-livescore-team="1">1</span>
+      </a>
+    </div>
+    """
+    row = parse_match_list(html, limit=0)[0]
+    assert row["score1"] == "11"
+    assert row["score2"] == "4"
+    assert row["won1"] == "1"
+    assert row["won2"] == "0"
+
+
+def test_series_maps_lead_with_the_current_one():
+    from hltv_bot.matches import map_order
+
+    assert map_order({"maps": "Nuke · Ancient · Mirage", "map_index": "1"}) == (
+        "Ancient",
+        ["Nuke", "Mirage"],
+    )
+
+
+def test_letter_placeholder_is_a_team_logo():
+    html = """
+    <div class="match-wrapper" data-match-id="1" team1="9" team2="8" live="false">
+      <a href="/matches/1/alpha-vs-beta-cup">
+        <div class="match-teamname">Alpha</div>
+        <div class="match-teamname">Beta</div>
+        <img class="match-team-logo" alt="Alpha" src="/dynamic-svg/teamplaceholder?letter=A">
+        <img class="match-team-logo" alt="Beta" src="/dynamic-svg/teamplaceholder?letter=B">
+      </a>
+    </div>
+    """
+    rows = parse_match_list(html, limit=0)
+    assert "teamplaceholder?letter=A" in rows[0]["team1_logo"]
+    assert rows[0]["team1_id"] == "9"
+
+
+def test_long_team_names_shorten_to_the_card_gap():
+    from hltv_bot.matches import short_team
+
+    assert short_team("Natus Vincere", 22) == "Natus Vincere"
+    assert short_team("Ninjas in Pyjamas", 16) == "NiP"
+    assert short_team("THUNDER dOWNUNDER", 16) == "THUNDER"
+    assert short_team("GamerLegionAcademyExtra", 16).endswith("…")
+    assert short_team("电子竞技俱乐部战队名称", 16).endswith("…")
+    assert len(short_team("电子竞技俱乐部战队名称", 16)) <= 9
+
+
+def test_list_hides_open_sides_and_matches_beyond_three_days():
+    now = datetime(2026, 9, 27, 15, 0, tzinfo=CST)
+    today = str(int(now.timestamp() * 1000))
+    later = str(int((now + timedelta(days=2)).timestamp() * 1000))
+    far = str(int((now + timedelta(days=12)).timestamp() * 1000))
+    live = {"team1": "G2", "team2": "Spirit", "live": "1", "unix": far}
+    near = {"team1": "MOUZ", "team2": "NaVi", "live": "0", "unix": later}
+    distant = {"team1": "FaZe", "team2": "Vitality", "live": "0", "unix": far}
+    blank = {"team1": "TBD", "team2": "TBA", "live": "0", "unix": today}
+    one_open = {"team1": "G2", "team2": "TBD", "live": "0", "unix": today}
+    assert show_on_list(live, now) is True
+    assert show_on_list(near, now) is True
+    assert show_on_list(distant, now) is False
+    assert show_on_list(blank, now) is False
+    assert show_on_list(one_open, now) is True
+
+
+def test_live_log_start_is_not_the_list_live_flag():
+    from hltv_bot.matches import live_log_started
+
+    assert live_log_started('<div class="countdown">Starting soon</div>') is False
+    assert live_log_started('<div class="live-log"><div class="log-row">start</div></div>') is True
+    assert live_log_started('<div class="scorebot">Round start</div>') is True
+    assert live_log_started('{"text":"start"}') is True
+
+
+def test_parse_match_board_streak_is_the_trailing_run():
+    from hltv_bot.matches import parse_match_board
+
+    def cells(wins: list[bool]) -> str:
+        bits = []
+        for won in wins:
+            if won:
+                bits.append('<img class="round-history-outcome" title="won">')
+            else:
+                bits.append('<div class="round-history-bar t empty"></div>')
+        return "".join(bits)
+
+    # G2 drops one, then takes five straight. Spirit is the other row.
+    g2 = [False, True, True, True, True, True]
+    spirit = [not x for x in g2]
+    html = f"""
+    <div class="mapholder">
+      <div class="results-teamname">G2</div>
+      <div class="results-team-score">6</div>
+      <div class="mapname">Dust2</div>
+      <div class="results-team-score">1</div>
+      <div class="results-teamname">Spirit</div>
+      <div class="round-history-team">{cells(g2)}</div>
+      <div class="round-history-team">{cells(spirit)}</div>
+    </div>
+    """
+    board = parse_match_board(html)
+    assert board["map"] == "Dust2"
+    assert board["map_score"] == "6-1"
+    assert board["streak"] == 5
+    assert board["streak_team"] == "G2"
+
+
+def test_parse_match_list_reads_series_score():
+    html = """
+    <div class="liveMatch">
+      <div class="matchTeam"><div class="matchTeamName">G2</div><div class="matchTeamScore">1</div></div>
+      <div class="matchTeam"><div class="matchTeamName">Spirit</div><div class="matchTeamScore">0</div></div>
+      <a href="/matches/2396932/g2-vs-spirit-blast">x</a>
+    </div>
+    """
+    rows = parse_match_list(html)
+    assert rows[0]["score1"] == "1"
+    assert rows[0]["score2"] == "0"
+
+
+def test_parse_match_list_dedupes():
+    html = """
+    <div class="liveMatch-container">
+      <div class="matchRating">
+        <i class="fa fa-star"></i><i class="fa fa-star"></i><i class="fa fa-star"></i>
+      </div>
+      <div class="matchTeamName">G2</div>
+      <div class="matchTeamName">Spirit</div>
+      <div class="matchEventName">BLAST Open Porto 2026</div>
+      <div data-unix="1787923200000"></div>
+      <a href="/matches/2396932/g2-vs-spirit-blast-open-porto-2026">x</a>
+    </div>
+    <a href="/matches/2396932/g2-vs-spirit-blast-open-porto-2026">again</a>
+    <div class="upcomingMatch"><a href="/matches/111/foo-vs-bar-cct-2026">y</a></div>
+    """
+    rows = parse_match_list(html)
+    assert rows[0]["id"] == "2396932"
+    assert rows[0]["live"] == "1"
+    assert rows[0]["stars"] == "3"
+    assert rows[0]["team1"] == "G2"
+    assert rows[0]["event"] == "BLAST Open Porto 2026"
+    assert rows[0]["time"]
+    assert rows[1]["id"] == "111"
+    assert rows[1]["live"] == "0"
+
+
+def test_parse_match_list_placeholder_tbd():
+    html = """
+    <div class="upcomingMatch" data-stars="3">
+      <div class="matchRating" data-stars="3"><i class="fa fa-star"></i><i class="fa fa-star"></i><i class="fa fa-star"></i></div>
+      <a href="/matches/2398106/starladder-starseries-fall-2026-lower-bracket-final-starladder-starseries-fall-2026" class="match">
+        <div class="matchEventName">StarLadder StarSeries Fall 2026</div>
+      </a>
+    </div>
+    """
+    rows = parse_match_list(html)
+    assert len(rows) == 1
+    assert rows[0]["team1"] == "TBD"
+    assert rows[0]["team2"] == "TBD"
+    assert rows[0]["title"] == "TBD vs TBD"
+    assert "StarLadder" in rows[0]["event"]
+
+    # When exclude_tbd is True
+    rows_filtered = parse_match_list(html, exclude_tbd=True)
+    assert len(rows_filtered) == 0
+
+
+def test_parse_match_list_container_isolation():
+    html = """
+    <div class="upcomingMatch" data-stars="3">
+      <div class="matchRating" data-stars="3"><i class="fa fa-star"></i><i class="fa fa-star"></i><i class="fa fa-star"></i></div>
+      <div class="matchTime" data-unix="1787923200000">18:00</div>
+      <a href="/matches/2398099/mouz-vs-natus-vincere-starladder-starseries-fall-2026" class="match">
+        <div class="matchTeams">
+          <div class="matchTeam"><div class="matchTeamName">MOUZ</div></div>
+          <div class="matchTeam"><div class="matchTeamName">Natus Vincere</div></div>
+        </div>
+        <div class="matchEventName">StarLadder StarSeries Fall 2026</div>
+      </a>
+    </div>
+
+    <div class="upcomingMatch" data-stars="0">
+      <div class="matchTime" data-unix="1788009600000">01:00</div>
+      <a href="/matches/2398106/starladder-starseries-fall-2026-lower-bracket-final-starladder-starseries-fall-2026" class="match">
+        <div class="matchEventName">StarLadder StarSeries Fall 2026 Lower Bracket Final</div>
+      </a>
+    </div>
+
+    <div class="upcomingMatch" data-stars="1">
+      <div class="matchRating" data-stars="1"><i class="fa fa-star"></i></div>
+      <div class="matchTime" data-unix="1788019600000">03:00</div>
+      <a href="/matches/2398105/ryvex-vs-tbd-cct-season-3" class="match">
+        <div class="matchTeams">
+          <div class="matchTeam"><div class="matchTeamName">Ryvex</div></div>
+        </div>
+        <div class="matchEventName">CCT Season 3</div>
+      </a>
+    </div>
+    """
+    rows = parse_match_list(html)
+    by_id = {r["id"]: r for r in rows}
+    assert by_id["2398099"]["team1"] == "MOUZ"
+    assert by_id["2398099"]["team2"] == "Natus Vincere"
+    assert by_id["2398099"]["stars"] == "3"
+
+    assert by_id["2398106"]["team1"] == "TBD"
+    assert by_id["2398106"]["team2"] == "TBD"
+    assert by_id["2398106"]["stars"] == "0"
+    assert "Lower Bracket Final" in by_id["2398106"]["event"]
+
+    assert by_id["2398105"]["team1"] == "Ryvex"
+    assert by_id["2398105"]["team2"] == "Tbd"
+    assert by_id["2398105"]["stars"] == "1"
+    assert by_id["2398105"]["event"] == "CCT Season 3"
+
+
+def test_parse_match_list_team_logos_prefer_night():
+    html = """
+    <div class="upcomingMatch" data-stars="2">
+      <div class="matchTime" data-unix="1787923200000">18:00</div>
+      <a href="/matches/2398200/mouz-vs-natus-vincere-starladder" class="match">
+        <div class="matchTeams">
+          <div class="matchTeam">
+            <img alt="MOUZ" src="https://img-cdn.hltv.org/teamlogo/mouz-night.svg" class="matchTeamLogo night-only">
+            <img alt="MOUZ" src="https://img-cdn.hltv.org/teamlogo/mouz-day.svg" class="matchTeamLogo day-only">
+            <div class="matchTeamName">MOUZ</div>
+          </div>
+          <div class="matchTeam">
+            <img alt="Natus Vincere" src="/img/static/team/placeholder.svg" class="matchTeamLogo night-only">
+            <img alt="Natus Vincere" src="https://img-cdn.hltv.org/teamlogo/navi.svg?w=50" class="matchTeamLogo">
+            <div class="matchTeamName">Natus Vincere</div>
+          </div>
+        </div>
+      </a>
+    </div>
+    """
+    rows = parse_match_list(html)
+    assert rows[0]["team1_logo"] == "https://img-cdn.hltv.org/teamlogo/mouz-night.svg"
+    assert rows[0]["team2_logo"] == "https://img-cdn.hltv.org/teamlogo/navi.svg?w=50"
+
+
+def test_parse_match_list_event_logo():
+    html = """
+    <div class="upcomingMatch" data-stars="2">
+      <a href="/matches/2398300/mouz-vs-spirit-starladder" class="match">
+        <div class="matchTeams">
+          <div class="matchTeamName">MOUZ</div>
+          <div class="matchTeamName">Spirit</div>
+        </div>
+        <a href="/events/8057/starladder-fall" class="matchEvent">
+          <img class="matchEventLogo night-only" src="https://img-cdn.hltv.org/eventlogo/sl-night.png" alt="">
+          <img class="matchEventLogo day-only" src="https://img-cdn.hltv.org/eventlogo/sl-day.png" alt="">
+          StarLadder StarSeries Fall 2026
+        </a>
+      </a>
+    </div>
+    """
+    rows = parse_match_list(html)
+    assert rows[0]["event_id"] == "8057"
+    assert rows[0]["event_logo"] == "https://img-cdn.hltv.org/eventlogo/sl-night.png"
+
+
+def test_parse_match_list_fallback_time_text():
+    html = """
+    <div class="upcomingMatch" data-stars="3">
+      <div class="matchTime">19:30</div>
+      <a href="/matches/2398102/vitality-vs-furia-blast-bounty" class="match">
+        <div class="matchTeams">
+          <div class="matchTeam"><div class="matchTeamName">Vitality</div></div>
+          <div class="matchTeam"><div class="matchTeamName">FURIA</div></div>
+        </div>
+        <div class="matchEventName">BLAST Bounty</div>
+      </a>
+    </div>
+    """
+    rows = parse_match_list(html)
+    assert len(rows) == 1
+    assert rows[0]["id"] == "2398102"
+    assert rows[0]["time"] == "19:30"
+    assert rows[0]["team1"] == "Vitality"
+    assert rows[0]["team2"] == "FURIA"
+
+
+def test_format_start_time_clock():
+    import re
+    from datetime import datetime
+
+    assert re.search(r"\d{2}:\d{2}", format_start_time(1787923200))
+    assert re.search(r"\d{2}:\d{2}", format_start_time(1787923200000))
+
+    # 自然比赛日（10-15 10:00 至 10-16 10:00）：跨午夜比赛 00:00 与 21:30 保持相同 5 字符格式
+    sim_now = datetime(2026, 10, 15, 20, 0, tzinfo=CST)
+    t_2130 = int(datetime(2026, 10, 15, 21, 30, tzinfo=CST).timestamp())
+    t_midnight = int(datetime(2026, 10, 16, 0, 0, tzinfo=CST).timestamp())
+    t_next_day = int(datetime(2026, 10, 16, 18, 0, tzinfo=CST).timestamp())
+
+    assert format_start_time(t_2130, now=sim_now) == "21:30"
+    assert format_start_time(t_midnight, now=sim_now) == "00:00"
+    assert format_start_time(t_next_day, now=sim_now) == "10/16 18:00"
+
+
+def test_pretty_name_acronyms():
+    assert pretty_name("natus vincere") == "Natus Vincere"
+    assert pretty_name("g2") == "G2"
+    assert pretty_name("cct 2026 europe series 8") == "CCT 2026 Europe Series 8"
+    assert pretty_name("G2") == "G2"
+
+
+def test_parse_match_meta():
+    html = """
+    <div id="scoreboardElement" data-scorebot-url="https://scorebot-lb.hltv.org"
+      data-scorebot-id="2396932" data-team1-name="G2" data-team2-name="Spirit"></div>
+    """
+    meta = parse_match_meta(html, url="https://www.hltv.org/matches/2396932/x")
+    assert meta["scorebotId"] == "2396932"
+    assert meta["team1"] == "G2"
+
+
+def test_cmd_matches_text_mode(monkeypatch):
+    from hltv_bot.bot import HltvTelegramBot
+    from hltv_bot.session import BrowserSession
+
+    class FakeTg:
+        def __init__(self):
+            self.messages = []
+            self.photos = []
+
+        def send_message(self, chat_id, text):
+            self.messages.append(text)
+            return {"message_id": 1}
+
+        def send_photo(self, chat_id, photo_bytes, caption="", filename=""):
+            self.photos.append(caption)
+            return {"message_id": 2}
+
+    fake_tg = FakeTg()
+    sess = BrowserSession(impersonate="chrome131", headers={}, cookie="")
+    bot = HltvTelegramBot(fake_tg, sess)
+
+    soon = str(int(datetime.now(CST).timestamp() * 1000))
+    mock_rows = [
+        {"id": "2396932", "team1": "Spirit", "team2": "G2", "event": "IEM", "stars": "3", "url": "https://hltv.org/1", "unix": soon},
+    ]
+    monkeypatch.setattr("hltv_bot.bot.fetch_matches", lambda s: mock_rows)
+    monkeypatch.setattr("hltv_bot.cards.render_card", lambda card: b"png")
+
+    # 1. Text mode
+    bot._cmd_matches(123, "text")
+    assert len(fake_tg.messages) == 1
+    assert "2396932" in fake_tg.messages[0]
+    assert len(fake_tg.photos) == 0
+
+    # 2. Photo mode
+    bot._cmd_matches(123, "")
+    assert len(fake_tg.photos) == 1
+    assert "比赛" in fake_tg.photos[0]
+    assert "/matches all" in fake_tg.photos[0]
+    assert "实时盯盘" not in fake_tg.photos[0]
+
+
+

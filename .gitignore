@@ -1,0 +1,17 @@
+.env
+data/session.json
+data/chats.json
+data/settings.json
+data/reminders.json
+data/wpe-profile/
+data/event_logos/
+data/team_logos/
+data/flags/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+.venv/
+venv/
+hltv-bot-deploy*
+*.zip

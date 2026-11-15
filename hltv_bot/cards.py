@@ -1,0 +1,1154 @@
+"""HTML cards rendered to PNG. Telegram gets the picture plus a short caption."""
+
+from __future__ import annotations
+
+import io
+from html import escape
+from pathlib import Path
+
+_BG = (10, 13, 20)
+
+_CSS = """
+@page { size: PAGEWpx PAGEHpx; margin: 0; }
+* { box-sizing: border-box; }
+html, body {
+  margin: 0; padding: 0;
+  background: #0a0d14;
+  color: #f5f8fc;
+  font-family: "Rajdhani", "WenQuanYi Zen Hei", "Noto Sans CJK SC", "DejaVu Sans", sans-serif;
+  text-rendering: geometricPrecision;
+}
+.card {
+  position: relative;
+  width: PAGEWpx;
+  padding: 22px 20px 32px;
+  background: #0a0d14;
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+.stamp {
+  position: absolute;
+  right: 18px;
+  bottom: 12px;
+  font-family: "Rajdhani", "Liberation Sans", "DejaVu Sans", sans-serif;
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  color: #d2ccc2;
+  font-weight: 600;
+}
+.kicker {
+  font-size: 12px;
+  letter-spacing: 0.3em;
+  color: #e4ddd2;
+  font-weight: 600;
+}
+.kicker em { font-style: normal; color: #e8ff5a; letter-spacing: 0.18em; }
+.kicker-ht {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  letter-spacing: normal;
+}
+.badge-ht {
+  font-family: "Rajdhani", "Liberation Sans", "DejaVu Sans", sans-serif;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  color: #121210;
+  background: #ffaa00;
+  padding: 2px 7px;
+  border-radius: 4px;
+  text-transform: uppercase;
+}
+.ht-desc {
+  font-size: 13px;
+  font-weight: 700;
+  color: #ffaa00;
+  letter-spacing: 0.08em;
+}
+.trow { display: flex; align-items: center; margin-top: 10px; }
+.tlogo, .tlogo-ph { width: 24px; height: 24px; margin-right: 10px; object-fit: contain; flex: 0 0 24px; }
+.tlogo-ph, .elogo-ph { display: inline-block; background: #3a3833; }
+.name {
+  flex: 1;
+  min-width: 0;
+  font-size: 24px;
+  line-height: 1;
+  font-weight: 700;
+  color: #f6f3ee;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.hero { margin-top: 14px; display: flex; align-items: center; }
+.hero .name { font-size: 28px; }
+.match-island {
+  padding: 14px 16px;
+  background: radial-gradient(120% 100% at 50% 0%, #1a2436 0%, #101520 100%);
+  border: 1.5px solid #28374d;
+  border-top: 1.5px solid #3d4f6b;
+  border-radius: 12px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+}
+.match-island.is-live {
+  background: radial-gradient(120% 100% at 50% 0%, #361f28 0%, #161a26 100%);
+  border: 1.5px solid #ff4655;
+  box-shadow: 0 0 16px rgba(255, 70, 85, 0.25);
+}
+.winner-hero {
+  margin-top: 10px;
+  display: flex;
+  align-items: center;
+  background: radial-gradient(120% 100% at 50% 0%, #2a2015 0%, #17151f 100%);
+  border: 1.5px solid #d4952c;
+  border-top: 1.5px solid #ffbe4d;
+  border-radius: 12px;
+  padding: 10px 14px;
+  box-shadow: 0 6px 20px rgba(212, 149, 44, 0.2);
+}
+.winner-hero .tlogo {
+  width: 30px;
+  height: 30px;
+  margin-right: 10px;
+  object-fit: contain;
+}
+.winner-hero .name {
+  font-size: 22px;
+  font-weight: 700;
+  color: #f6f3ee;
+  letter-spacing: 0.02em;
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.winner-badge {
+  font-family: "Rajdhani", "Liberation Sans", "DejaVu Sans", sans-serif;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: #121210;
+  background: #f5a623;
+  padding: 2px 7px;
+  border-radius: 4px;
+  text-transform: uppercase;
+}
+.winner-matchup {
+  margin-top: 10px;
+  padding: 12px 14px;
+  background: radial-gradient(120% 100% at 50% 0%, #1a2436 0%, #101520 100%);
+  border: 1.5px solid #28374d;
+  border-top: 1.5px solid #3d4f6b;
+  border-radius: 12px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+  text-align: center;
+}
+.matchup-teams {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  font-size: 15px;
+  font-weight: 600;
+}
+.m-side {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.m-side.win { color: #f6f3ee; }
+.m-side.lose { color: #9a948a; }
+.m-logo, .m-logo-ph {
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+  vertical-align: middle;
+}
+.m-logo-ph { display: none; }
+.m-sep {
+  font-size: 12px;
+  font-weight: 700;
+  color: #4a463f;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.hero-score {
+  margin-top: 4px;
+  font-family: "Rajdhani", "Liberation Sans", "DejaVu Sans", sans-serif;
+  font-size: 36px;
+  line-height: 1;
+  letter-spacing: 0.06em;
+  font-weight: 700;
+}
+.hero-score .num { color: #f6f3ee; }
+.hero-score .num.win { color: #e8ff5a; }
+.hero-score .num.lose { color: #9a948a; }
+.hero-score .dash { color: #4a463f; padding: 0 8px; }
+.map-final-score {
+  margin-top: 4px;
+  font-size: 14px;
+  color: #9a948a;
+  font-weight: 600;
+}
+.opp { margin-top: 8px; font-size: 16px; color: #e4ddd2; font-weight: 600; }
+.mapline { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 8px 12px; justify-content: center; }
+.mp {
+  display: inline-flex;
+  align-items: center;
+  font-size: 13px;
+  font-weight: 600;
+  color: #9a948a;
+  background: rgba(255, 255, 255, 0.04);
+  padding: 3px 8px;
+  border-radius: 4px;
+}
+.mp.won { color: #f6f3ee; background: rgba(255, 255, 255, 0.08); }
+.mp.now { color: #e8ff5a; background: rgba(232, 255, 90, 0.08); }
+.mpname { margin-right: 2px; }
+.mplogo, .mplogo-ph { width: 16px; height: 16px; margin: 0 3px; object-fit: contain; vertical-align: middle; }
+.mplogo-ph { display: none; }
+.mpscore {
+  font-family: "Rajdhani", "Liberation Sans", "DejaVu Sans", sans-serif;
+  font-size: 13px;
+  font-weight: 700;
+  color: #f6f3ee;
+  margin: 0 2px;
+  letter-spacing: 0.04em;
+}
+.sc {
+  width: 52px;
+  text-align: right;
+  font-family: "Rajdhani", "Liberation Sans", "DejaVu Sans", sans-serif;
+  font-size: 36px;
+  line-height: 1;
+  color: #e8ff5a;
+}
+.sc.live { color: #ff6a45; }
+.sc.final { color: #f6f3ee; }
+.sc.soon { color: #d2ccc2; }
+.sc.halftime { color: #ffaa00; }
+.elogo { height: 16px; width: auto; max-width: 48px; object-fit: contain; margin-right: 8px; vertical-align: middle; }
+.elogo-ph { display: none; }
+.eventline { display: flex; align-items: center; }
+.rule { height: 1px; background: rgba(255, 255, 255, 0.06); margin: 12px 0 10px; }
+.event { font-size: 16px; color: #e4ddd2; font-weight: 600; }
+.note {
+  margin-top: 10px;
+  font-size: 14px;
+  letter-spacing: 0.06em;
+  color: #e8ff5a;
+  font-weight: 600;
+}
+.g-title { font-size: 22px; font-weight: 700; letter-spacing: 0.04em; color: #f6f3ee; }
+.g-sub { margin-top: 6px; color: #e4ddd2; font-size: 14px; font-weight: 600; }
+.g-block {
+  margin-top: 8px;
+  padding: 10px 12px;
+  background: radial-gradient(120% 100% at 50% 0%, #1a2436 0%, #101520 100%);
+  border: 1.5px solid #28374d;
+  border-top: 1.5px solid #3d4f6b;
+  border-radius: 10px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+}
+.g-k { color: #e8ff5a; font-size: 13px; letter-spacing: 0.16em; font-weight: 700; }
+.g-line { margin-top: 4px; font-size: 15px; line-height: 1.45; color: #f6f3ee; font-weight: 600; }
+.when {
+  margin-top: 8px;
+  font-family: "Rajdhani", "Liberation Sans", "DejaVu Sans", sans-serif;
+  font-size: 16px;
+  letter-spacing: 0.04em;
+  color: #e4ddd2;
+  font-weight: 600;
+}
+.streak { margin-top: 16px; font-size: 18px; color: #e8ff5a; font-weight: 700; }
+.place { margin-top: 10px; font-size: 16px; color: #e4ddd2; font-weight: 600; }
+.flag { font-family: "Noto Color Emoji", "DejaVu Sans", sans-serif; }
+.remain { margin-top: 14px; font-size: 22px; }
+.sheet-title {
+  font-size: 13px;
+  letter-spacing: 0.18em;
+  color: #8da6c4;
+  font-weight: 700;
+  text-transform: uppercase;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  padding-bottom: 8px;
+  margin-bottom: 6px;
+}
+.mcard {
+  margin-top: 10px;
+  padding: 12px 14px;
+  background: radial-gradient(120% 100% at 50% 0%, #1a2436 0%, #101520 100%);
+  border: 1.5px solid #28374d;
+  border-top: 1.5px solid #3d4f6b;
+  border-radius: 12px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+}
+.mcard[data-live="1"] {
+  background: radial-gradient(120% 100% at 50% 0%, #361f28 0%, #161a26 100%);
+  border: 1.5px solid #ff4655;
+  box-shadow: 0 0 16px rgba(255, 70, 85, 0.25);
+}
+.mcard[data-covered="1"] {
+  border: 1.5px solid #e5a020;
+}
+.sheet-sub { margin-top: 4px; font-size: 14px; font-weight: 700; color: #f5a623; letter-spacing: 0.04em; }
+table.mgrid { width: 100%; border-collapse: separate; border-spacing: 8px 8px; margin-top: 6px; }
+table.mgrid td { width: 50%; vertical-align: top; }
+table.mgrid .mcard {
+  margin-top: 0;
+  padding: 10px 10px;
+  border: 1.5px solid #28374d;
+  border-top: 1.5px solid #3d4f6b;
+  border-radius: 10px;
+}
+table.mgrid .mtag { font-size: 8px; padding: 1px 4px; }
+table.mgrid .mtime { font-size: 12px; margin-left: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+table.mgrid .mbody .name { font-size: 13px; }
+table.mgrid .mevent {
+  margin-top: 6px;
+  font-size: 11px;
+  line-height: 1.2;
+  color: #7f91a6;
+  font-weight: 600;
+}
+.mhead { display: flex; align-items: center; }
+.mtag {
+  display: inline-block;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  color: transparent;
+  background: transparent;
+  font-family: "Rajdhani", "Liberation Sans", "DejaVu Sans", sans-serif;
+}
+.mtag.on {
+  color: #ffffff;
+  background: #ff4655;
+  font-weight: 800;
+}
+.mtime {
+  flex: 1;
+  font-size: 13px;
+  letter-spacing: 0.02em;
+  color: #b0c0d4;
+  font-weight: 600;
+  margin-left: 6px;
+  font-family: "Rajdhani", "Liberation Sans", "DejaVu Sans", sans-serif;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mfmt {
+  font-size: 9px;
+  font-weight: 700;
+  color: #7ab2f0;
+  background: rgba(100, 160, 255, 0.12);
+  border: 1px solid rgba(100, 160, 255, 0.25);
+  padding: 0 4px;
+  border-radius: 3px;
+  margin-right: 6px;
+  letter-spacing: 0.05em;
+  font-family: "Rajdhani", sans-serif;
+}
+.mcovered {
+  font-size: 9px;
+  font-weight: 700;
+  color: #12141a;
+  background: #f5a623;
+  padding: 0 4px;
+  border-radius: 3px;
+  margin-right: 6px;
+  letter-spacing: 0.04em;
+}
+.mstars {
+  color: #ffc233;
+  font-size: 13px;
+  letter-spacing: 0.06em;
+}
+.mmap {
+  margin-top: 8px;
+  font-size: 15px;
+  letter-spacing: 0.02em;
+}
+.mmap-now { color: #e8ff5a; font-weight: 700; }
+.mmap-rest { color: #e4ddd2; font-weight: 600; }
+.mmap-fmt { color: #d2ccc2; font-weight: 600; }
+.mmap-sep { color: #9a948a; font-weight: 600; }
+table.sheet { width: 100%; border-collapse: collapse; }
+td.slot {
+  width: 36px;
+  padding: 12px 0 0;
+  vertical-align: top;
+  border-top: 1px solid #4a463f;
+}
+td.slot div {
+  width: 36px;
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  color: #ff6a45;
+  font-family: "Rajdhani", "Liberation Sans", "DejaVu Sans", sans-serif;
+}
+td.slot.off div { color: #141311; }
+td.body { padding: 8px 0 8px; border-top: 1px solid #4a463f; }
+.mbody .trow { margin-top: 4px; }
+.mbody .name { font-size: 15px; }
+.mbody .sc { width: 28px; font-size: 16px; }
+.mbody .tlogo, .mbody .tlogo-ph { width: 22px; height: 22px; flex-basis: 22px; margin-right: 8px; }
+.tlogo svg, .mbody .tlogo svg, .m-logo svg, .mplogo svg, .winner-hero .tlogo svg, svg.logo-svg { width: 100%; height: 100%; display: block; }
+.sub {
+  display: flex;
+  align-items: center;
+  margin-top: 6px;
+  font-size: 14px;
+  color: #e4ddd2;
+  font-weight: 600;
+}
+.event-card { position: relative; overflow: hidden; }
+.event-bg, .event-shade { display: none !important; }
+.event-copy { position: relative; }
+.event-solo {
+  margin-top: 4px;
+  padding: 18px 20px;
+  background: radial-gradient(120% 100% at 50% 0%, #1a2436 0%, #101520 100%);
+  border: 1.5px solid #28374d;
+  border-top: 1.5px solid #3d4f6b;
+  border-radius: 14px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+  min-height: 180px;
+}
+.event-solo .event-copy {
+  display: flex;
+  flex-direction: column;
+  padding-right: 0;
+  min-height: 160px;
+}
+.event-solo .name {
+  margin-top: 0;
+  font-size: 26px;
+  line-height: 1.15;
+  font-weight: 700;
+  color: #f6f3ee;
+  white-space: normal;
+}
+.event-solo .remain {
+  margin-top: 14px;
+  font-size: 26px;
+  line-height: 1.15;
+  font-weight: 700;
+  color: #f5a623;
+}
+.event-solo .remain.final { font-size: 24px; letter-spacing: 0; color: #ff6a45; }
+.event-solo .foot {
+  margin-top: auto;
+  padding-top: 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 13px;
+  line-height: 1.4;
+  font-weight: 600;
+  color: #8da6c4;
+}
+.event-row {
+  margin-top: 10px;
+  padding: 12px 14px;
+  background: radial-gradient(120% 100% at 50% 0%, #1a2436 0%, #101520 100%);
+  border: 1.5px solid #28374d;
+  border-top: 1.5px solid #3d4f6b;
+  border-radius: 12px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+  min-height: 90px;
+}
+.event-row .event-copy { padding-right: 0; }
+.event-row .tier {
+  margin-top: 0;
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  display: inline-block;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+.event-row .name {
+  margin-top: 6px;
+  font-size: 16px;
+  line-height: 1.25;
+  font-weight: 700;
+  color: #f6f3ee;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+}
+.event-row .place,
+.event-row .when,
+.event-row .prize {
+  margin-top: 4px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #8da6c4;
+}
+.event-chip {
+  min-height: auto;
+  margin-top: 10px;
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 8px;
+}
+.event-chip .event-copy {
+  padding-right: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.event-chip .tier {
+  margin-top: 0;
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.06);
+  flex-shrink: 0;
+  letter-spacing: 0.06em;
+}
+.event-chip .name {
+  margin-top: 0;
+  font-size: 12px;
+  color: #8da6c4 !important;
+  font-weight: 600;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  flex: 1;
+  min-width: 0;
+}
+.event-chip .sub {
+  margin-top: 0;
+  font-size: 11px;
+  color: #55667d;
+  flex-shrink: 0;
+}
+.event-copy.tier-major .name,
+.event-copy.tier-major .place,
+.event-copy.tier-major .when,
+.event-copy.tier-major .prize,
+.event-copy.tier-major .sub,
+.event-copy.tier-major .remain { color: #ffc14a; }
+.event-copy.tier-t1 .name,
+.event-copy.tier-t1 .place,
+.event-copy.tier-t1 .when,
+.event-copy.tier-t1 .prize,
+.event-copy.tier-t1 .sub,
+.event-copy.tier-t1 .remain { color: #e8ff5a; }
+.event-copy.tier-t2 .name,
+.event-copy.tier-t2 .place,
+.event-copy.tier-t2 .when,
+.event-copy.tier-t2 .prize,
+.event-copy.tier-t2 .sub,
+.event-copy.tier-t2 .remain { color: #7eb8ff; }
+.event-copy.tier-t3 .name,
+.event-copy.tier-t3 .place,
+.event-copy.tier-t3 .when,
+.event-copy.tier-t3 .prize,
+.event-copy.tier-t3 .sub,
+.event-copy.tier-t3 .remain { color: #e0a36a; }
+.event-copy.tier-other .name,
+.event-copy.tier-other .place,
+.event-copy.tier-other .when,
+.event-copy.tier-other .prize,
+.event-copy.tier-other .sub,
+.event-copy.tier-other .remain { color: #d2ccc2; }
+.tier {
+  display: inline-block;
+  margin-top: 10px;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+}
+.tier.tier-major {
+  color: #ffc14a;
+  letter-spacing: 0.14em;
+  font-size: 15px;
+  border-bottom: 2px solid #ffc14a;
+  padding-bottom: 1px;
+}
+.tier-t1 { color: #e8ff5a; }
+.tier-t2 { color: #7eb8ff; }
+.tier-t3 { color: #e0a36a; }
+.tier-other { color: #9a948a; }
+.remain.final { margin-top: 16px; font-size: 14px; letter-spacing: 0.16em; color: #ff6a45; }
+.prize { margin-top: 4px; font-size: 14px; color: #e4ddd2; font-weight: 600; }
+"""
+
+
+def _e(value: object) -> str:
+    return escape(str(value or ""))
+
+
+_CARD_W = 420
+_LIST_W = 416  # list cards are 20% narrower for a phone
+# List name column is the gap between the 22px logo and the score on a 416px card.
+# At 15px that is 22 Latin letters. The 420px match card uses 24px type, so 14.
+# A CJK character counts as two letters.
+LIST_NAME_UNITS = 22
+GRID_NAME_UNITS = 16
+CARD_NAME_UNITS = 14
+# Five or more matches are two columns. Four still fit as a single stack.
+TWO_COL_AT = 5
+
+
+def _team_logo_uri(team_id: str, url: str) -> str:
+    team_id = str(team_id or "").strip()
+    if team_id.isdigit():
+        try:
+            from hltv_bot.team_logos import team_logo_uri
+
+            found = team_logo_uri(team_id, url)
+            if found:
+                return found
+        except Exception:
+            pass
+    return _logo_uri(url)
+
+
+def _logo_uri(url: str) -> str:
+    url = (url or "").strip()
+    if not url:
+        return ""
+    if url.startswith("data:image"):
+        return url
+    try:
+        from hltv_bot.team_logos import cached_data_uri, ensure_team_logos
+
+        ensure_team_logos([url])
+        return cached_data_uri(url) or ""
+    except Exception:
+        return ""
+
+
+def _event_logo_uri(event_id: str, url: str, size: str = "s") -> str:
+    url = (url or "").strip()
+    event_id = str(event_id or "").strip()
+    if url.startswith("data:image"):
+        return url
+    if event_id:
+        try:
+            from hltv_bot.events import ensure_event_logos, get_cached_logo_data_uri
+
+            ensure_event_logos([(event_id, url)], size=size)
+            found = get_cached_logo_data_uri(event_id, size=size)
+            if found:
+                return found
+            if size == "s":
+                found = get_cached_logo_data_uri(event_id, size="l")
+                if found:
+                    return found
+        except Exception:
+            return ""
+    return ""
+
+
+def render_card(card: dict) -> bytes:
+    view = card.get("view") or "match"
+    if view == "matches":
+        n = max(1, min(len(card.get("rows") or []), 12))
+        if n >= TWO_COL_AT:
+            height = 100 + 175 * ((n + 1) // 2) + 60
+        else:
+            height = 80 + 245 * n + 60
+        html = _matches_html(card, height, _LIST_W)
+    elif view == "events":
+        height = 80 + 160 * max(1, min(len(card.get("rows") or []), 8)) + 60
+        html = _events_html(card, height, _LIST_W)
+    elif view == "event":
+        html = _event_html(card, 480, _CARD_W)
+    elif view == "guide":
+        html = _guide_html(card, 860, _CARD_W)
+    else:
+        height = 560 if card.get("kind") in {"map", "match"} else (480 if card.get("map_rows") else 420)
+        html = _match_html(card, height, _CARD_W)
+    return _png(html)
+
+
+def _png(html: str) -> bytes:
+    import logging
+    import weasyprint
+    import pypdfium2
+    from PIL import Image, ImageChops
+
+    # CSS pixels are 96 per inch; PDF points are 72. scale=3 is 2.25 device
+    # pixels per CSS pixel, providing a crisp, compact retina display on phones.
+    pdf = weasyprint.HTML(string=html).write_pdf()
+    doc = pypdfium2.PdfDocument(pdf)
+    if len(doc) > 1:
+        logging.getLogger(__name__).warning("card rendered with %d pages, only first page captured", len(doc))
+    image = doc[0].render(scale=3).to_pil().convert("RGB")
+    bg = Image.new("RGB", image.size, _BG)
+    diff = ImageChops.difference(image, bg)
+    box = diff.getbbox()
+    if box:
+        image = image.crop((0, 0, image.width, min(image.height, box[3] + 24)))
+    out = io.BytesIO()
+    image.save(out, format="PNG", optimize=True)
+    return out.getvalue()
+
+
+def _font_css() -> str:
+    directory = Path(__file__).resolve().parent / "fonts"
+    faces = []
+    for weight, filename in (
+        (400, "Rajdhani-Regular.ttf"),
+        (500, "Rajdhani-Medium.ttf"),
+        (600, "Rajdhani-SemiBold.ttf"),
+        (700, "Rajdhani-Bold.ttf"),
+    ):
+        uri = (directory / filename).as_uri()
+        faces.append(
+            "@font-face{"
+            "font-family:'Rajdhani';"
+            f"src:url('{uri}');"
+            f"font-weight:{weight};font-style:normal;"
+            "}"
+        )
+    return "".join(faces)
+
+
+def _page(body: str, height: int, width: int) -> str:
+    from datetime import datetime, timedelta, timezone
+
+    css = _font_css() + _CSS.replace("PAGEW", str(width)).replace("PAGEH", str(height))
+    stamp = datetime.now(timezone(timedelta(hours=8))).strftime("%m-%d %H:%M:%S")
+    return (
+        "<!doctype html><html><head><meta charset='utf-8'><style>"
+        + css
+        + "</style></head><body><div class='card'>"
+        + body
+        + f"<div class='stamp'>{_e(stamp)} UTC+8</div>"
+        + "</div></body></html>"
+    )
+
+
+def _img(uri: str, cls: str) -> str:
+    if uri.startswith("data:image"):
+        return f'<img class="{cls}" src="{uri}" />'
+    return f'<span class="{cls}-ph"></span>'
+
+
+def _svg_markup(uri: str) -> str:
+    import base64
+    import re
+
+    raw = uri.split(",", 1)
+    if len(raw) != 2:
+        return ""
+    try:
+        text = base64.b64decode(raw[1]).decode("utf-8", "replace")
+    except Exception:
+        return ""
+    start = text.lower().find("<svg")
+    if start < 0:
+        return ""
+    svg = text[start:]
+    if "class=" in svg[:80].lower():
+        return svg
+    return re.sub(r"<svg\b", "<svg class='logo-svg'", svg, count=1, flags=re.I)
+
+
+def _team_row(
+    name: str,
+    score: str,
+    logo: str,
+    accent: str,
+    *,
+    team_id: str = "",
+    limit: int = CARD_NAME_UNITS,
+) -> str:
+    from hltv_bot.matches import short_team
+
+    mark = _e(score) if score else "–"
+    return (
+        "<div class='trow'>"
+        + _img(_team_logo_uri(team_id, logo), "tlogo")
+        + f"<div class='name'>{_e(short_team(name, limit))}</div>"
+        + f"<div class='sc {accent}'>{mark}</div>"
+        + "</div>"
+    )
+
+
+def _map_strip(rows: list) -> str:
+    if not rows:
+        return ""
+    bits = []
+    for item in rows:
+        name = _e(item.get("name") or "")
+        cls = "mp"
+        if item.get("winner"):
+            cls += " won"
+        if item.get("current"):
+            cls += " now"
+        extra = ""
+        if item.get("winner"):
+            win_logo = _img(_team_logo_uri(str(item.get("team_id") or ""), str(item.get("logo") or "")), "mplogo")
+            score_text = str(item.get("score") or "").strip()
+            lose_logo = ""
+            if item.get("loser_logo") or item.get("loser_team_id"):
+                lose_logo = _img(
+                    _team_logo_uri(str(item.get("loser_team_id") or ""), str(item.get("loser_logo") or "")),
+                    "mplogo",
+                )
+            if score_text and lose_logo:
+                extra = f"{win_logo}<span class='mpscore'>{_e(score_text)}</span>{lose_logo}"
+            elif score_text:
+                extra = f"{win_logo}<span class='mpscore'>{_e(score_text)}</span>"
+            else:
+                extra = win_logo
+        bits.append(f"<span class='{cls}'><span class='mpname'>{name}</span>{extra}</span>")
+    return f"<div class='mapline'>{''.join(bits)}</div>"
+
+
+def _winner_block(card: dict) -> str:
+    pair = card.get("pair") or ("", "")
+    left = str(pair[0] if pair else "")
+    right = str(pair[1] if len(pair) > 1 else "")
+    winner = card.get("winner")
+
+    t1_name = card.get("team1") or "?"
+    t1_logo = card.get("logo1") or ""
+    t1_id = str(card.get("team1_id") or "")
+    t2_name = card.get("team2") or "?"
+    t2_logo = card.get("logo2") or ""
+    t2_id = str(card.get("team2_id") or "")
+
+    bits = [f"<div class='kicker'>{_e(card.get('label'))}</div>"]
+
+    if winner in {1, 2}:
+        win_name = t1_name if winner == 1 else t2_name
+        win_logo = t1_logo if winner == 1 else t2_logo
+        win_id = t1_id if winner == 1 else t2_id
+        win_img = _img(_team_logo_uri(win_id, win_logo), "tlogo")
+        bits.append(
+            "<div class='winner-hero'>"
+            + win_img
+            + f"<div class='name'>{_e(win_name)}</div>"
+            + "<span class='winner-badge'>WINNER</span>"
+            + "</div>"
+        )
+    else:
+        bits.append(
+            "<div class='winner-hero'>"
+            + f"<div class='name'>{_e(t1_name)} vs {_e(t2_name)}</div>"
+            + "</div>"
+        )
+
+    t1_img = _img(_team_logo_uri(t1_id, t1_logo), "m-logo")
+    t2_img = _img(_team_logo_uri(t2_id, t2_logo), "m-logo")
+    t1_cls = "win" if winner == 1 else ("lose" if winner == 2 else "")
+    t2_cls = "win" if winner == 2 else ("lose" if winner == 1 else "")
+
+    bits.append(
+        "<div class='winner-matchup'>"
+        + "<div class='matchup-teams'>"
+        + f"<div class='m-side {t1_cls}'>{t1_img}<span class='m-name'>{_e(t1_name)}</span></div>"
+        + "<span class='m-sep'>vs</span>"
+        + f"<div class='m-side {t2_cls}'>{t2_img}<span class='m-name'>{_e(t2_name)}</span></div>"
+        + "</div>"
+        + "<div class='hero-score'>"
+        + f"<span class='num {t1_cls}'>{_e(left)}</span>"
+        + "<span class='dash'>–</span>"
+        + f"<span class='num {t2_cls}'>{_e(right)}</span>"
+        + "</div>"
+    )
+
+    extra = (card.get("map_score") or "").strip()
+    if extra:
+        bits.append(f"<div class='map-final-score'>{_e(extra)}</div>")
+
+    bits.append(_map_strip(list(card.get("map_rows") or [])))
+    bits.append("</div>")
+    return "".join(bits)
+
+
+def _match_html(card: dict, height: int, width: int) -> str:
+    kind = card.get("kind") or "score"
+    accent = {"preview": "live", "final": "final", "soon": "soon", "halftime": "halftime"}.get(kind, "")
+    pair = card.get("pair") or ("", "")
+    left = pair[0] if pair and pair[0] else ""
+    right = pair[1] if pair and len(pair) > 1 else ""
+    if kind in {"map", "match"}:
+        head = _winner_block(card)
+    else:
+        if kind == "halftime":
+            kicker_html = (
+                "<div class='kicker kicker-ht'>"
+                "<span class='badge-ht'>HALFTIME</span>"
+                "<span class='ht-desc'>半场结束 · 双方换边</span>"
+                "</div>"
+            )
+        else:
+            kicker_html = f"<div class='kicker'>{_e(card.get('label'))}</div>"
+        live_cls = " is-live" if accent == "live" else ""
+        head = (
+            f"<div class='match-island{live_cls}'>"
+            + kicker_html
+            + _team_row(
+                card.get("team1") or "?",
+                left,
+                card.get("logo1") or "",
+                accent,
+                team_id=str(card.get("team1_id") or ""),
+            )
+            + _team_row(
+                card.get("team2") or "?",
+                right,
+                card.get("logo2") or "",
+                accent,
+                team_id=str(card.get("team2_id") or ""),
+            )
+            + _map_strip(list(card.get("map_rows") or []))
+            + "</div>"
+        )
+    bits = [
+        head,
+        _event_block(
+            str(card.get("event") or ""),
+            str(card.get("tier") or ""),
+            str(card.get("event_id") or ""),
+            str(card.get("event_logo") or ""),
+            size="chip",
+        ),
+    ]
+    if card.get("note"):
+        bits.append(f"<div class='note'>{_e(card.get('note'))}</div>")
+    return _page("".join(bits), height, width)
+
+
+def _tier_key(tier: str, name: str = "") -> str:
+    if tier in {"Major", "T1", "T2", "T3", "Other"}:
+        return tier
+    from hltv_bot.events import classify_tier
+
+    return classify_tier(name or "")
+
+
+def _tier_class(tier: str) -> str:
+    return {
+        "Major": "tier-major",
+        "T1": "tier-t1",
+        "T2": "tier-t2",
+        "T3": "tier-t3",
+    }.get(tier or "", "tier-other")
+
+
+def _tier_mark(tier: str) -> str:
+    from hltv_bot.events import tier_label
+
+    return f"<div class='tier {_tier_class(tier)}'>{_e(tier_label(tier))}</div>"
+
+
+def _event_block(name: str, tier: str, event_id: str, logo_url: str, *, size: str = "chip", extra: str = "") -> str:
+    key = _tier_key(tier, name)
+    return (
+        f"<div class='event-card event-{size}'>"
+        + _event_bg(event_id, logo_url)
+        + f"<div class='event-copy {_tier_class(key)}'>"
+        + _tier_mark(key)
+        + f"<div class='name'>{_e(name)}</div>"
+        + extra
+        + "</div></div>"
+    )
+
+
+def _event_bg(event_id: str, url: str) -> str:
+    logo = _event_logo_uri(event_id, url, "l")
+    if not logo.startswith("data:image"):
+        return ""
+    return (
+        f"<div class='event-bg' style=\"background-image:url('{logo}')\"></div>"
+        "<div class='event-shade'></div>"
+    )
+
+
+def _event_html(card: dict, height: int, width: int) -> str:
+    bits = [
+        "<div class='event-card event-solo'>",
+        _event_bg(str(card.get("id") or ""), str(card.get("logo_url") or card.get("logo_small_url") or "")),
+        f"<div class='event-copy {_tier_class(_tier_key(str(card.get('tier') or ''), str(card.get('name') or '')))}'>",
+        f"<div class='name'>{_e(card.get('name'))}</div>",
+    ]
+    remain_class = "remain final" if card.get("final") else "remain"
+    bits.append(f"<div class='{remain_class}'>{_e(card.get('remain'))}</div>")
+    foot = []
+    if card.get("clock"):
+        foot.append(_e(card.get("clock")))
+    place = " ".join(x for x in (card.get("flag") or "", card.get("location") or "") if x)
+    if place:
+        foot.append(f"<span class='flag'>{card.get('flag') or ''}</span> {_e(card.get('location'))}")
+    if foot:
+        bits.append("<div class='foot'>" + "<br>".join(foot) + "</div>")
+    bits.append("</div></div>")
+    return _page("".join(bits), height, width)
+
+
+def _guide_html(card: dict, height: int, width: int) -> str:
+    morning = int(card.get("morning") or 10)
+    evening = int(card.get("evening") or 20)
+    lines = [
+        ("默认", "至少 1 星，并且赛事名是 Major / T1。"),
+        ("比分", "0:0 只预告一次。同一张图只涨分。图结束是 Map winner，比赛结束是 Match winner。"),
+        ("BO", "地图按顺序排开。赢下的图后面是那支队的图标。"),
+        ("比赛日", f"UTC+8 {morning:02d}:00 到次日 {morning:02d}:00，含国外晚上打到凌晨的比赛。"),
+        ("赛程", f"每天 {morning:02d}:00 发整日，{evening:02d}:00 发还没开的，含次日凌晨。"),
+        ("补充", "/follow 单场。/cover 整赛事，每个比赛日都算。/ignore 摘掉一场。"),
+        ("开关", "/watch 加入多场。/follow 加入单场。不带参数就是加入本群。/stop 全部关闭。"),
+        ("赛事", "Major / Tier 1：每天 09:00 和 18:00，错过会补。/track 打开。/reminder 发到本对话。"),
+    ]
+    bits = [
+        "<div class='g-title'>hltv-bot</div>",
+        "<div class='g-sub'>时间一律 UTC+8 · 提醒默认无声</div>",
+    ]
+    for title, body in lines:
+        bits.append(
+            "<div class='g-block'>"
+            f"<div class='g-k'>{_e(title)}</div>"
+            f"<div class='g-line'>{_e(body)}</div>"
+            "</div>"
+        )
+    return _page("".join(bits), height, width)
+
+
+def _map_line(row: dict) -> str:
+    from hltv_bot.matches import map_order
+
+    current, rest = map_order(row)
+    fmt = (row.get("format") or "").strip().lower()
+    if not current and not rest and not fmt:
+        return ""
+    parts: list[str] = []
+    if current:
+        parts.append(f"<span class='mmap-now'>{_e(current)}</span>")
+    for name in rest:
+        parts.append(f"<span class='mmap-rest'>{_e(name)}</span>")
+    if fmt:
+        parts.append(f"<span class='mmap-fmt'>{_e(fmt)}</span>")
+    if not parts:
+        return ""
+    joined = "<span class='mmap-sep'> · </span>".join(parts)
+    return f"<div class='mmap'>{joined}</div>"
+
+
+def _match_cell(row: dict, *, compact: bool, event_line: bool) -> str:
+    live = row.get("live") == "1"
+    a = (row.get("score1") or "").strip()
+    b = (row.get("score2") or "").strip()
+    clock = (row.get("time") or "").strip()
+    if live and clock.upper() == "LIVE":
+        clock = ""
+    stars = "★" * _stars(row)
+    sc_accent = "live" if live else ("final" if (a or b) else "soon")
+    limit = GRID_NAME_UNITS if compact else LIST_NAME_UNITS
+    is_cov = bool(row.get("covered"))
+    fmt = str(row.get("format") or "").strip().upper()
+    fmt_badge = f"<span class='mfmt'>{_e(fmt)}</span>" if fmt else ""
+    cov_badge = "<span class='mcovered'>★</span>" if is_cov else ""
+    data_attrs = f" data-live='{'1' if live else '0'}'" + (" data-covered='1'" if is_cov else "")
+    body = (
+        f"<div class='mcard mbody'{data_attrs}>"
+        "<div class='mhead'>"
+        f"<span class='mtag{' on' if live else ''}'>LIVE</span>"
+        f"<span class='mtime'>{_e(clock)}</span>"
+        + fmt_badge
+        + cov_badge
+        + f"<span class='mstars'>{_e(stars)}</span>"
+        "</div>"
+        + _team_row(
+            row.get("team1") or "?",
+            a,
+            row.get("team1_logo") or "",
+            sc_accent,
+            team_id=str(row.get("team1_id") or ""),
+            limit=limit,
+        )
+        + _team_row(
+            row.get("team2") or "?",
+            b,
+            row.get("team2_logo") or "",
+            sc_accent,
+            team_id=str(row.get("team2_id") or ""),
+            limit=limit,
+        )
+    )
+    if compact and event_line:
+        from hltv_bot.matches import short_team
+
+        event = short_team(str(row.get("event") or ""), 16)
+        if event:
+            body += f"<div class='mevent'>{_e(event)}</div>"
+    elif not compact:
+        mid = str(row.get("id") or "").strip()
+        body += _event_block(
+            str(row.get("event") or ""),
+            str(row.get("tier") or ""),
+            str(row.get("event_id") or ""),
+            str(row.get("event_logo") or ""),
+            extra=f"<div class='sub'>#{_e(mid)}</div>" if mid else "",
+        )
+        body += _map_line(row)
+    return body + "</div>"
+
+
+def _matches_html(card: dict, height: int, width: int) -> str:
+    rows = list(card.get("rows") or [])[:12]
+    bits = [f"<div class='sheet-title'>{_e(card.get('title') or '比赛  ·  UTC+8')}</div>"]
+    events = {str(row.get("event") or "").strip() for row in rows}
+    events.discard("")
+    shared = len(rows) >= TWO_COL_AT and len(events) == 1
+    if shared:
+        bits.append(f"<div class='sheet-sub'>{_e(next(iter(events)))}</div>")
+    if not rows:
+        bits.append("<div class='mcard mbody'>没有比赛</div>")
+        return _page("".join(bits), height, width)
+    if len(rows) >= TWO_COL_AT:
+        bits.append("<table class='mgrid'>")
+        for i in range(0, len(rows), 2):
+            pair = rows[i:i + 2]
+            bits.append("<tr>")
+            for row in pair:
+                bits.append(f"<td>{_match_cell(row, compact=True, event_line=not shared)}</td>")
+            if len(pair) == 1:
+                bits.append("<td></td>")
+            bits.append("</tr>")
+        bits.append("</table>")
+        return _page("".join(bits), height, width)
+    for row in rows:
+        bits.append(_match_cell(row, compact=False, event_line=False))
+    return _page("".join(bits), height, width)
+
+
+def _events_html(card: dict, height: int, width: int) -> str:
+    rows = list(card.get("rows") or [])[:8]
+    bits = ["<div class='sheet-title'>赛事</div>"]
+    for ev in rows:
+        bits.append(
+            "<div class='event-card event-row'>"
+            + _event_bg(str(ev.get("id") or ""), str(ev.get("logo_url") or ""))
+            + f"<div class='event-copy {_tier_class(_tier_key(str(ev.get('tier') or ''), str(ev.get('name') or '')))}'>"
+            + _tier_mark(_tier_key(str(ev.get("tier") or ""), str(ev.get("name") or "")))
+            + f"<div class='name'>{_e(ev.get('name'))}</div>"
+        )
+        place = " ".join(x for x in (ev.get("flag") or "", ev.get("location") or "") if x)
+        if place:
+            bits.append(f"<div class='place'><span class='flag'>{ev.get('flag') or ''}</span> {_e(ev.get('location'))}</div>")
+        if ev.get("when"):
+            bits.append(f"<div class='when'>{_e(ev.get('when'))}</div>")
+        prize = (ev.get("prize") or "").strip()
+        if prize and prize not in {"_", "TBA", "Other"}:
+            bits.append(f"<div class='prize'>{_e(prize)}</div>")
+        bits.append("</div></div>")
+    if not rows:
+        bits.append("<div class='sub'>没有赛事</div>")
+    return _page("".join(bits), height, width)
+
+
+def _stars(row: dict) -> int:
+    try:
+        return max(0, min(5, int(row.get("stars") or 0)))
+    except (TypeError, ValueError):
+        return 0
