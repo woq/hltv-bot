@@ -314,6 +314,69 @@ def fetch_via_chrome(
             pass
 
 
+_PAGE_AGE_JS = """(() => {
+  const nav = performance.getEntriesByType("navigation")[0];
+  if (!nav || !nav.loadEventEnd) return null;
+  return (performance.now() - nav.loadEventEnd) / 1000;
+})()"""
+
+
+def keeper_page_age(base: str = DEFAULT_CDP, *, timeout: float = 5.0) -> float | None:
+    """Seconds since the keeper document finished loading. None if timing is missing."""
+    pages = _list_pages(base, min(timeout, 5.0))
+    page = _pick_keeper_page(pages)
+    if page is None:
+        raise CdpUnavailable("no hltv.org page")
+    ws_url = str(page.get("webSocketDebuggerUrl") or "")
+    if not ws_url:
+        raise CdpUnavailable("missing webSocketDebuggerUrl")
+    client = _connect_ws(ws_url, timeout)
+    try:
+        try:
+            client.call("Runtime.enable", timeout=min(timeout, 3.0))
+        except CdpError:
+            pass
+        ev = client.call(
+            "Runtime.evaluate",
+            {"expression": _PAGE_AGE_JS, "returnByValue": True},
+            timeout=timeout,
+        )
+        inner = ev.get("result") if isinstance(ev.get("result"), dict) else {}
+        val = inner.get("value")
+        if isinstance(val, (int, float)) and val >= 0:
+            return float(val)
+        return None
+    finally:
+        try:
+            client.ws.close()
+        except Exception:
+            pass
+
+
+def reload_keeper_page(base: str = DEFAULT_CDP, *, timeout: float = 8.0) -> None:
+    """Reload the matches tab in the already-running Chrome. Does not restart Chrome."""
+    pages = _list_pages(base, min(timeout, 5.0))
+    page = _pick_keeper_page(pages)
+    if page is None:
+        raise CdpUnavailable("no hltv.org page")
+    ws_url = str(page.get("webSocketDebuggerUrl") or "")
+    if not ws_url:
+        raise CdpUnavailable("missing webSocketDebuggerUrl")
+    client = _connect_ws(ws_url, timeout)
+    try:
+        try:
+            client.call("Page.enable", timeout=min(timeout, 3.0))
+        except CdpError:
+            pass
+        client.call("Page.reload", {"ignoreCache": False}, timeout=timeout)
+        log.info("keeper page reload")
+    finally:
+        try:
+            client.ws.close()
+        except Exception:
+            pass
+
+
 def close_extra_pages(
     base: str = DEFAULT_CDP,
     *,

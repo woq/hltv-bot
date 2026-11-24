@@ -1,7 +1,7 @@
 import threading
 from hltv_bot.bot import DEFAULT_ADMIN_ID, HltvTelegramBot
 from hltv_bot.cdp import CdpSnapshot, CdpUnavailable
-from hltv_bot.keeper import ADMIN_CHALLENGE_EVERY, tick_keeper
+from hltv_bot.keeper import ADMIN_CHALLENGE_EVERY, KEEPER_RELOAD_AFTER, tick_keeper
 from hltv_bot.session import BrowserSession
 
 
@@ -86,6 +86,8 @@ def test_healthy_overlay_and_restored(tmp_path, monkeypatch):
     )
     monkeypatch.setattr("hltv_bot.keeper.fetch_keeper_snapshot", lambda *a, **k: snap)
     monkeypatch.setattr("hltv_bot.keeper.close_extra_pages", lambda *a, **k: None)
+    monkeypatch.setattr("hltv_bot.keeper.keeper_page_age", lambda *a, **k: 0.0)
+    monkeypatch.setattr("hltv_bot.keeper.reload_keeper_page", lambda *a, **k: (_ for _ in ()).throw(AssertionError("reload")))
     tick_keeper(bot, sleep=lambda s: None)
     assert "cf_clearance=newcf" in bot.session.cookie
     assert any("restored" in t[1] for t in tg.sent)
@@ -93,3 +95,50 @@ def test_healthy_overlay_and_restored(tmp_path, monkeypatch):
 
 def test_challenge_interval_constant():
     assert ADMIN_CHALLENGE_EVERY >= 300
+    assert KEEPER_RELOAD_AFTER >= 600
+
+
+def _healthy(monkeypatch, bot):
+    snap = CdpSnapshot(
+        title="Matches",
+        url="https://www.hltv.org/matches",
+        cookies=[{"name": "cf_clearance", "value": "newcf", "domain": ".hltv.org", "expires": -1}],
+        screenshot_png=None,
+    )
+    monkeypatch.setattr("hltv_bot.keeper.fetch_keeper_snapshot", lambda *a, **k: snap)
+    monkeypatch.setattr("hltv_bot.keeper.close_extra_pages", lambda *a, **k: None)
+    monkeypatch.setattr("hltv_bot.keeper.vnc_up", lambda: False)
+    return snap
+
+
+def test_stale_matches_page_reloads(tmp_path, monkeypatch):
+    bot, tg, _p = _bot(tmp_path)
+    _healthy(monkeypatch, bot)
+    seen: list[str] = []
+    monkeypatch.setattr("hltv_bot.keeper.keeper_page_age", lambda *a, **k: KEEPER_RELOAD_AFTER + 5)
+    monkeypatch.setattr("hltv_bot.keeper.reload_keeper_page", lambda url: seen.append(url))
+    tick_keeper(bot, sleep=lambda s: None)
+    assert seen == ["http://127.0.0.1:9222"]
+    assert tg.sent == []
+
+
+def test_fresh_matches_page_stays(tmp_path, monkeypatch):
+    bot, _tg, _p = _bot(tmp_path)
+    _healthy(monkeypatch, bot)
+    monkeypatch.setattr("hltv_bot.keeper.keeper_page_age", lambda *a, **k: 30.0)
+    monkeypatch.setattr(
+        "hltv_bot.keeper.reload_keeper_page",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("reload")),
+    )
+    tick_keeper(bot, sleep=lambda s: None)
+
+
+def test_vnc_skips_page_reload(tmp_path, monkeypatch):
+    bot, _tg, _p = _bot(tmp_path)
+    _healthy(monkeypatch, bot)
+    monkeypatch.setattr("hltv_bot.keeper.vnc_up", lambda: True)
+    monkeypatch.setattr(
+        "hltv_bot.keeper.keeper_page_age",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("age")),
+    )
+    tick_keeper(bot, sleep=lambda s: None)

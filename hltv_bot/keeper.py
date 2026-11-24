@@ -12,6 +12,8 @@ from hltv_bot.cdp import (
     KEEPER_URL,
     close_extra_pages,
     fetch_keeper_snapshot,
+    keeper_page_age,
+    reload_keeper_page,
     vnc_up,
 )
 from hltv_bot.session import is_challenge_cdp
@@ -21,6 +23,11 @@ log = logging.getLogger("hltv_bot.keeper")
 CDP_EXPORT_EVERY = 300.0
 ADMIN_CHALLENGE_EVERY = 1800.0
 ADMIN_CDP_DOWN_EVERY = 1800.0
+# The matches tab is a long-lived document. Its livescore client patches rows in
+# place and does not rebuild the list, so a multi-day tab keeps finished matches
+# and never paints logos for rows that were off-screen. Reload the document,
+# not the Chrome process.
+KEEPER_RELOAD_AFTER = 30 * 60.0
 
 
 def cdp_url_from_env(raw: str | None) -> str | None:
@@ -109,6 +116,25 @@ def tick_keeper(bot: Any, *, sleep: Any = None) -> None:
             close_extra_pages(url, keep_urls=keep_urls)
         except Exception:
             log.debug("close extra tabs skipped", exc_info=True)
+    _maybe_reload_page(url)
+
+
+def _maybe_reload_page(url: str) -> None:
+    """Refresh a stale matches document. Skip while someone is on VNC."""
+    if vnc_up():
+        return
+    try:
+        age = keeper_page_age(url)
+    except Exception:
+        log.debug("keeper page age skipped", exc_info=True)
+        return
+    if age is None or age < KEEPER_RELOAD_AFTER:
+        return
+    log.info("keeper reload age=%.0fs", age)
+    try:
+        reload_keeper_page(url)
+    except Exception:
+        log.warning("keeper reload failed", exc_info=True)
 
 
 def _loop(bot: Any) -> None:

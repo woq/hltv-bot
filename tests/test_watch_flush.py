@@ -92,6 +92,59 @@ def test_score_push_stays_in_the_chat_that_enabled_it_and_replaces_the_previous(
     assert tg.sent == []
 
 
+def _score_bot(tmp_path, monkeypatch, tg):
+    monkeypatch.setattr("hltv_bot.bot.threading.Timer", lambda *a, **k: type("T", (), {"start": lambda self: None})())
+    monkeypatch.setattr("hltv_bot.cards.render_card", lambda card: b"png")
+    return HltvTelegramBot(
+        tg,
+        BrowserSession("chrome131", {}, "cf_clearance=x"),
+        admin_ids={1},
+        state_path=tmp_path / "state.json",
+        settings_path=tmp_path / "settings.json",
+    )
+
+
+def test_photo_denied_sends_the_caption(tmp_path, monkeypatch):
+    from hltv_bot.reminders import Notice
+
+    tg = Tg()
+
+    def send_photo(*_a, **_k):
+        raise RuntimeError(
+            'telegram sendPhoto HTTP 400: {"description":"Bad Request: not enough rights to send photos to the chat"}'
+        )
+
+    tg.send_photo = send_photo
+    bot = _score_bot(tmp_path, monkeypatch, tg)
+    bot._write_settings({"score_multi": ["-100"]})
+    tg.sent.clear()
+    bot._broadcast(Notice("m:9:score:1-0|bo1", "<b>比分</b>", {"view": "match"}, "9", "multi"))
+    assert [item[0] for item in tg.sent] == [-100]
+    assert tg.sent[0][1] == "<b>比分</b>"
+    assert "-100" in bot._cfg().score_multi
+
+
+def test_restricted_chat_is_removed_from_score_lists(tmp_path, monkeypatch):
+    from hltv_bot.reminders import Notice
+
+    tg = Tg()
+
+    def send_photo(chat_id, *_a, **_k):
+        if int(chat_id) == -100:
+            raise RuntimeError('telegram sendPhoto HTTP 400: {"description":"Bad Request: CHAT_RESTRICTED"}')
+        return {"message_id": 8}
+
+    tg.send_photo = send_photo
+    bot = _score_bot(tmp_path, monkeypatch, tg)
+    bot._write_settings({"score_multi": ["-100", "-200"], "score_single": ["-100"]})
+    tg.sent.clear()
+    bot._broadcast(Notice("m:9:score:1-0|bo1", "<b>比分</b>", {"view": "match"}, "9", "multi"))
+    assert "-100" not in bot._cfg().score_multi
+    assert "-200" in bot._cfg().score_multi
+    assert "-100" not in bot._cfg().score_single
+    assert any("比分群已移除" in item[1] for item in tg.sent)
+
+
 def test_events_list_and_daily_digest_are_not_deleted(monkeypatch):
     from hltv_bot.reminders import Notice
 

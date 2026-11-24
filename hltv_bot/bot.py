@@ -61,6 +61,31 @@ MATCH_PAGE_MIN = 3.0
 MATCH_PAGE_MAX = 5.0
 CF_ALERT_EVERY = 1800.0
 STATE_PATH = Path("data/reminders.json")
+# Telegram will not accept another send to these. A photo-permission error is
+# separate: the chat can still take the caption as text.
+_SCORE_DEAD_MARKERS = (
+    "CHAT_RESTRICTED",
+    "CHAT_WRITE_FORBIDDEN",
+    "bot was kicked",
+    "bot was blocked",
+    "chat not found",
+    "PEER_ID_INVALID",
+    "group chat was upgraded",
+    "user is deactivated",
+    "have no rights to send a message",
+    "not enough rights to send a message",
+    "bot can't initiate conversation",
+    "need administrator rights",
+)
+
+
+def _photo_rights_denied(exc: BaseException) -> bool:
+    return "not enough rights to send photo" in str(exc)
+
+
+def _score_chat_dead(exc: BaseException) -> bool:
+    text = str(exc)
+    return any(marker in text for marker in _SCORE_DEAD_MARKERS)
 
 CMD_COOLDOWN = {
     "/matches": 8.0,
@@ -1217,14 +1242,39 @@ class HltvTelegramBot:
             except Exception as exc:
                 if is_not_modified(exc):
                     return {"message_id": previous}
+                if _score_chat_dead(exc):
+                    raise
                 log.info("score edit chat=%s msg=%s failed, send new", gid, previous)
                 try:
                     self.tg.delete_message(gid, int(previous))
                 except Exception:
                     pass
         if png:
-            return self.tg.send_photo(gid, png, caption=caption, filename="hltv.png", silent=silent)
+            try:
+                return self.tg.send_photo(gid, png, caption=caption, filename="hltv.png", silent=silent)
+            except Exception as exc:
+                if not _photo_rights_denied(exc):
+                    raise
+                log.info("score photo denied chat=%s, send text", gid)
+                return self.tg.send_message(gid, caption, silent=silent)
         return self.tg.send_message(gid, caption, silent=silent)
+
+    def _drop_score_chat(self, gid: int, reason: str) -> None:
+        """Stop retrying a chat Telegram will not deliver to."""
+        cid = str(int(gid))
+        multi = [item for item in self._score_chats("score_multi") if item != cid]
+        single = [item for item in self._score_chats("score_single") if item != cid]
+        if multi == self._score_chats("score_multi") and single == self._score_chats("score_single"):
+            return
+        self._write_settings({"score_multi": multi, "score_single": single})
+        log.warning("score chat dropped id=%s reason=%s", cid, reason)
+        self._notify_admins(f"<b>比分群已移除</b>\n<code>{h(cid)}</code>\n{h(reason[:200])}")
+
+    def _score_send_failed(self, gid: int, exc: Exception) -> None:
+        if _score_chat_dead(exc):
+            self._drop_score_chat(gid, str(exc))
+            return
+        log.exception("score chat=%s", gid)
 
     def _broadcast_score(self, note) -> None:
         """One live card per match. Later scores edit that message."""
@@ -1263,8 +1313,8 @@ class HltvTelegramBot:
                     b_id = bump_msg.get("message_id") if isinstance(bump_msg, dict) else None
                     if b_id is not None:
                         slot[str(gid)] = int(b_id)
-                except Exception:
-                    log.exception("score bump send chat=%s", gid)
+                except Exception as exc:
+                    self._score_send_failed(gid, exc)
                 continue
 
             if kind == "match":
@@ -1282,8 +1332,8 @@ class HltvTelegramBot:
                         silent=silent,
                         previous=None,
                     )
-                except Exception:
-                    log.exception("match winner send chat=%s", gid)
+                except Exception as exc:
+                    self._score_send_failed(gid, exc)
                 continue
 
             previous = slot.get(str(gid))
@@ -1295,8 +1345,8 @@ class HltvTelegramBot:
                     silent=silent,
                     previous=int(previous) if previous else None,
                 )
-            except Exception:
-                log.exception("score chat=%s", gid)
+            except Exception as exc:
+                self._score_send_failed(gid, exc)
                 continue
             message_id = msg.get("message_id") if isinstance(msg, dict) else None
             if message_id is None:
