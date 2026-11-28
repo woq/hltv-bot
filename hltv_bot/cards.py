@@ -595,18 +595,31 @@ CARD_NAME_UNITS = 14
 TWO_COL_AT = 5
 
 
+_LOGO_MISS: set[str] = set()
+
+
 def _team_logo_uri(team_id: str, url: str) -> str:
     team_id = str(team_id or "").strip()
+    found = ""
     if team_id.isdigit():
         try:
             from hltv_bot.team_logos import team_logo_uri
 
-            found = team_logo_uri(team_id, url)
-            if found:
-                return found
+            found = team_logo_uri(team_id, url) or ""
         except Exception:
-            pass
-    return _logo_uri(url)
+            found = ""
+    if not found:
+        found = _logo_uri(url)
+    if not found and (url or "").strip():
+        key = team_id or (url or "").strip()
+        if key not in _LOGO_MISS:
+            _LOGO_MISS.add(key)
+            import logging
+
+            logging.getLogger("hltv_bot.cards").warning(
+                "team logo empty id=%s url=%s", team_id, str(url)[:140]
+            )
+    return found
 
 
 def _logo_uri(url: str) -> str:
@@ -727,6 +740,11 @@ def _page(body: str, height: int, width: int) -> str:
 
 
 def _img(uri: str, cls: str) -> str:
+    # WeasyPrint drops SVG data-URI <img>. Inline the markup; CSS sizes svg.logo-svg.
+    if uri.startswith("data:image/svg"):
+        markup = _svg_markup(uri)
+        if markup:
+            return f'<span class="{cls}">{markup}</span>'
     if uri.startswith("data:image"):
         return f'<img class="{cls}" src="{uri}" />'
     return f'<span class="{cls}-ph"></span>'

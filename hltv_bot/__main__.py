@@ -126,7 +126,9 @@ def main(argv: list[str] | None = None) -> int:
             stream=sys.stdout,
             force=True,
         )
-        logging.getLogger("hltv_bot").info("log level=%s", level_name)
+        logging.getLogger("weasyprint").setLevel(logging.ERROR)
+        logging.getLogger("fontTools").setLevel(logging.ERROR)
+        logging.getLogger("hltv_bot").info("log level=%s cookie_export=%s", level_name, os.environ.get("HLTV_COOKIE_EXPORT") or "off")
         bot_from_env().run()
         return 0
     return 1

@@ -89,8 +89,28 @@ def test_healthy_overlay_and_restored(tmp_path, monkeypatch):
     monkeypatch.setattr("hltv_bot.keeper.keeper_page_age", lambda *a, **k: 0.0)
     monkeypatch.setattr("hltv_bot.keeper.reload_keeper_page", lambda *a, **k: (_ for _ in ()).throw(AssertionError("reload")))
     tick_keeper(bot, sleep=lambda s: None)
-    assert "cf_clearance=newcf" in bot.session.cookie
+    assert "cf_clearance=good" in bot.session.cookie
+    assert "cf_clearance=newcf" not in bot.session.cookie
     assert any("restored" in t[1] for t in tg.sent)
+
+
+def test_cookie_export_opt_in_writes_session(tmp_path, monkeypatch):
+    bot, _tg, p = _bot(tmp_path)
+    bot.export_cookies = True
+    snap = CdpSnapshot(
+        title="Matches",
+        url="https://www.hltv.org/matches",
+        cookies=[
+            {"name": "cf_clearance", "value": "newcf", "domain": ".hltv.org", "expires": -1},
+            {"name": "__cf_bm", "value": "newbm", "domain": ".hltv.org", "expires": -1},
+        ],
+        screenshot_png=None,
+    )
+    monkeypatch.setattr("hltv_bot.keeper.fetch_keeper_snapshot", lambda *a, **k: snap)
+    monkeypatch.setattr("hltv_bot.keeper.close_extra_pages", lambda *a, **k: None)
+    monkeypatch.setattr("hltv_bot.keeper.keeper_page_age", lambda *a, **k: 0.0)
+    tick_keeper(bot, sleep=lambda s: None)
+    assert "cf_clearance=newcf" in p.read_text(encoding="utf-8")
 
 
 def test_challenge_interval_constant():

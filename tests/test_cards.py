@@ -237,7 +237,8 @@ def test_match_winner_card_with_large_svg_logo_single_page():
         "event": "ESL Pro League Season 24",
     }
     html = _match_html(card, 480, 420)
-    assert f'<img class="m-logo" src="{b64_svg}"' in html
+    assert "<svg class='logo-svg'" in html
+    assert "data:image/svg" not in html
     pdf = weasyprint.HTML(string=html).write_pdf()
     doc = pypdfium2.PdfDocument(pdf)
     assert len(doc) == 1

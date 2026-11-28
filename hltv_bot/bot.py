@@ -74,6 +74,7 @@ _SCORE_DEAD_MARKERS = (
     "user is deactivated",
     "have no rights to send a message",
     "not enough rights to send a message",
+    "not enough rights to send text",
     "bot can't initiate conversation",
     "need administrator rights",
 )
@@ -255,6 +256,7 @@ class HltvTelegramBot:
         cdp_url: str | None = None,
         keeper_url: str | None = None,
         export_every: float = 300.0,
+        export_cookies: bool = False,
         state_path: Path | None = None,
         settings_path: Path | None = None,
         poll_seconds: float = MATCH_PAGE_MIN,
@@ -266,6 +268,7 @@ class HltvTelegramBot:
         self.cdp_url = cdp_url
         self.keeper_url = keeper_url
         self.export_every = float(export_every)
+        self.export_cookies = bool(export_cookies)
         self.state_path = state_path or STATE_PATH
         self.settings_path = settings_path
         self.poll_seconds = float(poll_seconds)
@@ -1508,7 +1511,7 @@ class HltvTelegramBot:
             except Exception:
                 log.exception("remind tick")
                 wait = 300
-            log.info("next poll in %.0fs", wait)
+            log.debug("next poll in %.0fs", wait)
             self._wake.wait(wait)
             self._wake.clear()
 
@@ -1610,7 +1613,7 @@ def bot_from_env() -> HltvTelegramBot:
     if seed.strip().lstrip("-").isdigit():
         add_group(int(seed.strip()), "seed")
     os.environ.setdefault("HLTV_HTTP", "chrome")
-    from hltv_bot.keeper import cdp_url_from_env, export_every_from_env
+    from hltv_bot.keeper import cdp_url_from_env, cookie_export_from_env, export_every_from_env
 
     return HltvTelegramBot(
         Telegram(token),
@@ -1619,4 +1622,5 @@ def bot_from_env() -> HltvTelegramBot:
         cdp_url=cdp_url_from_env(os.environ.get("HLTV_CDP_URL")),
         keeper_url=os.environ.get("HLTV_KEEPER_URL") or None,
         export_every=export_every_from_env(os.environ.get("HLTV_CDP_EXPORT_EVERY")),
+        export_cookies=cookie_export_from_env(os.environ.get("HLTV_COOKIE_EXPORT")),
     )

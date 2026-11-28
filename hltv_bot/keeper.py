@@ -40,6 +40,11 @@ def cdp_url_from_env(raw: str | None) -> str | None:
     return text
 
 
+def cookie_export_from_env(raw: str | None) -> bool:
+    """Unset or off: do not write Chrome cookies into session.json."""
+    return (raw or "").strip().lower() in {"1", "on", "true", "yes", "write"}
+
+
 def export_every_from_env(raw: str | None) -> float:
     try:
         val = float(raw) if raw not in (None, "") else CDP_EXPORT_EVERY
@@ -91,16 +96,18 @@ def tick_keeper(bot: Any, *, sleep: Any = None) -> None:
         bot._was_challenge = True
         log.warning("keeper challenge title=%s", snap.title)
         return
-    changed = bot.session.overlay_cdp(snap.cookies)
+    # Chrome page fetch uses the keeper tab. Writing cf cookies into session.json
+    # is only for the curl fallback. Default is off: __cf_bm rotates every export.
+    changed = False
+    if getattr(bot, "export_cookies", False):
+        changed = bot.session.overlay_cdp(snap.cookies)
     bot.keeper_cdp = "up"
     bot.keeper_exported_at = time.monotonic()
-    bot.keeper_clearance = bot.session.has_clearance()
-    log.info(
-        "keeper export clearance=%s changed=%s title=%s",
-        "yes" if bot.keeper_clearance else "NO",
-        changed,
-        snap.title,
-    )
+    bot.keeper_clearance = True
+    if changed:
+        log.info("keeper cookies written title=%s", snap.title)
+    else:
+        log.debug("keeper ok title=%s", snap.title)
     if getattr(bot, "_was_challenge", False):
         bot._notify_admins("<b>HLTV Chrome keeper: clearance restored</b>")
         bot._was_challenge = False
