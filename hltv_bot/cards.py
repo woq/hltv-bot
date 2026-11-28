@@ -894,10 +894,13 @@ def _match_html(card: dict, height: int, width: int) -> str:
         head = _winner_block(card)
     else:
         if kind == "halftime":
+            overtime = card.get("label") == "加时换边"
+            badge = "OVERTIME" if overtime else "HALFTIME"
+            desc = "加时三回合 · 双方换边" if overtime else "半场结束 · 双方换边"
             kicker_html = (
                 "<div class='kicker kicker-ht'>"
-                "<span class='badge-ht'>HALFTIME</span>"
-                "<span class='ht-desc'>半场结束 · 双方换边</span>"
+                f"<span class='badge-ht'>{badge}</span>"
+                f"<span class='ht-desc'>{desc}</span>"
                 "</div>"
             )
         else:

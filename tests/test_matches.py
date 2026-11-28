@@ -1,6 +1,28 @@
 from datetime import datetime, timedelta
 
-from hltv_bot.matches import CST, format_start_time, parse_match_list, parse_match_meta, pretty_name, show_on_list
+from hltv_bot.matches import CST, format_start_time, map_is_over, parse_match_list, parse_match_meta, pretty_name, show_on_list
+
+
+def test_map_ends_at_13_or_overtime_by_two():
+    assert map_is_over(13, 11)
+    assert map_is_over(13, 5)
+    assert not map_is_over(12, 11)
+    assert not map_is_over(12, 12)
+    assert not map_is_over(13, 12)
+    assert not map_is_over(15, 13)
+    assert not map_is_over(15, 15)
+    assert not map_is_over(16, 15)
+    assert map_is_over(16, 14)
+    assert map_is_over(16, 13)
+    assert map_is_over(16, 12)
+    assert not map_is_over(16, 15)
+    assert not map_is_over(17, 16)
+    assert map_is_over(19, 16)
+    assert not map_is_over(18, 16)
+    assert map_is_over(19, 17)
+    assert map_is_over(19, 15)
+    assert not map_is_over(19, 18)
+    assert map_is_over(22, 20)
 
 
 def test_wrapper_list_reads_bo_and_current_map_score():

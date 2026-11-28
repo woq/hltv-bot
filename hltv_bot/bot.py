@@ -1271,7 +1271,7 @@ class HltvTelegramBot:
             return
         self._write_settings({"score_multi": multi, "score_single": single})
         log.warning("score chat dropped id=%s reason=%s", cid, reason)
-        self._notify_admins(f"<b>比分群已移除</b>\n<code>{h(cid)}</code>\n{h(reason[:200])}")
+        self._notify_admins(f"<b>比分群已移除</b>\n<code>{h(cid)}</code>\n该群发不出消息")
 
     def _score_send_failed(self, gid: int, exc: Exception) -> None:
         if _score_chat_dead(exc):

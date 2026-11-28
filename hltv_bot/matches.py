@@ -130,13 +130,19 @@ def show_on_list(row: dict, now: datetime | None = None, *, days: int = LIST_DAY
 
 
 def map_is_over(left: int, right: int) -> bool:
-    """CS2 map is done: first to 13, or overtime first to 16, 19, 22, … by two."""
+    """MR12 regulation, then MR3 overtime with no round limit.
+
+    24 regulation rounds. The map ends at 13 when the other side has at most 11.
+    12-12 opens overtime: 3 rounds, side switch, 3 rounds. First to 4 in that
+    block wins. 3-3 starts a new block on the same rule.
+    12-12 then 4-2 is 16-14. 12-12 then 3-3 then 4-1 is 19-16.
+    """
     hi, lo = max(left, right), min(left, right)
-    if hi < 13 or hi - lo < 2:
+    if hi - lo < 2:
         return False
-    if lo <= 11:
+    if hi == 13 and lo <= 11:
         return True
-    return hi >= 16 and (hi - 16) % 3 == 0
+    return hi >= 16 and (hi - 16) % 3 == 0 and lo >= 12 and hi - lo <= 4
 
 
 def map_order(row: dict) -> tuple[str, list[str]]:

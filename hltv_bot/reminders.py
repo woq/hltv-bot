@@ -442,6 +442,46 @@ def _series_target(fmt: str) -> int:
     return {"bo1": 1, "bo3": 2, "bo5": 3}.get(fmt, 0)
 
 
+def _switch_mark(map_idx: str, rounds: tuple[int, int] | None) -> str:
+    """Id of a side switch sitting on this exact score. Empty if the score is mid-half.
+
+    Regulation switches at 12 rounds. Each overtime block switches after 3 rounds,
+    so the totals are 27, 33, 39, … A finished map is not a switch.
+    """
+    if rounds is None:
+        return ""
+    total = rounds[0] + rounds[1]
+    if total == 12:
+        return map_idx or "0"
+    if total >= 27 and (total - 27) % 6 == 0:
+        from hltv_bot.matches import map_is_over
+
+        if map_is_over(*rounds):
+            return ""
+        block = (total - 27) // 6 + 1
+        return f"{map_idx or '0'}:ot{block}"
+    return ""
+
+
+def _marks_already_passed(map_idx: str, rounds: tuple[int, int] | None) -> set[str]:
+    """Switches that already happened, including the one on this score."""
+    if rounds is None:
+        return set()
+    total = rounds[0] + rounds[1]
+    marks: set[str] = set()
+    idx = map_idx or "0"
+    if total >= 12:
+        marks.add(idx)
+    reached = total if (total >= 27 and (total - 27) % 6 == 0) else total - 1
+    block_total = 27
+    block = 1
+    while block_total <= reached:
+        marks.add(f"{idx}:ot{block}")
+        block += 1
+        block_total += 6
+    return marks
+
+
 def _clinched(row: dict, winners: list[int], rounds: tuple[int, int] | None) -> bool:
     from hltv_bot.matches import map_is_over
 
@@ -610,10 +650,13 @@ def _match_card(
     wins = list(winners or [])
     pair = _shown_pair(kind, row, score, wins)
     rows = _map_rows(row, wins, rounds=rounds)
+    label = _KIND.get(kind, kind)
+    if kind == "halftime" and rounds is not None and rounds[0] + rounds[1] >= 27:
+        label = "加时换边"
     return {
         "view": "match",
         "kind": kind,
-        "label": _KIND.get(kind, kind),
+        "label": label,
         "team1": row.get("team1") or "?",
         "team2": row.get("team2") or "?",
         "logo1": row.get("team1_logo") or "",
@@ -653,7 +696,8 @@ def _match_caption(card: dict, row: dict) -> str:
         t1 = h(card.get("team1") or "?")
         t2 = h(card.get("team2") or "?")
         score_str = f" <code>{h(pair[0])}</code>–<code>{h(pair[1])}</code>" if pair else ""
-        head = f"⏱ <b>【半场换边】</b> {t1}{score_str} {t2}".strip()
+        title = "加时换边" if card.get("label") == "加时换边" else "半场换边"
+        head = f"⏱ <b>【{title}】</b> {t1}{score_str} {t2}".strip()
     else:
         icon = "⚔️" if kind in {"preview", "soon"} else "🔴"
         t1 = h(card.get("team1") or "?")
@@ -668,7 +712,10 @@ def _match_caption(card: dict, row: dict) -> str:
     # Blockquote for map breakdown and round details
     quote_bits = []
     if kind == "halftime":
-        if pair:
+        if card.get("label") == "加时换边":
+            shown = f" ({h(pair[0])}–{h(pair[1])})" if pair else ""
+            quote_bits.append(f"<b>加时前三回合结束{shown} · 双方换边</b>")
+        elif pair:
             quote_bits.append(f"<b>上半场战罢 ({h(pair[0])}–{h(pair[1])}) 双方换边</b>")
         else:
             quote_bits.append("<b>上半场战罢 · 双方换边</b>")
@@ -709,7 +756,7 @@ def _score_notice(
     winners: list[int] | None = None,
     winner: int = 0,
     rounds: tuple[int, int] | None = None,
-    map_index: int = -1,
+    map_index: int | str = -1,
 ) -> Notice:
     mid = str(row.get("id") or "")
     if kind == "preview":
@@ -1382,8 +1429,7 @@ def plan_reminders(
                     pending = ""
                     if _clinched(view, winners, None if held else rounds):
                         match_sent = True
-                    if rounds and (rounds[0] + rounds[1] >= 12):
-                        ht_set.add(current_map_idx)
+                    ht_set.update(_marks_already_passed(current_map_idx, rounds))
                 elif pending != "preview" and not match_sent and not held and _clinched(view, winners, rounds):
                     pending = "match"
                     opened = True
@@ -1401,10 +1447,11 @@ def plan_reminders(
                         opened = True
                         map_at = fresh[-1]
                         win_side = winners[map_at]
-                    elif rounds and (rounds[0] + rounds[1] == 12) and current_map_idx not in ht_set:
+                    elif (mark := _switch_mark(current_map_idx, rounds)) and mark not in ht_set:
                         pending = "halftime"
                         opened = True
-                        ht_set.add(current_map_idx)
+                        map_at = mark
+                        ht_set.add(mark)
                 if pending == "score" and match_sent:
                     pending = ""
                 if pending == "match":

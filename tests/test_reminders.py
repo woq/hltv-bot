@@ -645,6 +645,48 @@ def test_halftime_and_map_winner_flow():
     assert notes[0].key == "m:101:match"
 
 
+def test_overtime_side_switch_uses_halftime():
+    now = datetime(2026, 10, 3, 22, 0, tzinfo=CST)
+    row = dict(
+        id="202",
+        team1="Spirit",
+        team2="ShindeN",
+        event="ESL Pro League Season 24",
+        stars="1",
+        live="1",
+        score1="12",
+        score2="12",
+        format="bo1",
+        maps="Nuke",
+        map_index="0",
+        won1="0",
+        won2="0",
+    )
+    state, notes = plan_reminders(empty_state(), [row], None, now=now)
+    assert notes == []
+
+    state, notes = plan_reminders(state, [{**row, "score1": "14", "score2": "13"}], None, now=now)
+    assert len(notes) == 1
+    assert notes[0].card["kind"] == "halftime"
+    assert notes[0].card["label"] == "加时换边"
+    assert notes[0].key == "m:202:halftime:0:ot1"
+    assert "加时换边" in notes[0].html
+    assert "14" in notes[0].html and "13" in notes[0].html
+
+    state, notes = plan_reminders(state, [{**row, "score1": "14", "score2": "13"}], None, now=now)
+    assert notes == []
+
+    state, notes = plan_reminders(state, [{**row, "score1": "16", "score2": "14"}], None, now=now)
+    assert len(notes) == 1
+    assert notes[0].card["kind"] == "match"
+
+    row2 = {**row, "id": "203", "score1": "15", "score2": "15"}
+    state, notes = plan_reminders(empty_state(), [row2], None, now=now)
+    state, notes = plan_reminders(state, [{**row2, "score1": "18", "score2": "15"}], None, now=now)
+    assert len(notes) == 1
+    assert notes[0].key == "m:203:halftime:0:ot2"
+
+
 def test_match_winner_caption_puts_winner_score_first_when_team2_wins():
     """Caption is 'Winner X–Y 对 Loser'; pair on card stays team1–team2."""
     from hltv_bot.reminders import _match_card, _match_caption
